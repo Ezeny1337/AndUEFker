@@ -10,7 +10,6 @@ namespace anduefker::module
 {
     using ::anduefker::app::ModuleImage;
     using ::anduefker::memory::IMemorySource;
-    using ::anduefker::memory::RemoteMemorySource;
 
     class ModuleCatalog
     {

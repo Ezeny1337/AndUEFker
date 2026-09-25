@@ -35,6 +35,8 @@ namespace anduefker::app
 
 namespace anduefker::module
 {
+    using ::anduefker::memory::RemoteMemorySource;
+
     bool ModuleCatalog::Discover(IMemorySource &memory,
                                  const std::vector<std::string> &names,
                                  ModuleImage &out)
