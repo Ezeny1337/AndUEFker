@@ -108,6 +108,23 @@ namespace anduefker::binding
             return report;
         }
 
+        if (layout.kind == ObjectContainerKind::Chunked)
+        {
+            // UE 5.6 的 FChunkedFixedUObjectArray 嵌在 FUObjectArray 中
+            // 字段顺序为：Objects、PreAllocatedObjects、MaxElements、NumElements、MaxChunks、NumChunks
+            // 检查该关系可以避免仅因为数值碰巧等于抽样索引，就把 FUObjectArray 的 ObjFirstGCIndex 等 bookkeeping 字段接受为 NumElements
+            const int32_t expectedMaxElements = layout.objectsOffset + static_cast<int32_t>(sizeof(uintptr_t) * 2);
+            const int32_t expectedNumElements = expectedMaxElements + static_cast<int32_t>(sizeof(int32_t));
+            const int32_t expectedMaxChunks = layout.objectsOffset + static_cast<int32_t>(sizeof(uintptr_t) * 3);
+            if (layout.maxElementsOffset != expectedMaxElements ||
+                layout.numElementsOffset != expectedNumElements ||
+                layout.maxChunksOffset != expectedMaxChunks)
+            {
+                report.failures.push_back("chunked UObject array field ordering is inconsistent with UE 5.6 source");
+                return report;
+            }
+        }
+
         const auto countAddress = Add(root, static_cast<uintptr_t>(layout.numElementsOffset));
         if (!countAddress)
         {

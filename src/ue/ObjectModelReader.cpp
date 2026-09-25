@@ -304,19 +304,43 @@ namespace anduefker::ue
     std::optional<uintptr_t> ObjectModelReader::StructChildren(uintptr_t structure) const
     {
         const auto address = Add(structure, schema_.ustruct.children);
-        return address ? ReadPointer(*address) : std::nullopt;
+        if (!address)
+            return std::nullopt;
+        uintptr_t value = 0;
+        if (!memory_.Read(*address, value))
+            return std::nullopt;
+        if (value != 0 && !IsReadableObject(value))
+            return std::nullopt;
+        return value;
     }
 
     std::optional<uintptr_t> ObjectModelReader::StructProperties(uintptr_t structure) const
     {
         const auto address = Add(structure, schema_.features.useFProperty ? schema_.ustruct.childProperties : schema_.ustruct.children);
-        return address ? ReadPointer(*address) : std::nullopt;
+        if (!address)
+            return std::nullopt;
+        uintptr_t value = 0;
+        if (!memory_.Read(*address, value))
+            return std::nullopt;
+        if (value != 0 && !IsReadableObject(value))
+            return std::nullopt;
+        return value;
     }
 
     std::optional<uintptr_t> ObjectModelReader::StructSuper(uintptr_t structure) const
     {
         const auto address = Add(structure, schema_.ustruct.superStruct);
-        return address ? ReadPointer(*address) : std::nullopt;
+        if (!address)
+            return std::nullopt;
+
+        // 在 UE 5.6 中，UStruct::SuperStruct 明确允许为空
+        // 对于根结构/类 而言，一个为空的超类是有效的，并且绝不能与远程读取失败的情况混淆
+        uintptr_t value = 0;
+        if (!memory_.Read(*address, value))
+            return std::nullopt;
+        if (value != 0 && !IsReadableObject(value))
+            return std::nullopt;
+        return value;
     }
 
     std::optional<int32_t> ObjectModelReader::StructSize(uintptr_t structure) const

@@ -1,6 +1,7 @@
 #include "anduefker/reflection/ReflectionReader.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace anduefker::reflection
@@ -252,6 +253,8 @@ namespace anduefker::reflection
     void ReflectionReader::ReadProperties(uintptr_t first, TypeIR &type, ReflectionStats &stats) const
     {
         std::unordered_set<uintptr_t> visited;
+        std::unordered_map<int32_t, uint8_t> boolMasks;
+        std::unordered_map<int32_t, int32_t> boolStorageEnds;
         uintptr_t current = first;
         int64_t cursor = 0;
         while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
@@ -264,8 +267,47 @@ namespace anduefker::reflection
             if (property)
             {
                 const int64_t total = static_cast<int64_t>(property->elementSize) * property->arrayDim;
-                const bool conflict = property->offset < 0 || total <= 0 || property->offset < cursor ||
-                                      static_cast<int64_t>(property->offset) + total < property->offset;
+                bool conflict = property->offset < 0 || total <= 0 ||
+                                static_cast<int64_t>(property->offset) + total < property->offset;
+                if (!conflict && property->type.kind == PropertyKind::Bool &&
+                    property->boolean.fieldSize > 0 && property->boolean.fieldSize <= 8 &&
+                    property->boolean.byteOffset < property->boolean.fieldSize &&
+                    property->boolean.byteMask != 0 && property->boolean.fieldMask != 0)
+                {
+                    const int32_t storageOffset = property->offset + property->boolean.byteOffset;
+                    const int32_t storageEnd = storageOffset + property->boolean.fieldSize;
+                    if (storageEnd < storageOffset)
+                    {
+                        conflict = true;
+                    }
+                    else if (property->boolean.fieldSize == 1)
+                    {
+                        const uint8_t mask = property->boolean.fieldMask;
+                        const auto existing = boolMasks.find(storageOffset);
+                        if (property->offset < cursor && existing == boolMasks.end())
+                            conflict = true;
+                        else if (existing != boolMasks.end() && (existing->second & mask) != 0)
+                            conflict = true;
+                        else
+                            boolMasks[storageOffset] |= mask;
+                    }
+                    else
+                    {
+                        const auto existingEnd = boolStorageEnds.find(storageOffset);
+                        if (property->offset < cursor && existingEnd == boolStorageEnds.end())
+                            conflict = true;
+                        else if (existingEnd != boolStorageEnds.end() && existingEnd->second > storageOffset)
+                            conflict = true;
+                        else
+                            boolStorageEnds[storageOffset] = storageEnd;
+                    }
+                    if (!conflict)
+                        cursor = std::max<int64_t>(cursor, storageEnd);
+                }
+                else if (!conflict)
+                {
+                    conflict = property->offset < cursor;
+                }
                 if (conflict)
                 {
                     type.layoutConflicts.push_back("property=" + property->name +
@@ -289,6 +331,8 @@ namespace anduefker::reflection
     void ReflectionReader::ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const
     {
         std::unordered_set<uintptr_t> visited;
+        std::unordered_map<int32_t, uint8_t> boolMasks;
+        std::unordered_map<int32_t, int32_t> boolStorageEnds;
         uintptr_t current = first;
         int64_t cursor = 0;
         while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
@@ -301,8 +345,48 @@ namespace anduefker::reflection
             }
             function.parameters.push_back(*property);
             const int64_t total = static_cast<int64_t>(property->elementSize) * property->arrayDim;
-            if (property->offset < 0 || total <= 0 || property->offset < cursor ||
-                static_cast<int64_t>(property->offset) + total < property->offset)
+            bool conflict = property->offset < 0 || total <= 0 ||
+                            static_cast<int64_t>(property->offset) + total < property->offset;
+            if (!conflict && property->type.kind == PropertyKind::Bool &&
+                property->boolean.fieldSize > 0 && property->boolean.fieldSize <= 8 &&
+                property->boolean.byteOffset < property->boolean.fieldSize &&
+                property->boolean.byteMask != 0 && property->boolean.fieldMask != 0)
+            {
+                const int32_t storageOffset = property->offset + property->boolean.byteOffset;
+                const int32_t storageEnd = storageOffset + property->boolean.fieldSize;
+                if (storageEnd < storageOffset)
+                {
+                    conflict = true;
+                }
+                else if (property->boolean.fieldSize == 1)
+                {
+                    const uint8_t mask = property->boolean.fieldMask;
+                    const auto existing = boolMasks.find(storageOffset);
+                    if (property->offset < cursor && existing == boolMasks.end())
+                        conflict = true;
+                    else if (existing != boolMasks.end() && (existing->second & mask) != 0)
+                        conflict = true;
+                    else
+                        boolMasks[storageOffset] |= mask;
+                }
+                else
+                {
+                    const auto existingEnd = boolStorageEnds.find(storageOffset);
+                    if (property->offset < cursor && existingEnd == boolStorageEnds.end())
+                        conflict = true;
+                    else if (existingEnd != boolStorageEnds.end() && existingEnd->second > storageOffset)
+                        conflict = true;
+                    else
+                        boolStorageEnds[storageOffset] = storageEnd;
+                }
+                if (!conflict)
+                    cursor = std::max<int64_t>(cursor, storageEnd);
+            }
+            else if (!conflict)
+            {
+                conflict = property->offset < cursor;
+            }
+            if (conflict)
             {
                 function.layoutConflicts.push_back("parameter=" + property->name +
                                                    " offset=" + std::to_string(property->offset) +
@@ -408,14 +492,14 @@ namespace anduefker::reflection
             return std::nullopt;
         const auto size = objects_.StructSize(object);
         const auto super = objects_.StructSuper(object);
-        if (!size || !super || *size < 0)
+        if (!size || *size < 0)
             return std::nullopt;
 
         TypeIR type;
         type.address = object;
         const auto package = FindPackage(object);
         type.packageAddress = package.value_or(0);
-        type.superAddress = *super;
+        type.superAddress = super.value_or(0);
         type.kind = kind;
         type.name = *name;
         const auto fullName = objects_.FullName(object);

@@ -550,6 +550,9 @@ namespace anduefker::generation
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n\nnamespace AndUE\n{\n";
         stream << "struct FName { std::uint8_t Data[" << context_.Schema().fname.size << "]; };\n";
         stream << "struct FString { std::uintptr_t Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "template <typename ElementType> struct TArray { std::uintptr_t Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "template <typename ElementType> struct TSet { std::uint8_t Data[0x48]; };\n";
+        stream << "template <typename KeyType, typename ValueType> struct TMap { std::uint8_t Data[0x50]; };\n";
         stream << "}\n";
         return stream.str();
     }
@@ -647,7 +650,11 @@ namespace anduefker::generation
             enums.emplace(enumeration.address, Sanitize(enumeration.name, "Enum_"));
 
         std::ostringstream stream;
-        stream << "#pragma once\n#include <cstdint>\n#include \"BasicTypes.hpp\"\n\nnamespace AndUE\n{\n";
+        stream << "#pragma once\n#include <cstdint>\n#include \"BasicTypes.hpp\"\n#include \"Enums.hpp\"\n\nnamespace AndUE\n{\n";
+        for (const TypeIR &type : reflection_.types)
+            stream << "struct " << types[type.address] << ";\n";
+        if (!reflection_.types.empty())
+            stream << "\n";
         std::vector<size_t> order;
         std::unordered_set<uintptr_t> emitted;
         while (order.size() < reflection_.types.size())
@@ -687,10 +694,51 @@ namespace anduefker::generation
             stream << "\n{\n";
             int32_t cursor = 0;
             size_t ordinal = 0;
+            std::unordered_map<int32_t, std::string> boolStorageNames;
+            std::unordered_map<int32_t, int32_t> boolStorageEnds;
             for (const PropertyIR &property : type.properties)
             {
                 const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
-                if (total <= 0 || property.offset < cursor || static_cast<int64_t>(property.offset) + total > type.size)
+                if (total <= 0 || property.offset < 0)
+                    continue;
+
+                const bool boolLayout = property.type.kind == PropertyKind::Bool &&
+                                        property.boolean.fieldSize > 0 && property.boolean.fieldSize <= 8 &&
+                                        property.boolean.byteOffset < property.boolean.fieldSize &&
+                                        property.boolean.byteMask != 0 && property.boolean.fieldMask != 0;
+                if (boolLayout)
+                {
+                    const int32_t storageOffset = property.offset + property.boolean.byteOffset;
+                    const int32_t storageSize = property.boolean.fieldSize;
+                    const int32_t storageEnd = storageOffset + storageSize;
+                    if (storageEnd < storageOffset || storageEnd > type.size)
+                        continue;
+
+                    const auto existing = boolStorageNames.find(storageOffset);
+                    if (storageOffset < cursor && existing == boolStorageNames.end())
+                        continue;
+                    if (storageOffset > cursor)
+                        stream << "    std::uint8_t Pad_" << ordinal++ << "[0x" << std::hex
+                               << (storageOffset - cursor) << std::dec << "];\n";
+                    if (existing == boolStorageNames.end())
+                    {
+                        const std::string storageName = "BoolStorage_" + std::to_string(ordinal++);
+                        boolStorageNames.emplace(storageOffset, storageName);
+                        boolStorageEnds.emplace(storageOffset, storageEnd);
+                        stream << "    std::uint8_t " << storageName;
+                        if (storageSize > 1)
+                            stream << "[" << storageSize << "]";
+                        stream << ";\n";
+                    }
+
+                    const std::string member = Sanitize(property.name, "Member_") + "_" + std::to_string(ordinal++);
+                    stream << "    static constexpr std::uint8_t " << member << "_Mask = 0x"
+                           << std::hex << static_cast<unsigned int>(property.boolean.fieldMask) << std::dec << ";\n";
+                    cursor = std::max(cursor, storageEnd);
+                    continue;
+                }
+
+                if (property.offset < cursor || static_cast<int64_t>(property.offset) + total > type.size)
                     continue;
                 if (property.offset > cursor)
                     stream << "    std::uint8_t Pad_" << ordinal++ << "[0x" << std::hex << (property.offset - cursor) << std::dec << "];\n";
@@ -906,6 +954,14 @@ namespace anduefker::generation
                        << PropertyKindName(property.type.kind) << "\",\"referenced_object\":\""
                        << Hex(property.type.referencedObject) << "\",\"type_details_resolved\":";
                 WriteJsonBool(stream, property.typeDetailsResolved);
+                if (property.type.kind == PropertyKind::Bool)
+                {
+                    stream << ",\"bool_layout\":{\"field_size\":"
+                           << static_cast<unsigned int>(property.boolean.fieldSize)
+                           << ",\"byte_offset\":" << static_cast<unsigned int>(property.boolean.byteOffset)
+                           << ",\"byte_mask\":" << static_cast<unsigned int>(property.boolean.byteMask)
+                           << ",\"field_mask\":" << static_cast<unsigned int>(property.boolean.fieldMask) << "}";
+                }
                 stream << "}";
                 if (propertyIndex + 1 != type.properties.size())
                     stream << ',';
