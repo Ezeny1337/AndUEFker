@@ -1121,8 +1121,14 @@ namespace anduefker::ue
                     valid = false;
                     break;
                 }
-                ++sample.parameterCount;
-                sample.parameterEnd = std::max(sample.parameterEnd, static_cast<int32_t>(end));
+                // UFunction::InitializeDerivedMembers 只统计带有 CPF_Parm 的属性
+                // ChildProperties 还可能包含用于默认值的局部属性
+                // 它们不属于 NumParms/ParmsSize
+                if ((property->flags & 0x00000080ull) != 0)
+                {
+                    ++sample.parameterCount;
+                    sample.parameterEnd = std::max(sample.parameterEnd, static_cast<int32_t>(end));
+                }
                 current = field->nextAddress;
             }
             if (current != 0 || visited.size() > 256)
@@ -1213,22 +1219,34 @@ namespace anduefker::ue
         }
 
         const size_t requiredFunctionHits = std::max<size_t>(4, (parameterChainSamples * 3) / 4);
-        if (bestFunctionFlagsOffset < 0 || bestFunctionFlagsHits < requiredFunctionHits ||
-            bestParameterShapeHits < requiredFunctionHits || parameterChainSamples < 4)
+        if (bestFunctionFlagsOffset < 0 || bestFunctionFlagsHits < requiredFunctionHits)
         {
-            report.failures.push_back("UFunction::FunctionFlags/NumParms/ParmsSize were not resolved consistently; parameter_chain_samples=" +
+            report.failures.push_back("UFunction::FunctionFlags was not resolved consistently; parameter_chain_samples=" +
                                       std::to_string(parameterChainSamples) +
                                       " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
                                       " parameter_shape_hits=" + std::to_string(bestParameterShapeHits));
             return false;
         }
         schema.ufunction.functionFlags = bestFunctionFlagsOffset;
-        schema.ufunction.numParams = bestFunctionFlagsOffset + 4;
-        schema.ufunction.paramSize = bestFunctionFlagsOffset + 6;
-        report.evidence.push_back("resolved UFunction::FunctionFlags, NumParms and ParmsSize from multiple samples; flags_offset=" +
-                                  std::to_string(schema.ufunction.functionFlags) +
-                                  " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
-                                  " parameter_shape_hits=" + std::to_string(bestParameterShapeHits));
+        const bool parametersResolved = parameterChainSamples >= 4 && bestParameterShapeHits >= requiredFunctionHits;
+        if (parametersResolved)
+        {
+            schema.ufunction.numParams = bestFunctionFlagsOffset + 4;
+            schema.ufunction.paramSize = bestFunctionFlagsOffset + 6;
+            report.evidence.push_back("resolved UFunction::FunctionFlags, NumParms and ParmsSize from multiple samples; flags_offset=" +
+                                      std::to_string(schema.ufunction.functionFlags) +
+                                      " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
+                                      " parameter_shape_hits=" + std::to_string(bestParameterShapeHits));
+        }
+        else
+        {
+            report.failures.push_back("UFunction::NumParms/ParmsSize remain unresolved; parameter_chain_samples=" +
+                                      std::to_string(parameterChainSamples) +
+                                      " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
+                                      " parameter_shape_hits=" + std::to_string(bestParameterShapeHits) +
+                                      " flags_offset=" + std::to_string(schema.ufunction.functionFlags));
+            report.evidence.push_back("resolved UFunction::FunctionFlags only; NumParms/ParmsSize were withheld because parameter-chain validation was insufficient");
+        }
 
         // Func 位于 UFunction 的固定字段和可选 event-graph 字段之后
         // 从刚解析出的字段之后开始搜索，避免 UObject/UStruct 前缀中的指针仅仅因为指向可执行内存就被误认为 native 函数
