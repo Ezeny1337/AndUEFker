@@ -1,0 +1,165 @@
+name: Android arm64 build
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: android-arm64-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_ABI: arm64-v8a
+  ANDROID_PLATFORM: android-29
+  NDK_VERSION: 25.2.9519653
+  CMAKE_VERSION: 3.22.1
+  BUILD_DIR: build/android-arm64-release
+
+jobs:
+  build:
+    name: Build Android arm64-v8a
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform, NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [[ -z "$sdk_root" ]]; then
+            echo "Android SDK path is not available" >&2
+            exit 1
+          fi
+
+          sdkmanager --sdk_root="$sdk_root" --install \
+            "platforms;${ANDROID_PLATFORM}" \
+            "ndk;${NDK_VERSION}" \
+            "cmake;${CMAKE_VERSION}"
+
+          ndk_home="$sdk_root/ndk/${NDK_VERSION}"
+          cmake_bin="$sdk_root/cmake/${CMAKE_VERSION}/bin"
+          test -d "$ndk_home"
+          test -x "$cmake_bin/cmake"
+
+          echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ndk_home" >> "$GITHUB_ENV"
+          echo "$cmake_bin" >> "$GITHUB_PATH"
+
+      - name: Verify build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --version
+          ninja --version
+          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+
+      - name: Configure CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="$ANDROID_ABI" \
+            -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build "$BUILD_DIR" --parallel "$(nproc)"
+
+      - name: Package build artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -x "$BUILD_DIR/AndUEFker"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="commit-${GITHUB_SHA:0:12}"
+          fi
+
+          package_name="AndUEFker-android-${ANDROID_ABI}-${version}"
+          archive_name="${package_name}.tar.gz"
+          mkdir -p dist/"$package_name"
+          install -m 0755 "$BUILD_DIR/AndUEFker" "dist/$package_name/AndUEFker"
+
+          printf '%s\n' \
+            'Project: AndUEFker' \
+            "Commit: $GITHUB_SHA" \
+            "Ref: $GITHUB_REF" \
+            "Target: Android $ANDROID_PLATFORM / $ANDROID_ABI" \
+            "NDK: $NDK_VERSION" \
+            "CMake: $CMAKE_VERSION" \
+            > "dist/$package_name/BUILD-METADATA.txt"
+
+          (
+            cd dist
+            tar -czf "$archive_name" "$package_name"
+            sha256sum "$archive_name" > SHA256SUMS
+          )
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: android-arm64-${{ github.sha }}
+          path: dist
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.tar.gz dist/SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "AndUEFker $tag" \
+              --generate-notes \
+              --verify-tag
+          fi
