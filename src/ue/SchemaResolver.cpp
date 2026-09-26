@@ -872,6 +872,12 @@ namespace anduefker::ue
             "DelegateProperty", "MulticastDelegateProperty", "MulticastInlineDelegateProperty",
             "MulticastSparseDelegateProperty", "OptionalProperty"};
         std::unordered_map<std::string, uintptr_t> samples;
+        std::vector<uintptr_t> delegateSamples;
+        const auto isDelegatePropertyName = [](const std::string &name)
+        {
+            return name == "DelegateProperty" || name == "MulticastDelegateProperty" ||
+                   name == "MulticastInlineDelegateProperty" || name == "MulticastSparseDelegateProperty";
+        };
         const ObjectStoreReader &objects = model.Objects();
         for (int32_t index = 0; index < objects.Count() && samples.size() < wanted.size(); ++index)
         {
@@ -886,6 +892,8 @@ namespace anduefker::ue
                 continue;
             for (const FieldMetadata &field : model.Fields(*first, 2048))
             {
+                if (isDelegatePropertyName(field.className) && delegateSamples.size() < 128)
+                    delegateSamples.push_back(field.address);
                 if (std::find(wanted.begin(), wanted.end(), field.className) != wanted.end() &&
                     !samples.contains(field.className))
                     samples.emplace(field.className, field.address);
@@ -914,6 +922,12 @@ namespace anduefker::ue
         {
             const auto className = model.ClassName(value);
             return className && (expected.empty() || *className == expected);
+        };
+        const auto isFunctionObject = [&](uintptr_t value)
+        {
+            const auto className = model.ClassName(value);
+            return className && (*className == "Function" || *className == "DelegateFunction" ||
+                                 *className == "SparseDelegateFunction" || *className == "VerseFunction");
         };
         auto isFieldClass = [&](uintptr_t value)
         {
@@ -984,17 +998,40 @@ namespace anduefker::ue
         }
         if (schema.propertySubtypes.delegateSignature < 0)
         {
-            for (const char *name : {"DelegateProperty", "MulticastDelegateProperty",
-                                     "MulticastInlineDelegateProperty", "MulticastSparseDelegateProperty"})
+            const auto readProbePointer = [&](uintptr_t field, int32_t offset, uintptr_t &value)
             {
-                const int32_t offset = findPointer(name, [&](uintptr_t value)
-                                                   { return isUObjectClass(value, "Function"); });
-                if (offset >= 0)
-                {
-                    schema.propertySubtypes.delegateSignature = offset;
-                    break;
-                }
+                const auto address = Add(field, offset);
+                return address && memory_.IsReadable(*address, sizeof(uintptr_t)) && memory_.Read(*address, value) && value != 0;
+            };
+            // 在所有的 Delegate 属性变体中，UE 5.6 都将 SignatureFunction 紧跟在 FProperty 基类之后进行声明
+            // 因此，通过源码推导得出的偏移量是我们在此所需的唯一候选值
+            const int32_t offset = firstSubtypeOffset;
+            size_t nonZeroHits = 0;
+            size_t readableHits = 0;
+            size_t objectClassHits = 0;
+            size_t functionHits = 0;
+            for (uintptr_t sample : delegateSamples)
+            {
+                uintptr_t value = 0;
+                if (!readProbePointer(sample, offset, value))
+                    continue;
+                ++nonZeroHits;
+                if (!IsReadablePointer(memory_, value))
+                    continue;
+                ++readableHits;
+                if (model.ClassName(value))
+                    ++objectClassHits;
+                if (isFunctionObject(value))
+                    ++functionHits;
             }
+            report.evidence.push_back("delegate subtype samples=" + std::to_string(delegateSamples.size()) +
+                                      " source_offset=" + std::to_string(offset) +
+                                      " nonzero=" + std::to_string(nonZeroHits) +
+                                      " readable=" + std::to_string(readableHits) +
+                                      " object_class=" + std::to_string(objectClassHits) +
+                                      " function_hits=" + std::to_string(functionHits));
+            if (functionHits >= 4)
+                schema.propertySubtypes.delegateSignature = offset;
         }
         if (schema.propertySubtypes.optionalValue < 0)
             schema.propertySubtypes.optionalValue = findPointer("OptionalProperty", isFieldClass);
