@@ -25,8 +25,6 @@ namespace anduefker::binding
     private:
         [[nodiscard]] bool IsClassObject(uintptr_t object, const std::string &expectedName) const;
 
-        const IMemorySource &memory_;
         ObjectModelReader objects_;
-        const EngineSchema &schema_;
     };
 } // namespace anduefker::binding

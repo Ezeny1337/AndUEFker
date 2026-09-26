@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <utility>
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
@@ -28,6 +29,13 @@ namespace anduefker::app
                 return "resolved-value";
             }
             return "unknown";
+        }
+
+        std::string HexAddress(uintptr_t address)
+        {
+            std::ostringstream stream;
+            stream << "0x" << std::hex << std::uppercase << address;
+            return stream.str();
         }
 
         const char *ParseStatusName(ParseStatus status)
@@ -215,7 +223,7 @@ namespace anduefker::app
         for (const auto &obj : commonObjects)
         {
             Note(RuntimeLogLevel::Debug, "common_object: " + obj.name +
-                                             " address=0x" + std::to_string(obj.address) +
+                                             " address=" + HexAddress(obj.address) +
                                              " index=" + std::to_string(obj.index));
         }
 
