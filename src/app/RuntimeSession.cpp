@@ -80,7 +80,17 @@ namespace anduefker::app
     void RuntimeSession::Note(RuntimeLogLevel level, std::string message)
     {
         logEntries_.push_back({level, message});
-        diagnostics_.push_back(std::move(message));
+        diagnostics_.push_back(message);
+
+        // Immediate console output for non-debug messages
+        if (level != RuntimeLogLevel::Debug)
+        {
+            const char *levelName = level == RuntimeLogLevel::Error     ? "ERROR"
+                                    : level == RuntimeLogLevel::Warning ? "WARN"
+                                                                        : "INFO";
+            std::printf("[%s] %s\n", levelName, message.c_str());
+            std::fflush(stdout);
+        }
     }
 
     void RuntimeSession::FlushDiagnostics() const

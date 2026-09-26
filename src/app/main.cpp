@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -10,10 +11,17 @@ namespace
 {
     void PrintUsage(const char *program)
     {
-        std::fprintf(stderr, "Usage: %s <output-root> <package> [pid] [options]\n", program);
-        std::fprintf(stderr, "\nOptions:\n");
-        std::fprintf(stderr, "  --ue-version <version>    UE version, for example 5.6 (default: 5.6)\n");
-        std::fprintf(stderr, "  --help                    Show this help\n");
+        std::fprintf(stderr, "Usage: %s -o <output-dir> -p <package-name> [options]\n", program);
+        std::fprintf(stderr, "\nRequired arguments:\n");
+        std::fprintf(stderr, "  -o, --output <dir>        Output directory for generated SDK\n");
+        std::fprintf(stderr, "  -p, --package <name>      Target package name (e.g., com.example.app)\n");
+        std::fprintf(stderr, "\nOptional arguments:\n");
+        std::fprintf(stderr, "  --pid <pid>               Target process ID (auto-detected if omitted)\n");
+        std::fprintf(stderr, "  --ue-version <version>    UE version (default: 5.6)\n");
+        std::fprintf(stderr, "  -h, --help                Show this help message\n");
+        std::fprintf(stderr, "\nExample:\n");
+        std::fprintf(stderr, "  %s -o ./output -p com.YS.Nicecity\n", program);
+        std::fprintf(stderr, "  %s -o ./output -p com.YS.Nicecity --pid 12345 --ue-version 5.6\n", program);
     }
 
     bool ParsePid(const std::string &text, int &pid)
@@ -29,70 +37,112 @@ namespace
 
 int main(int argc, char **argv)
 {
-    if (argc < 3)
-    {
-        PrintUsage(argv[0]);
-        return 2;
-    }
-
     anduefker::app::RuntimeSessionConfig config;
-    config.outputRoot = argv[1];
-    config.packageName = argv[2];
     config.engineVersion = anduefker::ue::ParseEngineVersion("5.6");
 
-    for (int index = 3; index < argc; ++index)
+    bool hasOutput = false;
+    bool hasPackage = false;
+
+    for (int index = 1; index < argc; ++index)
     {
-        const std::string argument = argv[index];
-        if (argument == "--help" || argument == "-h")
+        const std::string arg = argv[index];
+
+        if (arg == "-h" || arg == "--help")
         {
             PrintUsage(argv[0]);
             return 0;
         }
-        if (argument == "--ue-version")
+
+        if (arg == "-o" || arg == "--output")
         {
             if (++index >= argc)
             {
-                std::fprintf(stderr, "--ue-version requires a value\n");
+                std::fprintf(stderr, "Error: %s requires an argument\n", arg.c_str());
+                PrintUsage(argv[0]);
+                return 2;
+            }
+            config.outputRoot = argv[index];
+            hasOutput = true;
+            continue;
+        }
+
+        if (arg == "-p" || arg == "--package")
+        {
+            if (++index >= argc)
+            {
+                std::fprintf(stderr, "Error: %s requires an argument\n", arg.c_str());
+                PrintUsage(argv[0]);
+                return 2;
+            }
+            config.packageName = argv[index];
+            hasPackage = true;
+            continue;
+        }
+
+        if (arg == "--pid")
+        {
+            if (++index >= argc)
+            {
+                std::fprintf(stderr, "Error: --pid requires an argument\n");
+                PrintUsage(argv[0]);
+                return 2;
+            }
+            if (!ParsePid(argv[index], config.pid))
+            {
+                std::fprintf(stderr, "Error: Invalid PID: %s\n", argv[index]);
+                return 2;
+            }
+            continue;
+        }
+
+        if (arg == "--ue-version")
+        {
+            if (++index >= argc)
+            {
+                std::fprintf(stderr, "Error: --ue-version requires an argument\n");
+                PrintUsage(argv[0]);
                 return 2;
             }
             config.engineVersion = anduefker::ue::ParseEngineVersion(argv[index]);
             if (!config.engineVersion.IsValid())
             {
-                std::fprintf(stderr, "Invalid UE version: %s\n", argv[index]);
+                std::fprintf(stderr, "Error: Invalid UE version: %s\n", argv[index]);
                 return 2;
             }
             continue;
         }
-        if (config.pid != 0 || !ParsePid(argument, config.pid))
-        {
-            std::fprintf(stderr, "Unexpected argument: %s\n", argument.c_str());
-            return 2;
-        }
+
+        std::fprintf(stderr, "Error: Unknown argument: %s\n", arg.c_str());
+        PrintUsage(argv[0]);
+        return 2;
+    }
+
+    if (!hasOutput || !hasPackage)
+    {
+        std::fprintf(stderr, "Error: Missing required arguments\n\n");
+        PrintUsage(argv[0]);
+        return 2;
     }
 
     anduefker::app::RuntimeSession session(std::move(config));
     const auto status = session.Run();
-    std::printf("Runtime status: %d\n", static_cast<int>(status));
+
+    std::printf("\n=== Session Summary ===\n");
+    std::printf("Status: %d\n", static_cast<int>(status));
+
     if (!session.LogPath().empty())
         std::printf("Log: %s\n", session.LogPath().c_str());
-    for (const auto &entry : session.LogEntries())
-    {
-        if (entry.level == anduefker::app::RuntimeLogLevel::Debug)
-            continue;
-        const char *level = entry.level == anduefker::app::RuntimeLogLevel::Error
-                                ? "ERROR"
-                            : entry.level == anduefker::app::RuntimeLogLevel::Warning ? "WARN"
-                                                                                      : "INFO";
-        std::printf("[%s] %s\n", level, entry.message.c_str());
-    }
+
     if (!session.Failures().empty())
     {
-        std::printf("Failures:\n");
+        std::printf("\nFailures:\n");
         for (const std::string &failure : session.Failures())
-            std::printf("  %s\n", failure.c_str());
+            std::printf("  - %s\n", failure.c_str());
     }
+
     if (!session.Artifacts().outputPath.empty())
-        std::printf("Output: %s\n", session.Artifacts().outputPath.string().c_str());
+        std::printf("\nOutput: %s\n", session.Artifacts().outputPath.string().c_str());
+
     if (status == anduefker::app::RuntimeSessionStatus::ReflectionReady)
         return 0;
     if (status == anduefker::app::RuntimeSessionStatus::ReflectionPartial)

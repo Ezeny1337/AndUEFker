@@ -14,7 +14,6 @@ namespace anduefker::generation
     using ::anduefker::ir::EnumUnderlyingType;
     using ::anduefker::ir::EnumValueIR;
     using ::anduefker::ir::FunctionIR;
-    using ::anduefker::ir::PackageIR;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::ir::PropertyIR;
     using ::anduefker::ir::PropertyKind;

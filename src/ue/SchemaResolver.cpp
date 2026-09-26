@@ -1003,8 +1003,11 @@ namespace anduefker::ue
                 const auto address = Add(field, offset);
                 return address && memory_.IsReadable(*address, sizeof(uintptr_t)) && memory_.Read(*address, value) && value != 0;
             };
-            // 在所有的 Delegate 属性变体中，UE 5.6 都将 SignatureFunction 紧跟在 FProperty 基类之后进行声明
-            // 因此，通过源码推导得出的偏移量是我们在此所需的唯一候选值
+            // UE 5.6 declares SignatureFunction immediately after the
+            // FProperty base in all delegate property variants. The source
+            // derived offset is therefore the only candidate we need here;
+            // scanning arbitrary later fields creates false positives and
+            // unnecessary remote-read failures.
             const int32_t offset = firstSubtypeOffset;
             size_t nonZeroHits = 0;
             size_t readableHits = 0;

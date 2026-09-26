@@ -509,26 +509,6 @@ namespace anduefker::reflection
         }
     }
 
-    std::optional<uintptr_t> ReflectionReader::FindPackage(uintptr_t object) const
-    {
-        std::unordered_set<uintptr_t> visited;
-        uintptr_t current = object;
-        uintptr_t last = object;
-        for (size_t depth = 0; depth < 64 && current != 0; ++depth)
-        {
-            if (!visited.insert(current).second)
-                return std::nullopt;
-            const auto outer = objects_.Outer(current);
-            if (!outer)
-                return std::nullopt;
-            if (*outer == 0)
-                return last;
-            last = *outer;
-            current = *outer;
-        }
-        return std::nullopt;
-    }
-
     std::optional<TypeIR> ReflectionReader::ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const
     {
         const auto name = objects_.Name(object);
@@ -542,8 +522,6 @@ namespace anduefker::reflection
 
         TypeIR type;
         type.address = object;
-        const auto package = FindPackage(object);
-        type.packageAddress = package.value_or(0);
         type.superAddress = super.value_or(0);
         type.kind = kind;
         type.name = *name;
@@ -593,8 +571,6 @@ namespace anduefker::reflection
                 }
                 EnumIR enumeration;
                 enumeration.address = *object;
-                const auto package = FindPackage(*object);
-                enumeration.packageAddress = package.value_or(0);
                 enumeration.name = *name;
                 const auto fullName = objects_.FullName(*object);
                 enumeration.fullName = fullName ? *fullName : ("Enum " + *name);
@@ -631,32 +607,6 @@ namespace anduefker::reflection
             }
             result.types.push_back(*type);
             ++result.stats.parsedTypes;
-        }
-
-        const auto packageIndexFor = [&](uintptr_t packageAddress) -> size_t
-        {
-            const auto existing = result.packageIndex.find(packageAddress);
-            if (existing != result.packageIndex.end())
-                return existing->second;
-
-            PackageIR package;
-            package.address = packageAddress;
-            const auto packageName = objects_.Name(packageAddress);
-            package.name = packageName ? *packageName : "<unknown>";
-            const size_t index = result.packages.size();
-            result.packages.push_back(std::move(package));
-            result.packageIndex.emplace(packageAddress, index);
-            return index;
-        };
-        for (size_t index = 0; index < result.types.size(); ++index)
-        {
-            if (result.types[index].packageAddress != 0)
-                result.packages[packageIndexFor(result.types[index].packageAddress)].types.push_back(index);
-        }
-        for (size_t index = 0; index < result.enums.size(); ++index)
-        {
-            if (result.enums[index].packageAddress != 0)
-                result.packages[packageIndexFor(result.enums[index].packageAddress)].enums.push_back(index);
         }
 
         std::unordered_map<uintptr_t, size_t> enumByAddress;

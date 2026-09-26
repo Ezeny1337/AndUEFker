@@ -12,7 +12,6 @@ namespace anduefker::reflection
     using ::anduefker::ir::EnumUnderlyingType;
     using ::anduefker::ir::EnumValueIR;
     using ::anduefker::ir::FunctionIR;
-    using ::anduefker::ir::PackageIR;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::ir::PropertyIR;
     using ::anduefker::ir::PropertyKind;
@@ -44,7 +43,6 @@ namespace anduefker::reflection
         void ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const;
         void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
         [[nodiscard]] std::optional<TypeIR> ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const;
-        [[nodiscard]] std::optional<uintptr_t> FindPackage(uintptr_t object) const;
 
         const IMemorySource &memory_;
         const EngineSchema &schema_;

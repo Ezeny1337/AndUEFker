@@ -1117,30 +1117,6 @@ namespace anduefker::generation
                 stream << ',';
             stream << '\n';
         }
-        stream << "  ],\n  \"packages\": [\n";
-        for (size_t index = 0; index < reflection_.packages.size(); ++index)
-        {
-            const PackageIR &package = reflection_.packages[index];
-            stream << "    {\"address\":\"" << Hex(package.address) << "\",\"name\":\""
-                   << JsonEscape(package.name) << "\",\"types\":[";
-            for (size_t typeIndex = 0; typeIndex < package.types.size(); ++typeIndex)
-            {
-                stream << package.types[typeIndex];
-                if (typeIndex + 1 != package.types.size())
-                    stream << ',';
-            }
-            stream << "],\"enums\":[";
-            for (size_t enumIndex = 0; enumIndex < package.enums.size(); ++enumIndex)
-            {
-                stream << package.enums[enumIndex];
-                if (enumIndex + 1 != package.enums.size())
-                    stream << ',';
-            }
-            stream << "]}";
-            if (index + 1 != reflection_.packages.size())
-                stream << ',';
-            stream << '\n';
-        }
         stream << "  ]\n}\n";
         return stream.str();
     }
@@ -1219,73 +1195,6 @@ namespace anduefker::generation
                 return result;
             }
             ++result.filesWritten;
-        }
-        if (!reflection_.packages.empty())
-        {
-            const std::filesystem::path packageDirectory = temporary / "Packages";
-            std::filesystem::create_directories(packageDirectory, error);
-            if (error)
-            {
-                result.error = "package output directory creation failed";
-                std::filesystem::remove_all(temporary, error);
-                return result;
-            }
-            std::unordered_set<std::string> packageNames;
-            std::unordered_map<uintptr_t, std::string> packageTypeNames;
-            std::unordered_set<std::string> packageTypeNameSet;
-            for (const TypeIR &type : reflection_.types)
-            {
-                std::string typeName = Sanitize(type.name, "Type_");
-                if (!packageTypeNameSet.insert(typeName).second)
-                    typeName += "_" + Hex(type.address).substr(2);
-                packageTypeNames.emplace(type.address, std::move(typeName));
-            }
-            std::unordered_map<uintptr_t, std::string> packageEnumNames;
-            std::unordered_set<std::string> packageEnumNameSet;
-            for (const EnumIR &enumeration : reflection_.enums)
-            {
-                std::string enumName = Sanitize(enumeration.name, "Enum_");
-                if (!packageEnumNameSet.insert(enumName).second)
-                    enumName += "_" + Hex(enumeration.address).substr(2);
-                packageEnumNames.emplace(enumeration.address, std::move(enumName));
-            }
-            for (const PackageIR &package : reflection_.packages)
-            {
-                std::string packageName = Sanitize(package.name, "Package_");
-                if (!packageNames.insert(packageName).second)
-                    packageName += "_" + Hex(package.address).substr(2);
-                std::ostringstream content;
-                content << "#pragma once\n#include \"../Types.hpp\"\n#include \"../Enums.hpp\"\n\n";
-                content << "namespace AndUE::Packages::" << packageName << "\n{\n";
-                for (size_t typeIndex : package.types)
-                {
-                    if (typeIndex < reflection_.types.size())
-                        content << "using ::AndUE::" << packageTypeNames[reflection_.types[typeIndex].address] << ";\n";
-                }
-                for (size_t enumIndex : package.enums)
-                {
-                    if (enumIndex < reflection_.enums.size())
-                        content << "using ::AndUE::" << packageEnumNames[reflection_.enums[enumIndex].address] << ";\n";
-                }
-                content << "}\n";
-                const std::string fileName = packageName + ".hpp";
-                std::ofstream stream(packageDirectory / fileName, std::ios::binary | std::ios::trunc);
-                if (!stream.is_open())
-                {
-                    result.error = "package output file open failed: " + fileName;
-                    std::filesystem::remove_all(temporary, error);
-                    return result;
-                }
-                const std::string text = content.str();
-                stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-                if (!stream.good())
-                {
-                    result.error = "package output file write failed: " + fileName;
-                    std::filesystem::remove_all(temporary, error);
-                    return result;
-                }
-                ++result.filesWritten;
-            }
         }
         std::filesystem::rename(temporary, finalPath, error);
         if (error)

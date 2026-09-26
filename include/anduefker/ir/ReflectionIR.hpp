@@ -112,7 +112,6 @@ namespace anduefker::ir
     struct TypeIR
     {
         uintptr_t address = 0;
-        uintptr_t packageAddress = 0;
         uintptr_t superAddress = 0;
         TypeKind kind = TypeKind::Struct;
         std::string name;
@@ -145,21 +144,12 @@ namespace anduefker::ir
     struct EnumIR
     {
         uintptr_t address = 0;
-        uintptr_t packageAddress = 0;
         std::string name;
         std::string fullName;
         EnumUnderlyingType underlyingType = EnumUnderlyingType::Unknown;
         uint8_t cppForm = 0;
         uint8_t flags = 0;
         std::vector<EnumValueIR> values;
-    };
-
-    struct PackageIR
-    {
-        uintptr_t address = 0;
-        std::string name;
-        std::vector<size_t> types;
-        std::vector<size_t> enums;
     };
 
     struct ReflectionStats
@@ -182,9 +172,7 @@ namespace anduefker::ir
         ParseStatus status = ParseStatus::Failed;
         ReflectionStats stats;
         std::vector<std::string> diagnostics;
-        std::vector<PackageIR> packages;
         std::vector<TypeIR> types;
         std::vector<EnumIR> enums;
-        std::unordered_map<uintptr_t, size_t> packageIndex;
     };
 } // namespace anduefker::ir
