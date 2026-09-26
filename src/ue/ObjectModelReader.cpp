@@ -294,6 +294,8 @@ namespace anduefker::ue
                                            : -1;
             result.secondaryAddress = readOptionalPointer(enumOffset);
         }
+        else if (base->className == "OptionalProperty")
+            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.optionalValue);
         else if (base->className == "DelegateProperty" || base->className == "MulticastDelegateProperty" ||
                  base->className == "MulticastInlineDelegateProperty" || base->className == "MulticastSparseDelegateProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.delegateSignature);

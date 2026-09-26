@@ -870,7 +870,7 @@ namespace anduefker::ue
             "BoolProperty", "ByteProperty", "ObjectProperty", "ObjectPropertyBase", "ClassProperty",
             "StructProperty", "ArrayProperty", "SetProperty", "MapProperty", "EnumProperty",
             "DelegateProperty", "MulticastDelegateProperty", "MulticastInlineDelegateProperty",
-            "MulticastSparseDelegateProperty"};
+            "MulticastSparseDelegateProperty", "OptionalProperty"};
         std::unordered_map<std::string, uintptr_t> samples;
         const ObjectStoreReader &objects = model.Objects();
         for (int32_t index = 0; index < objects.Count() && samples.size() < wanted.size(); ++index)
@@ -996,6 +996,8 @@ namespace anduefker::ue
                 }
             }
         }
+        if (schema.propertySubtypes.optionalValue < 0)
+            schema.propertySubtypes.optionalValue = findPointer("OptionalProperty", isFieldClass);
         if (schema.propertySubtypes.byteEnum < 0)
             schema.propertySubtypes.byteEnum = findPointer("ByteProperty", [&](uintptr_t value)
                                                            { return isUObjectClass(value, "Enum"); });
@@ -1007,7 +1009,8 @@ namespace anduefker::ue
                                   " set_element=" + std::to_string(schema.propertySubtypes.setElement) +
                                   " map_base=" + std::to_string(schema.propertySubtypes.mapBase) +
                                   " enum_base=" + std::to_string(schema.propertySubtypes.enumBase) +
-                                  " delegate_signature=" + std::to_string(schema.propertySubtypes.delegateSignature));
+                                  " delegate_signature=" + std::to_string(schema.propertySubtypes.delegateSignature) +
+                                  " optional_value=" + std::to_string(schema.propertySubtypes.optionalValue));
         return true;
     }
 
@@ -1178,6 +1181,15 @@ namespace anduefker::ue
         size_t parameterChainSamples = 0;
         for (const FunctionSample &sample : functions)
             parameterChainSamples += sample.parameterChainValid ? 1u : 0u;
+        // 在当前 Android Shipping/Cooked 配置中，UE 5.6 的 UStruct 字段
+        // 从 PropertiesSize 到 UFunction::FunctionFlags 之间包含：
+        // MinAlignment/StructStateFlags、Script、四条 PropertyLink、
+        // ScriptAndPropertyObjectReferences、UnresolvedScriptProperties 和
+        // UnversionedGameSchema，总计 88 字节。优先使用这个源码推导位置，
+        // 不让普通数据字段的“像 flags”值赢过真实布局。
+        const int32_t sourceFunctionFlagsOffset = schema.ustruct.size >= 0 ? schema.ustruct.size + 88 : -1;
+        size_t sourceFunctionFlagsHits = 0;
+        size_t sourceParameterShapeHits = 0;
         for (int32_t offset = functionDataStart; offset <= 0x200; offset += 4)
         {
             size_t flagHits = 0;
@@ -1209,6 +1221,12 @@ namespace anduefker::ue
                     ++parameterShapeHits;
             }
 
+            if (offset == sourceFunctionFlagsOffset)
+            {
+                sourceFunctionFlagsHits = flagHits;
+                sourceParameterShapeHits = parameterShapeHits;
+            }
+
             if (flagHits > bestFunctionFlagsHits ||
                 (flagHits == bestFunctionFlagsHits && parameterShapeHits > bestParameterShapeHits))
             {
@@ -1219,6 +1237,16 @@ namespace anduefker::ue
         }
 
         const size_t requiredFunctionHits = std::max<size_t>(4, (parameterChainSamples * 3) / 4);
+        if (sourceFunctionFlagsOffset >= 0 && sourceFunctionFlagsHits >= requiredFunctionHits)
+        {
+            bestFunctionFlagsOffset = sourceFunctionFlagsOffset;
+            bestFunctionFlagsHits = sourceFunctionFlagsHits;
+            bestParameterShapeHits = sourceParameterShapeHits;
+            report.evidence.push_back("UFunction::FunctionFlags preferred source-layout candidate offset=" +
+                                      std::to_string(sourceFunctionFlagsOffset) +
+                                      " flag_hits=" + std::to_string(sourceFunctionFlagsHits) +
+                                      " parameter_shape_hits=" + std::to_string(sourceParameterShapeHits));
+        }
         if (bestFunctionFlagsOffset < 0 || bestFunctionFlagsHits < requiredFunctionHits)
         {
             report.failures.push_back("UFunction::FunctionFlags was not resolved consistently; parameter_chain_samples=" +
@@ -1248,15 +1276,15 @@ namespace anduefker::ue
             report.evidence.push_back("resolved UFunction::FunctionFlags only; NumParms/ParmsSize were withheld because parameter-chain validation was insufficient");
         }
 
-        // Func 位于 UFunction 的固定字段和可选 event-graph 字段之后
-        // 从刚解析出的字段之后开始搜索，避免 UObject/UStruct 前缀中的指针仅仅因为指向可执行内存就被误认为 native 函数
-        // UE 5.6 中 FunctionFlags、NumParms、ParmsSize、ReturnValueOffset、RPCId、RPCResponseId 和 FirstPropertyToInit 都位于 Func 之前
-        // 可选 event-graph 字段可能进一步扩大这段间隔
-        const int32_t nativeFunctionStart = schema.ufunction.functionFlags + 0x18;
+        // UE 5.6 中 Func 相对于 FunctionFlags 只可能落在几个由条件编译决定的位置
+        // 即无 event graph、带 event graph、再加 Live Coding 指针
+        // 限制在这些源码布局位置，避免把对象后部其他可执行地址误认为 UFunction::Func
+        const std::array<int32_t, 4> nativeFunctionDeltas = {0x18, 0x28, 0x30, 0x38};
         int32_t bestNativeFunctionOffset = -1;
         size_t bestNativeFunctionHits = 0;
-        for (int32_t offset = nativeFunctionStart; offset <= 0x240; offset += 4)
+        for (const int32_t delta : nativeFunctionDeltas)
         {
+            const int32_t offset = schema.ufunction.functionFlags + delta;
             size_t hits = 0;
             for (const FunctionSample &sample : functions)
             {

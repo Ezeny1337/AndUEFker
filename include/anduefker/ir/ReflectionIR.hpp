@@ -54,6 +54,7 @@ namespace anduefker::ir
         Delegate,
         MulticastDelegate,
         FieldPath,
+        Optional,
     };
 
     struct TypeReferenceIR

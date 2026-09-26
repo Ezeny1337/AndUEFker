@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -455,8 +456,77 @@ namespace anduefker::generation
                 return "MulticastDelegate";
             case PropertyKind::FieldPath:
                 return "FieldPath";
+            case PropertyKind::Optional:
+                return "Optional";
             }
             return "Unknown";
+        }
+
+        EnumUnderlyingType WidenEnumUnderlying(EnumUnderlyingType type, const EnumIR &enumeration)
+        {
+            if (enumeration.values.empty())
+                return type;
+
+            int64_t minimum = enumeration.values.front().value;
+            int64_t maximum = minimum;
+            for (const EnumValueIR &value : enumeration.values)
+            {
+                minimum = std::min(minimum, value.value);
+                maximum = std::max(maximum, value.value);
+            }
+
+            const auto signedWidth = [&](int bits) -> bool
+            {
+                const int64_t minValue = bits == 8 ? std::numeric_limits<int8_t>::min() : bits == 16 ? std::numeric_limits<int16_t>::min()
+                                                                                      : bits == 32   ? std::numeric_limits<int32_t>::min()
+                                                                                                     : std::numeric_limits<int64_t>::min();
+                const int64_t maxValue = bits == 8 ? std::numeric_limits<int8_t>::max() : bits == 16 ? std::numeric_limits<int16_t>::max()
+                                                                                      : bits == 32   ? std::numeric_limits<int32_t>::max()
+                                                                                                     : std::numeric_limits<int64_t>::max();
+                return minimum >= minValue && maximum <= maxValue;
+            };
+            const auto unsignedWidth = [&](int bits) -> bool
+            {
+                const uint64_t maxValue = bits == 8 ? std::numeric_limits<uint8_t>::max() : bits == 16 ? std::numeric_limits<uint16_t>::max()
+                                                                                        : bits == 32   ? std::numeric_limits<uint32_t>::max()
+                                                                                                       : std::numeric_limits<uint64_t>::max();
+                return minimum >= 0 && static_cast<uint64_t>(maximum) <= maxValue;
+            };
+
+            switch (type)
+            {
+            case EnumUnderlyingType::Int8:
+                if (signedWidth(8))
+                    return type;
+                [[fallthrough]];
+            case EnumUnderlyingType::Int16:
+                if (signedWidth(16))
+                    return EnumUnderlyingType::Int16;
+                [[fallthrough]];
+            case EnumUnderlyingType::Int32:
+                if (signedWidth(32))
+                    return EnumUnderlyingType::Int32;
+                return EnumUnderlyingType::Int64;
+            case EnumUnderlyingType::Int64:
+                return type;
+            case EnumUnderlyingType::UInt8:
+                if (unsignedWidth(8))
+                    return type;
+                [[fallthrough]];
+            case EnumUnderlyingType::UInt16:
+                if (unsignedWidth(16))
+                    return EnumUnderlyingType::UInt16;
+                [[fallthrough]];
+            case EnumUnderlyingType::UInt32:
+                if (unsignedWidth(32))
+                    return EnumUnderlyingType::UInt32;
+                return EnumUnderlyingType::UInt64;
+            case EnumUnderlyingType::UInt64:
+                return unsignedWidth(64) ? type : EnumUnderlyingType::Int64;
+            case EnumUnderlyingType::Unknown:
+                return EnumUnderlyingType::Int64;
+            }
+            return EnumUnderlyingType::Int64;
         }
 
         const char *EnumUnderlyingName(EnumUnderlyingType type)
@@ -668,6 +738,21 @@ namespace anduefker::generation
                 if (candidate.superAddress != 0 && !emitted.contains(candidate.superAddress) &&
                     types.contains(candidate.superAddress))
                     continue;
+                bool valueDependencyPending = false;
+                for (const PropertyIR &property : candidate.properties)
+                {
+                    if (property.type.kind != PropertyKind::Struct || property.type.referencedObject == 0 ||
+                        property.type.referencedObject == candidate.address)
+                        continue;
+                    if (types.contains(property.type.referencedObject) &&
+                        !emitted.contains(property.type.referencedObject))
+                    {
+                        valueDependencyPending = true;
+                        break;
+                    }
+                }
+                if (valueDependencyPending)
+                    continue;
                 order.push_back(index);
                 emitted.insert(candidate.address);
                 progress = true;
@@ -846,7 +931,7 @@ namespace anduefker::generation
             if (!usedNames.insert(enumName).second)
                 enumName += "_" + Hex(enumeration.address).substr(2);
             stream << "enum class " << enumName << " : "
-                   << EnumUnderlyingName(enumeration.underlyingType) << "\n{\n";
+                   << EnumUnderlyingName(WidenEnumUnderlying(enumeration.underlyingType, enumeration)) << "\n{\n";
             for (const EnumValueIR &value : enumeration.values)
                 stream << "    " << Sanitize(value.name, "Value_") << " = " << value.value << ",\n";
             stream << "};\n\n";

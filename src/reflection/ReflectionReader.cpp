@@ -90,6 +90,10 @@ namespace anduefker::reflection
             return PropertyKind::MulticastDelegate;
         if (name == "FieldPathProperty")
             return PropertyKind::FieldPath;
+        if (name == "OptionalProperty")
+            return PropertyKind::Optional;
+        if (name == "Utf8StrProperty" || name == "AnsiStrProperty")
+            return PropertyKind::String;
         return PropertyKind::Unknown;
     }
 
@@ -197,6 +201,13 @@ namespace anduefker::reflection
                 result.type.inner = readNestedType(result.type.referencedObject);
             }
             break;
+        case PropertyKind::Optional:
+            if (schema_.propertySubtypes.optionalValue >= 0)
+            {
+                result.type.referencedObject = readReference(schema_.propertySubtypes.optionalValue);
+                result.type.inner = readNestedType(result.type.referencedObject);
+            }
+            break;
         case PropertyKind::Delegate:
         case PropertyKind::MulticastDelegate:
             if (schema_.propertySubtypes.delegateSignature >= 0)
@@ -237,6 +248,9 @@ namespace anduefker::reflection
         case PropertyKind::Delegate:
         case PropertyKind::MulticastDelegate:
             result.typeDetailsResolved = result.type.referencedObject != 0;
+            break;
+        case PropertyKind::Optional:
+            result.typeDetailsResolved = result.type.referencedObject != 0 && result.type.inner != nullptr;
             break;
         default:
             break;
@@ -335,6 +349,9 @@ namespace anduefker::reflection
         std::unordered_map<int32_t, int32_t> boolStorageEnds;
         uintptr_t current = first;
         int64_t cursor = 0;
+        uint32_t derivedParameterCount = 0;
+        int64_t derivedParameterEnd = 0;
+        bool sawProperty = false;
         while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
         {
             const auto property = ReadProperty(current, 0, stats);
@@ -343,10 +360,29 @@ namespace anduefker::reflection
                 ++stats.failures;
                 break;
             }
-            function.parameters.push_back(*property);
+            sawProperty = true;
+            const bool isParameter = (property->flags & 0x00000080ull) != 0;
+            if (isParameter)
+            {
+                function.parameters.push_back(*property);
+                ++derivedParameterCount;
+            }
+            if (!isParameter)
+            {
+                const auto field = objects_.Field(current);
+                if (!field)
+                {
+                    ++stats.failures;
+                    break;
+                }
+                current = field->nextAddress;
+                continue;
+            }
             const int64_t total = static_cast<int64_t>(property->elementSize) * property->arrayDim;
             bool conflict = property->offset < 0 || total <= 0 ||
                             static_cast<int64_t>(property->offset) + total < property->offset;
+            if (isParameter && !conflict)
+                derivedParameterEnd = std::max(derivedParameterEnd, static_cast<int64_t>(property->offset) + total);
             if (!conflict && property->type.kind == PropertyKind::Bool &&
                 property->boolean.fieldSize > 0 && property->boolean.fieldSize <= 8 &&
                 property->boolean.byteOffset < property->boolean.fieldSize &&
@@ -405,6 +441,15 @@ namespace anduefker::reflection
                 break;
             }
             current = field->nextAddress;
+        }
+
+        // 即使运行时 Schema 探测流程必须隐匿 UFunction::NumParms 与 ParmsSize 的原始偏移量
+        // 但它们仍可从同一个 CPF_Parm 链中推导得出
+        // 这能在无需为 runtime.json 伪造/硬编码偏移量的前提下，确保生成的参数布局依然可用
+        if (sawProperty && derivedParameterCount <= 0xFFu && derivedParameterEnd <= 0xFFFF)
+        {
+            function.numParams = static_cast<uint8_t>(derivedParameterCount);
+            function.paramSize = static_cast<uint16_t>(derivedParameterEnd);
         }
     }
 
