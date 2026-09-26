@@ -1001,7 +1001,25 @@ namespace anduefker::generation
                << ",\"native_function\":" << schema.ufunction.nativeFunction << "},\n";
         stream << "    \"uenum\": {\"names\":" << schema.uenum.names
                << ",\"underlying_type\":" << schema.uenum.underlyingType << "}\n";
-        stream << "  }\n}\n";
+        stream << "  }";
+
+        if (!binding.commonObjects.empty())
+        {
+            stream << ",\n  \"common_objects\": [\n";
+            for (size_t i = 0; i < binding.commonObjects.size(); ++i)
+            {
+                const auto &obj = binding.commonObjects[i];
+                stream << "    {\"name\":\"" << JsonEscape(obj.name)
+                       << "\",\"address\":\"" << Hex(obj.address)
+                       << "\",\"index\":" << obj.index << "}";
+                if (i + 1 != binding.commonObjects.size())
+                    stream << ",";
+                stream << "\n";
+            }
+            stream << "  ]";
+        }
+
+        stream << "\n}\n";
         return stream.str();
     }
 

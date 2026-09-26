@@ -110,6 +110,13 @@ namespace anduefker::binding
         static DecodePlan Identity();
     };
 
+    struct CommonObjectInfo
+    {
+        std::string name;
+        uintptr_t address = 0;
+        int32_t index = -1;
+    };
+
     struct BindingReport
     {
         bool staticCandidatesFound = false;
@@ -128,6 +135,7 @@ namespace anduefker::binding
         NameContainerLayout names;
         DecodePlan decode = DecodePlan::Identity();
         BindingReport report;
+        std::vector<CommonObjectInfo> commonObjects;
 
         [[nodiscard]] bool IsValid() const;
     };

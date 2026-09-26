@@ -42,6 +42,7 @@ add_library(anduefker_core STATIC
     src/app/RuntimeSession.cpp
     src/analyzer/AnalyzerMemoryAdapter.cpp
     src/binding/BindingBuilder.cpp
+    src/binding/CommonObjectCollector.cpp
     src/binding/GlobalLocator.cpp
     src/binding/LayoutDiscovery.cpp
     src/binding/LayoutProbes.cpp

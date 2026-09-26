@@ -6,6 +6,8 @@
 #include <fstream>
 #include <utility>
 
+#include "anduefker/binding/CommonObjectCollector.hpp"
+
 namespace anduefker::app
 {
     using ::anduefker::binding::AddressMeaning;
@@ -204,6 +206,22 @@ namespace anduefker::app
             return RuntimeSessionStatus::BindingReady;
         }
         context_.CommitSchema(std::move(schema));
+        Note(RuntimeLogLevel::Info, "Engine schema resolved");
+
+        Note(RuntimeLogLevel::Info, "Collecting common object classes...");
+        binding::CommonObjectCollector collector(*memory_, context_.Binding(), context_.Schema());
+        std::vector<binding::CommonObjectInfo> commonObjects = collector.Collect();
+        Note(RuntimeLogLevel::Info, "Found " + std::to_string(commonObjects.size()) + " common object classes");
+        for (const auto &obj : commonObjects)
+        {
+            Note(RuntimeLogLevel::Debug, "common_object: " + obj.name +
+                                             " address=0x" + std::to_string(obj.address) +
+                                             " index=" + std::to_string(obj.index));
+        }
+
+        RuntimeBinding updatedBinding = context_.Binding();
+        updatedBinding.commonObjects = std::move(commonObjects);
+        context_.CommitBinding(std::move(updatedBinding));
 
         ReflectionReader reader(*memory_, context_.Binding(), context_.Schema(),
                                 context_.Module().base, context_.Module().end);
