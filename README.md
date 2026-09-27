@@ -27,7 +27,7 @@ Rather than relying on a single hardcoded layout, it combines binary analysis, r
 ## Pipeline
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[Android process] --> B[RemoteMemorySource]
     B --> C[ModuleCatalog]
     C --> D[GlobalLocator + UEAnalyzer]
@@ -178,34 +178,6 @@ The generated `manifest.json` reports one of the following artifact states:
 | `Failed` | Binding, schema resolution, reflection, or artifact writing failed. |
 
 The command-line process exits with `0` for a ready reflection result, `3` for a partial reflection result, and `1` for other failures or incomplete runtime stages.
-
-## Reading a run
-
-A healthy UE 5.6 run should contain messages similar to:
-
-```text
-[INFO] Runtime binding validated
-[INFO] Engine schema resolved; profile=5.6.0 source=runtime-schema-probe
-[INFO] Found 8 common object classes
-[INFO] Reflection status=0 ... failures=0
-[INFO] Artifact status=Complete ...
-```
-
-For investigation, start with `AndUEFker.log`, then compare `manifest.json`, `diagnostics.json`, and `runtime.json`. A successful binding does not by itself guarantee a complete artifact; the reflection and artifact status should be checked as well.
-
-## Repository layout
-
-```text
-include/anduefker/    Public C++ interfaces
-src/app/              Runtime session and CLI entry point
-src/analyzer/         ARM64 and Unreal-oriented binary analysis
-src/binding/          Candidate location, layout probes, and runtime binding
-src/ue/               Name/object stores and schema resolution
-src/reflection/       Runtime reflection traversal
-src/generation/       C++ and JSON artifact generation
-third_party/          KittyMemoryEx integration
-.github/workflows/    Android arm64 CI and release packaging
-```
 
 ## Issues
 

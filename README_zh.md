@@ -27,7 +27,7 @@ AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运�
 ## 工作流程
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[Android 目标进程] --> B[RemoteMemorySource]
     B --> C[ModuleCatalog]
     C --> D[GlobalLocator + UEAnalyzer]
@@ -178,34 +178,6 @@ AndUEFker 会在绑定和 Schema 解析阶段记录以下证据：
 | `Failed` | 绑定、Schema 解析、反射或产物写入失败。 |
 
 命令行程序在反射结果就绪时返回 `0`，反射部分完成时返回 `3`，其他失败或未完成运行阶段返回 `1`。
-
-## 如何判断一次运行
-
-健康的 UE 5.6 运行通常会包含类似日志：
-
-```text
-[INFO] Runtime binding validated
-[INFO] Engine schema resolved; profile=5.6.0 source=runtime-schema-probe
-[INFO] Found 8 common object classes
-[INFO] Reflection status=0 ... failures=0
-[INFO] Artifact status=Complete ...
-```
-
-排查问题时，建议先查看 `AndUEFker.log`，然后对照 `manifest.json`、`diagnostics.json` 和 `runtime.json`。绑定成功不代表产物一定完整，还需要同时确认反射状态和产物状态。
-
-## 仓库结构
-
-```text
-include/anduefker/    公共 C++ 接口
-src/app/              运行会话和命令行入口
-src/analyzer/         ARM64 与 Unreal 二进制分析
-src/binding/          候选定位、布局探针和运行时绑定
-src/ue/               名称表、对象表和 Schema 解析
-src/reflection/       运行时反射遍历
-src/generation/       C++ 与 JSON 产物生成
-third_party/          KittyMemoryEx 集成
-.github/workflows/    Android arm64 CI 与发布打包
-```
 
 ## Issue
 
