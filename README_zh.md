@@ -209,7 +209,7 @@ third_party/          KittyMemoryEx 集成
 
 ## Issue
 
-遇到可复现的目标识别、绑定、Schema、反射或产物生成问题时，请提交 Issue。建议包含：
+遇到可复现的目标识别、绑定、Schema、反射或产物生成问题时，请提交 [Issue](https://github.com/Ezeny1337/AndUEFker/issues)。建议包含：
 
 1. 使用的 commit 或 release。
 2. Android 版本、设备 ABI，以及已知的目标 Unreal Engine 信息。

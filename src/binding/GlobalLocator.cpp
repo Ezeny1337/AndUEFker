@@ -10,17 +10,29 @@ namespace anduefker::binding
 {
     using ::anduefker::analyzer::AnalyzerMemoryAdapter;
 
-    LocatedAddress GlobalLocator::SymbolCandidate(const std::string &symbol) const
+    std::vector<LocatedAddress> GlobalLocator::SymbolCandidates(const std::string &symbol) const
     {
+        std::vector<LocatedAddress> result;
         auto elf = memory_.Manager().elfScanner.findElf(module_.name);
         if (!elf.isValid())
-            return {};
+            return result;
         uintptr_t address = elf.findSymbol(symbol);
         if (address == 0)
             address = elf.findDebugSymbol(symbol);
         if (address == 0)
-            return {};
-        return {address, AddressMeaning::PointerSlot, 80, "symbol:" + symbol};
+            return result;
+
+        if (symbol == "GUObjectArray" || symbol == "NamePoolData")
+        {
+            result.push_back({address, AddressMeaning::Direct, 80, "symbol:" + symbol});
+            return result;
+        }
+
+        // 调试器辅助符号和旧别名在引擎分支和游戏版本之间有所不同
+        // 保留两种解释，并让经过验证的对象/名称布局探测选择可用的根
+        result.push_back({address, AddressMeaning::Direct, 70, "symbol:" + symbol + ":direct"});
+        result.push_back({address, AddressMeaning::PointerSlot, 70, "symbol:" + symbol + ":pointer-slot"});
+        return result;
     }
 
     BindingCandidates GlobalLocator::Locate(const std::vector<std::string> &objectSymbols,
@@ -29,15 +41,13 @@ namespace anduefker::binding
         BindingCandidates result;
         for (const std::string &symbol : objectSymbols)
         {
-            const LocatedAddress candidate = SymbolCandidate(symbol);
-            if (candidate.address != 0)
-                result.objectRoots.push_back(candidate);
+            const std::vector<LocatedAddress> candidates = SymbolCandidates(symbol);
+            result.objectRoots.insert(result.objectRoots.end(), candidates.begin(), candidates.end());
         }
         for (const std::string &symbol : nameSymbols)
         {
-            const LocatedAddress candidate = SymbolCandidate(symbol);
-            if (candidate.address != 0)
-                result.nameRoots.push_back(candidate);
+            const std::vector<LocatedAddress> candidates = SymbolCandidates(symbol);
+            result.nameRoots.insert(result.nameRoots.end(), candidates.begin(), candidates.end());
         }
 
         AnalyzerMemoryAdapter adapter(memory_, module_);
@@ -72,13 +82,11 @@ namespace anduefker::binding
             }
         };
 
-        if (result.objectRoots.empty())
-        {
-            add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::GUObjectArray), "GUObjectArray");
-            add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::ObjObjects), "ObjObjects");
-        }
-        if (result.nameRoots.empty())
-            add(result.nameRoots, analyzer.Find(anduefker::analyzer::Targets::Names), "Names");
+        // 符号可以是直接对象、指针槽、调试器助手，也可以是过时/部分导出
+        // 绝不能仅因其存在而忽略二进制分析的候选对象
+        add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::GUObjectArray), "GUObjectArray");
+        add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::ObjObjects), "ObjObjects");
+        add(result.nameRoots, analyzer.Find(anduefker::analyzer::Targets::Names), "Names");
         return result;
     }
 } // namespace anduefker::binding

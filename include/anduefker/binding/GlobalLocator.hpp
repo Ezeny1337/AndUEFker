@@ -21,7 +21,7 @@ namespace anduefker::binding
                                                const std::vector<std::string> &nameSymbols) const;
 
     private:
-        [[nodiscard]] LocatedAddress SymbolCandidate(const std::string &symbol) const;
+        [[nodiscard]] std::vector<LocatedAddress> SymbolCandidates(const std::string &symbol) const;
 
         RemoteMemorySource &memory_;
         const ModuleImage &module_;

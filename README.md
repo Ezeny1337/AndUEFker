@@ -209,7 +209,7 @@ third_party/          KittyMemoryEx integration
 
 ## Issues
 
-Please open an issue when you encounter a reproducible detection, binding, schema, reflection, or artifact-generation problem. Include:
+Please open an [issue](https://github.com/Ezeny1337/AndUEFker/issues) when you encounter a reproducible detection, binding, schema, reflection, or artifact-generation problem. Include:
 
 1. The commit or release used.
 2. Android version, device ABI, and target Unreal Engine information if known.
