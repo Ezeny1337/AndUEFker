@@ -1,10 +1,8 @@
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 
-#include "anduefker/ue/EngineVersion.hpp"
 #include "anduefker/app/RuntimeSession.hpp"
 
 namespace
@@ -16,29 +14,15 @@ namespace
         std::fprintf(stderr, "  -o, --output <dir>        Output directory for generated SDK\n");
         std::fprintf(stderr, "  -p, --package <name>      Target package name (e.g., com.example.app)\n");
         std::fprintf(stderr, "\nOptional arguments:\n");
-        std::fprintf(stderr, "  --pid <pid>               Target process ID (auto-detected if omitted)\n");
-        std::fprintf(stderr, "  --ue-version <version>    UE version (default: 5.6)\n");
         std::fprintf(stderr, "  -h, --help                Show this help message\n");
         std::fprintf(stderr, "\nExample:\n");
         std::fprintf(stderr, "  %s -o ./output -p com.YS.Nicecity\n", program);
-        std::fprintf(stderr, "  %s -o ./output -p com.YS.Nicecity --pid 12345 --ue-version 5.6\n", program);
-    }
-
-    bool ParsePid(const std::string &text, int &pid)
-    {
-        char *end = nullptr;
-        const long value = std::strtol(text.c_str(), &end, 10);
-        if (end == nullptr || *end != '\0' || value <= 0 || value > 0x7FFFFFFF)
-            return false;
-        pid = static_cast<int>(value);
-        return true;
     }
 } // namespace
 
 int main(int argc, char **argv)
 {
     anduefker::app::RuntimeSessionConfig config;
-    config.engineVersion = anduefker::ue::ParseEngineVersion("5.6");
 
     bool hasOutput = false;
     bool hasPackage = false;
@@ -76,39 +60,6 @@ int main(int argc, char **argv)
             }
             config.packageName = argv[index];
             hasPackage = true;
-            continue;
-        }
-
-        if (arg == "--pid")
-        {
-            if (++index >= argc)
-            {
-                std::fprintf(stderr, "Error: --pid requires an argument\n");
-                PrintUsage(argv[0]);
-                return 2;
-            }
-            if (!ParsePid(argv[index], config.pid))
-            {
-                std::fprintf(stderr, "Error: Invalid PID: %s\n", argv[index]);
-                return 2;
-            }
-            continue;
-        }
-
-        if (arg == "--ue-version")
-        {
-            if (++index >= argc)
-            {
-                std::fprintf(stderr, "Error: --ue-version requires an argument\n");
-                PrintUsage(argv[0]);
-                return 2;
-            }
-            config.engineVersion = anduefker::ue::ParseEngineVersion(argv[index]);
-            if (!config.engineVersion.IsValid())
-            {
-                std::fprintf(stderr, "Error: Invalid UE version: %s\n", argv[index]);
-                return 2;
-            }
             continue;
         }
 

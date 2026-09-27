@@ -7,7 +7,6 @@
 #include "anduefker/ir/ReflectionIR.hpp"
 #include "anduefker/binding/BindingBuilder.hpp"
 #include "anduefker/generation/ArtifactWriter.hpp"
-#include "anduefker/ue/EngineVersion.hpp"
 #include "anduefker/binding/GlobalLocator.hpp"
 #include "anduefker/module/ModuleCatalog.hpp"
 #include "anduefker/reflection/ReflectionReader.hpp"
@@ -23,12 +22,10 @@ namespace anduefker::app
     using ::anduefker::generation::ArtifactResult;
     using ::anduefker::generation::ArtifactWriter;
     using ::anduefker::ir::ReflectionIR;
-    using ::anduefker::memory::ReadStats;
     using ::anduefker::memory::RemoteMemorySource;
     using ::anduefker::module::ModuleCatalog;
     using ::anduefker::reflection::ReflectionReader;
     using ::anduefker::ue::EngineSchema;
-    using ::anduefker::ue::EngineVersion;
     using ::anduefker::ue::SchemaResolutionReport;
     using ::anduefker::ue::SchemaResolver;
 
@@ -58,8 +55,6 @@ namespace anduefker::app
     struct RuntimeSessionConfig
     {
         std::string packageName;
-        int pid = 0;
-        EngineVersion engineVersion;
         std::string outputRoot;
         std::vector<std::string> moduleNames = {"libUnreal.so", "libUE4.so"};
     };

@@ -672,8 +672,23 @@ namespace anduefker::ue
                                              : static_cast<int32_t>(sizeof(uintptr_t) * 2);
         schema.ffield.owner = schema.ffield.next - ownerStorageSize;
         schema.ffieldClass.castFlags = schema.ffieldClass.name + static_cast<int32_t>(sizeof(uintptr_t));
+
+        const auto ownerAddress = Add(firstField, schema.ffield.owner);
+        uintptr_t rawOwner = 0;
+        if (!ownerAddress || !memory_.Read(*ownerAddress, rawOwner))
+        {
+            report.failures.push_back("FField::Owner could not be read for profile validation");
+            return false;
+        }
+        const uintptr_t owner = schema.features.fFieldOwnerMask ? (rawOwner & ~static_cast<uintptr_t>(1)) : rawOwner;
+        if (owner != *guid)
+        {
+            report.failures.push_back("FField::Owner representation did not match the Guid owner");
+            return false;
+        }
+
         schema.validation.fields = true;
-        report.evidence.push_back("resolved FField chain from CoreUObject.Guid properties");
+        report.evidence.push_back("resolved FField chain from CoreUObject.Guid properties; owner representation validated");
         return true;
     }
 

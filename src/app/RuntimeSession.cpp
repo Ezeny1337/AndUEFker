@@ -6,14 +6,19 @@
 #include <fstream>
 #include <sstream>
 #include <utility>
+#include <vector>
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
+#include "anduefker/ue/EngineVersion.hpp"
 
 namespace anduefker::app
 {
     using ::anduefker::binding::AddressMeaning;
     using ::anduefker::binding::LocatedAddress;
     using ::anduefker::ir::ParseStatus;
+    using ::anduefker::memory::ReadStats;
+    using ::anduefker::ue::EngineVersion;
+    using ::anduefker::ue::ParseEngineVersion;
 
     namespace
     {
@@ -36,6 +41,16 @@ namespace anduefker::app
             std::ostringstream stream;
             stream << "0x" << std::hex << std::uppercase << address;
             return stream.str();
+        }
+
+        std::vector<EngineVersion> EngineVersionProfiles()
+        {
+            return {
+                ParseEngineVersion("5.6.0"),
+                ParseEngineVersion("5.2.0"),
+                ParseEngineVersion("4.27.0"),
+                ParseEngineVersion("4.22.0"),
+            };
         }
 
         const char *ParseStatusName(ParseStatus status)
@@ -128,18 +143,18 @@ namespace anduefker::app
         logEntries_.clear();
         reflection_ = {};
         Note("=== Runtime Session Started ===");
-        Note("Package=" + config_.packageName + " UE=" + config_.engineVersion.ToString());
+        Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
-        if (config_.pid <= 0)
-            config_.pid = KittyMemoryEx::getProcessID(config_.packageName);
-        if (config_.pid <= 0)
+        const int pid = KittyMemoryEx::getProcessID(config_.packageName);
+        if (pid <= 0)
         {
             failures_.push_back("target process was not found");
             Note(RuntimeLogLevel::Error, failures_.back());
             FlushDiagnostics();
             return RuntimeSessionStatus::Failed;
         }
-        if (!memory_->Initialize(static_cast<pid_t>(config_.pid)))
+        Note(RuntimeLogLevel::Debug, "Target PID=" + std::to_string(pid));
+        if (!memory_->Initialize(static_cast<pid_t>(pid)))
         {
             failures_.push_back("remote memory source initialization failed");
             Note(RuntimeLogLevel::Error, failures_.back());
@@ -194,8 +209,35 @@ namespace anduefker::app
             Note(RuntimeLogLevel::Debug, "binding: " + evidence);
 
         EngineSchema schema;
-        SchemaResolver resolver(*memory_, context_.Binding(), config_.engineVersion);
-        const SchemaResolutionReport schemaReport = resolver.Resolve(schema);
+        EngineVersion selectedProfile;
+        SchemaResolutionReport schemaReport;
+        bool schemaAccepted = false;
+        std::vector<std::string> profileFailures;
+        Note(RuntimeLogLevel::Info, "Detecting Unreal Engine schema profile...");
+        for (const EngineVersion &profile : EngineVersionProfiles())
+        {
+            EngineSchema candidateSchema;
+            SchemaResolver resolver(*memory_, context_.Binding(), profile);
+            const SchemaResolutionReport candidateReport = resolver.Resolve(candidateSchema);
+            if (candidateReport.accepted)
+            {
+                schema = std::move(candidateSchema);
+                schemaReport = candidateReport;
+                selectedProfile = profile;
+                schemaAccepted = true;
+                break;
+            }
+
+            profileFailures.push_back(profile.ToString() + ": " +
+                                      (candidateReport.failures.empty() ? "schema probes rejected the profile"
+                                                                        : candidateReport.failures.front()));
+        }
+
+        if (!schemaAccepted)
+        {
+            schemaReport.failures = std::move(profileFailures);
+            schemaReport.accepted = false;
+        }
         for (const std::string &evidence : schemaReport.evidence)
             Note(RuntimeLogLevel::Debug, "schema: " + evidence);
         for (const std::string &failure : schemaReport.failures)
@@ -205,7 +247,7 @@ namespace anduefker::app
                                          " requested_bytes=" + std::to_string(memoryStats.requestedBytes) +
                                          " transferred_bytes=" + std::to_string(memoryStats.transferredBytes) +
                                          " failures=" + std::to_string(memoryStats.failures));
-        if (!schemaReport.accepted)
+        if (!schemaAccepted)
         {
             failures_.insert(failures_.end(), schemaReport.failures.begin(), schemaReport.failures.end());
             for (const std::string &failure : schemaReport.failures)
@@ -214,7 +256,8 @@ namespace anduefker::app
             return RuntimeSessionStatus::BindingReady;
         }
         context_.CommitSchema(std::move(schema));
-        Note(RuntimeLogLevel::Info, "Engine schema resolved");
+        Note(RuntimeLogLevel::Info, "Engine schema resolved; profile=" + selectedProfile.ToString() +
+                                         " source=runtime-schema-probe");
 
         Note(RuntimeLogLevel::Info, "Collecting common object classes...");
         binding::CommonObjectCollector collector(*memory_, context_.Binding(), context_.Schema());
