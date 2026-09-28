@@ -10,6 +10,23 @@ namespace anduefker::binding
 {
     using ::anduefker::analyzer::AnalyzerMemoryAdapter;
 
+    namespace
+    {
+        EArch ToAnalyzerArchitecture(ModuleArchitecture architecture)
+        {
+            switch (architecture)
+            {
+            case ModuleArchitecture::Arm32:
+                return EArch::Arm32;
+            case ModuleArchitecture::Arm64:
+                return EArch::Arm64;
+            case ModuleArchitecture::Unknown:
+                break;
+            }
+            return EArch::Unknown;
+        }
+    } // namespace
+
     std::vector<LocatedAddress> GlobalLocator::SymbolCandidates(const std::string &symbol) const
     {
         std::vector<LocatedAddress> result;
@@ -53,7 +70,7 @@ namespace anduefker::binding
         AnalyzerMemoryAdapter adapter(memory_, module_);
         if (!adapter.Initialize())
             return result;
-        const std::unique_ptr<IArchDecoder> decoder = CreateArchDecoder(EArch::Arm64);
+        const std::unique_ptr<IArchDecoder> decoder = CreateArchDecoder(ToAnalyzerArchitecture(module_.architecture));
         if (!decoder)
             return result;
 

@@ -9,6 +9,7 @@
 
 namespace anduefker::binding
 {
+    using ::anduefker::app::ModuleArchitecture;
     using ::anduefker::app::ModuleImage;
     using ::anduefker::memory::RemoteMemorySource;
 

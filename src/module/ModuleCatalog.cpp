@@ -1,6 +1,7 @@
 #include "anduefker/module/ModuleCatalog.hpp"
 
 #include <algorithm>
+#include <elf.h>
 
 #include "anduefker/memory/RemoteMemorySource.hpp"
 
@@ -37,6 +38,20 @@ namespace anduefker::module
 {
     using ::anduefker::memory::RemoteMemorySource;
 
+    namespace
+    {
+        ModuleArchitecture DetectArchitecture(const auto &header, uint8_t &pointerWidth)
+        {
+            pointerWidth = header.e_ident[EI_CLASS] == ELFCLASS32 ? 4 : header.e_ident[EI_CLASS] == ELFCLASS64 ? 8
+                                                                                                               : 0;
+            if (header.e_ident[EI_CLASS] == ELFCLASS32 && header.e_machine == EM_ARM)
+                return ModuleArchitecture::Arm32;
+            if (header.e_ident[EI_CLASS] == ELFCLASS64 && header.e_machine == EM_AARCH64)
+                return ModuleArchitecture::Arm64;
+            return ModuleArchitecture::Unknown;
+        }
+    } // namespace
+
     bool ModuleCatalog::Discover(IMemorySource &memory,
                                  const std::vector<std::string> &names,
                                  ModuleImage &out)
@@ -55,6 +70,9 @@ namespace anduefker::module
             out.name = name;
             out.base = elf.base();
             out.end = elf.end();
+            out.architecture = DetectArchitecture(elf.header(), out.pointerWidth);
+            if (out.architecture == ModuleArchitecture::Unknown || out.pointerWidth != sizeof(uintptr_t))
+                continue;
             for (const auto &segment : elf.segments())
             {
                 out.segments.push_back(ModuleImage::Segment{

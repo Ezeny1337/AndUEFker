@@ -1,6 +1,6 @@
 # AndUEFker
 
-> A runtime Unreal Engine reflection and SDK generation tool for Android ARM64.
+> A runtime Unreal Engine reflection and SDK generation tool for Android.
 
 [![Language](https://img.shields.io/badge/language-C%2B%2B20-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![Build system](https://img.shields.io/badge/build-CMake%20%7C%20Ninja-064F8C?logo=cmake&logoColor=white)](https://cmake.org/)
@@ -14,11 +14,13 @@ AndUEFker discovers Unreal Engine runtime structures from a live Android process
 
 Rather than relying on a single hardcoded layout, it combines binary analysis, runtime probing, cross-validation, and reflection data to establish verified runtime bindings prior to reading the object graph.
 
+Build the tool with the ABI matching the target process: use the `arm64-v8a` binary for 64-bit games and the `armeabi-v7a` binary for 32-bit ARM games.
+
 ## Highlights
 
 - **Runtime-first binding** — locates and validates `GUObjectArray`, `ObjObjects`, and `FName` storage at runtime.
 - **Schema discovery** — resolves `UObject`, `UStruct`, `FField`/`FProperty`, `UFunction`, and `UEnum` layouts from live data.
-- **ARM64-aware analysis** — includes an ARM64 decoder and Unreal-oriented candidate strategies for Android binaries.
+- **ARM-aware analysis** — supports ARM64 and ARM32 ARM-mode decoding for Unreal Android binaries; Thumb/Thumb-2 analysis remains a separate follow-up.
 - **Reflection extraction** — walks live Unreal objects and emits types, properties, functions, enums, inheritance, and layout metadata.
 - **Common class addresses** — records useful `UClass` objects such as `World`, `Engine`, `GameInstance`, and `PlayerController`.
 - **Reproducible artifacts** — writes generated headers, JSON metadata, diagnostics, and runtime binding details as one artifact directory.
@@ -56,7 +58,7 @@ The runtime session follows these stages:
 - Android NDK `25.2.9519653` for the repository CI configuration.
 - CMake `3.22.1` for the repository CI configuration.
 - Ninja.
-- A host environment capable of building Android `arm64-v8a` code.
+- A host environment capable of building Android `arm64-v8a` and `armeabi-v7a` code.
 
 ### Configure and build
 

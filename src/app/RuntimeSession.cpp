@@ -82,6 +82,20 @@ namespace anduefker::app
             }
             return "INFO";
         }
+
+        const char *ModuleArchitectureName(ModuleArchitecture architecture)
+        {
+            switch (architecture)
+            {
+            case ModuleArchitecture::Arm32:
+                return "ARM32";
+            case ModuleArchitecture::Arm64:
+                return "ARM64";
+            case ModuleArchitecture::Unknown:
+                break;
+            }
+            return "unknown";
+        }
     } // namespace
 
     RuntimeSession::RuntimeSession(RuntimeSessionConfig config) : config_(std::move(config))
@@ -171,7 +185,9 @@ namespace anduefker::app
             return RuntimeSessionStatus::Failed;
         }
         context_.SetModule(std::move(module));
-        Note("Module=" + context_.Module().name + " base=" + std::to_string(context_.Module().base));
+        Note("Module=" + context_.Module().name + " base=" + std::to_string(context_.Module().base) +
+             " architecture=" + ModuleArchitectureName(context_.Module().architecture) +
+             " pointer_width=" + std::to_string(context_.Module().pointerWidth));
 
         GlobalLocator locator(*memory_, context_.Module());
         const BindingCandidates candidates = locator.Locate(
@@ -257,7 +273,7 @@ namespace anduefker::app
         }
         context_.CommitSchema(std::move(schema));
         Note(RuntimeLogLevel::Info, "Engine schema resolved; profile=" + selectedProfile.ToString() +
-                                         " source=runtime-schema-probe");
+                                        " source=runtime-schema-probe");
 
         Note(RuntimeLogLevel::Info, "Collecting common object classes...");
         binding::CommonObjectCollector collector(*memory_, context_.Binding(), context_.Schema());

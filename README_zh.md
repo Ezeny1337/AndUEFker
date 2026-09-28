@@ -1,6 +1,6 @@
 # AndUEFker
 
-> 面向 Android ARM64 的 Unreal Engine 运行时反射与 SDK 生成工具。
+> 面向 Android 的 Unreal Engine 运行时反射与 SDK 生成工具。
 
 [![Language](https://img.shields.io/badge/language-C%2B%2B20-00599C?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![Build system](https://img.shields.io/badge/build-CMake%20%7C%20Ninja-064F8C?logo=cmake&logoColor=white)](https://cmake.org/)
@@ -14,11 +14,13 @@ AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运�
 
 它不依赖单一硬编码布局，而是结合二进制分析、运行时探针、交叉验证和反射数据，在读取对象图之前先建立经过验证的运行时绑定。
 
+工具 ABI 需要与目标进程匹配：64 位游戏使用`arm64-v8a`版本，32 位 ARM 游戏使用`armeabi-v7a`版本。
+
 ## 核心能力
 
 - **运行时绑定** — 运行时定位并验证 `GUObjectArray`、`ObjObjects` 与 `FName` 存储。
 - **Schema 自动解析** — 从实时数据中解析 `UObject`、`UStruct`、`FField`/`FProperty`、`UFunction` 和 `UEnum` 布局。
-- **ARM64 分析** — 内置 ARM64 指令解码器，以及面向 Unreal 二进制的候选地址分析策略。
+- **ARM 架构分析** — 支持 ARM64 和 ARM32 ARM-mode 指令解码，以及面向 Unreal 二进制的候选地址分析策略。
 - **反射提取** — 遍历 Unreal 运行时对象，输出类型、属性、函数、枚举、继承关系和布局元数据。
 - **常用类地址收集** — 记录 `World`、`Engine`、`GameInstance`、`PlayerController` 等常用 `UClass` 对象地址。
 - **完整产物输出** — 将生成头文件、JSON 元数据、诊断信息和运行时绑定信息写入统一产物目录。
@@ -56,7 +58,7 @@ flowchart TD
 - Android NDK `25.2.9519653`，与仓库 CI 配置一致。
 - CMake `3.22.1`，与仓库 CI 配置一致。
 - Ninja。
-- 能够构建 Android `arm64-v8a` 代码的主机环境。
+- 能够构建 Android `arm64-v8a` 和 `armeabi-v7a` 代码的主机环境。
 
 ### 配置与构建
 

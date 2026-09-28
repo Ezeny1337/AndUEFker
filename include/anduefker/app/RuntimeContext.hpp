@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -13,6 +14,13 @@ namespace anduefker::app
     using ::anduefker::binding::RuntimeBinding;
     using ::anduefker::memory::IMemorySource;
     using ::anduefker::ue::EngineSchema;
+
+    enum class ModuleArchitecture
+    {
+        Unknown,
+        Arm32,
+        Arm64,
+    };
 
     struct ModuleImage
     {
@@ -31,6 +39,8 @@ namespace anduefker::app
         uintptr_t base = 0;
         uintptr_t end = 0;
         std::string name;
+        ModuleArchitecture architecture = ModuleArchitecture::Unknown;
+        uint8_t pointerWidth = 0;
         std::vector<Segment> segments;
 
         [[nodiscard]] bool IsValid() const { return base != 0 && end > base; }

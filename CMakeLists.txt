@@ -6,8 +6,8 @@ if(NOT ANDROID)
     message(FATAL_ERROR "AndUEFker currently supports Android only")
 endif()
 
-if(NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a")
-    message(FATAL_ERROR "AndUEFker currently supports arm64-v8a only")
+if(NOT CMAKE_ANDROID_ARCH_ABI MATCHES "^(arm64-v8a|armeabi-v7a)$")
+    message(FATAL_ERROR "AndUEFker currently supports arm64-v8a and armeabi-v7a only")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)

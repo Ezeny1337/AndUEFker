@@ -8,6 +8,7 @@
 
 namespace anduefker::module
 {
+    using ::anduefker::app::ModuleArchitecture;
     using ::anduefker::app::ModuleImage;
     using ::anduefker::memory::IMemorySource;
 

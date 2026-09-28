@@ -11,6 +11,7 @@
 
 namespace anduefker::generation
 {
+    using ::anduefker::app::ModuleArchitecture;
     using ::anduefker::app::RuntimeContext;
     using ::anduefker::binding::NameContainerKind;
     using ::anduefker::binding::ObjectContainerKind;
@@ -38,6 +39,20 @@ namespace anduefker::generation
             std::ostringstream stream;
             stream << "0x" << std::hex << std::uppercase << value;
             return stream.str();
+        }
+
+        const char *ArchitectureName(ModuleArchitecture architecture)
+        {
+            switch (architecture)
+            {
+            case ModuleArchitecture::Arm32:
+                return "ARM32";
+            case ModuleArchitecture::Arm64:
+                return "ARM64";
+            case ModuleArchitecture::Unknown:
+                break;
+            }
+            return "unknown";
         }
 
         std::string PropertyType(const PropertyIR &property,
@@ -949,7 +964,9 @@ namespace anduefker::generation
         stream << "  \"engine\": \"" << JsonEscape(schema.validation.familyEvidence) << "\",\n";
         stream << "  \"module\": {\"name\":\"" << JsonEscape(context_.Module().name)
                << "\",\"base\":\"" << Hex(context_.Module().base) << "\",\"end\":\""
-               << Hex(context_.Module().end) << "\"},\n";
+               << Hex(context_.Module().end) << "\",\"architecture\":\""
+               << ArchitectureName(context_.Module().architecture) << "\",\"pointer_width\":"
+               << static_cast<int>(context_.Module().pointerWidth) << "},\n";
         stream << "  \"binding\": {\n";
         stream << "    \"object_root\": \"" << Hex(binding.objectRoot.address) << "\",\n";
         stream << "    \"name_root\": \"" << Hex(binding.nameRoot.address) << "\",\n";
