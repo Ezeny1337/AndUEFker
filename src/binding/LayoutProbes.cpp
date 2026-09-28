@@ -115,7 +115,7 @@ namespace anduefker::binding
             // 检查该关系可以避免仅因为数值碰巧等于抽样索引，就把 FUObjectArray 的 ObjFirstGCIndex 等 bookkeeping 字段接受为 NumElements
             const int32_t expectedMaxElements = layout.objectsOffset + static_cast<int32_t>(sizeof(uintptr_t) * 2);
             const int32_t expectedNumElements = expectedMaxElements + static_cast<int32_t>(sizeof(int32_t));
-            const int32_t expectedMaxChunks = layout.objectsOffset + static_cast<int32_t>(sizeof(uintptr_t) * 3);
+            const int32_t expectedMaxChunks = expectedNumElements + static_cast<int32_t>(sizeof(int32_t));
             if (layout.maxElementsOffset != expectedMaxElements ||
                 layout.numElementsOffset != expectedNumElements ||
                 layout.maxChunksOffset != expectedMaxChunks)

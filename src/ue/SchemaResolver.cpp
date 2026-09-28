@@ -586,110 +586,151 @@ namespace anduefker::ue
             return names.ReadName(raw);
         };
 
-        int32_t foundPropertiesOffset = -1;
-        uintptr_t firstField = 0;
-        int32_t foundNameOffset = -1;
-        for (int32_t propertiesOffset = 0x20; propertiesOffset <= 0x100 && foundPropertiesOffset < 0; propertiesOffset += 4)
-        {
-            uintptr_t candidate = 0;
-            const auto address = Add(*guid, propertiesOffset);
-            if (!address || !memory_.Read(*address, candidate) || !IsReadablePointer(memory_, candidate))
-                continue;
+        const int32_t pointerSize = static_cast<int32_t>(sizeof(uintptr_t));
+        const int32_t ownerStorageSize = schema.features.fFieldOwnerMask ? pointerSize : pointerSize * 2;
+        // 在此 ABI 和 Owner 表示形式下，FField 的字段声明顺序依次为：
+        // 虚函数表指针、ClassPrivate、Owner、Next 以及 NamePrivate
+        // 在此优先采用源码定义的内存布局，然后再尝试有界备选方案
+        const std::array<int32_t, 7> nameOffsets = pointerSize == 4
+                                                       ? std::array<int32_t, 7>{schema.features.fFieldOwnerMask ? 0x10 : 0x14,
+                                                                                schema.features.fFieldOwnerMask ? 0x14 : 0x10, 0x18, 0x20, 0x28, 0x30, 0x38}
+                                                       : std::array<int32_t, 7>{schema.features.fFieldOwnerMask ? 0x20 : 0x28,
+                                                                                schema.features.fFieldOwnerMask ? 0x28 : 0x20, 0x30, 0x38, 0x18, 0x40, 0x48};
+        const std::array<int32_t, 3> classOffsets = {pointerSize, pointerSize * 2, pointerSize * 3};
+        const std::array<int32_t, 4> classNameOffsets = {0x00, 0x08, 0x10, 0x18};
+        size_t readableRoots = 0;
+        size_t namedRoots = 0;
+        size_t chainedRoots = 0;
+        size_t classMatches = 0;
+        size_t ownerMatches = 0;
 
-            for (int32_t nameOffset : {0x20, 0x28, 0x30, 0x38})
+        for (int32_t propertiesOffset = 0x20; propertiesOffset <= 0x100; propertiesOffset += 4)
+        {
+            uintptr_t firstField = 0;
+            const auto rootAddress = Add(*guid, propertiesOffset);
+            if (!rootAddress || !memory_.Read(*rootAddress, firstField) || !IsReadablePointer(memory_, firstField))
+                continue;
+            ++readableRoots;
+
+            for (const int32_t nameOffset : nameOffsets)
             {
-                const auto fieldName = readFieldName(candidate, nameOffset);
-                if (fieldName && (*fieldName == "A" || *fieldName == "D"))
+                const auto firstName = readFieldName(firstField, nameOffset);
+                if (!firstName || firstName->size() != 1 || (*firstName)[0] < 'A' || (*firstName)[0] > 'D')
+                    continue;
+                ++namedRoots;
+                const int32_t nextOffset = nameOffset - pointerSize;
+                const int32_t ownerOffset = nextOffset - ownerStorageSize;
+                if (ownerOffset < pointerSize * 2)
+                    continue;
+
+                std::array<uintptr_t, 4> fields{};
+                std::array<bool, 4> seenNames{};
+                uintptr_t field = firstField;
+                bool chainValid = true;
+                for (size_t index = 0; index < fields.size(); ++index)
                 {
-                    foundPropertiesOffset = propertiesOffset;
-                    firstField = candidate;
-                    foundNameOffset = nameOffset;
-                    break;
+                    const auto fieldName = field ? readFieldName(field, nameOffset) : std::nullopt;
+                    if (!fieldName || fieldName->size() != 1 || (*fieldName)[0] < 'A' || (*fieldName)[0] > 'D' ||
+                        seenNames[static_cast<size_t>((*fieldName)[0] - 'A')])
+                    {
+                        chainValid = false;
+                        break;
+                    }
+                    seenNames[static_cast<size_t>((*fieldName)[0] - 'A')] = true;
+                    fields[index] = field;
+                    const auto nextAddress = Add(field, nextOffset);
+                    if (!nextAddress || !memory_.Read(*nextAddress, field) ||
+                        (index + 1 < fields.size() && !IsReadablePointer(memory_, field)))
+                    {
+                        chainValid = false;
+                        break;
+                    }
+                }
+                if (!chainValid || field != 0)
+                    continue;
+                ++chainedRoots;
+
+                for (const int32_t classOffset : classOffsets)
+                {
+                    if (classOffset + pointerSize > ownerOffset)
+                        continue;
+                    for (const int32_t classNameOffset : classNameOffsets)
+                    {
+                        bool classesValid = true;
+                        for (uintptr_t current : fields)
+                        {
+                            uintptr_t fieldClass = 0;
+                            const auto classAddress = Add(current, classOffset);
+                            if (!classAddress || !memory_.Read(*classAddress, fieldClass) ||
+                                !IsReadablePointer(memory_, fieldClass))
+                            {
+                                classesValid = false;
+                                break;
+                            }
+                            const auto className = readFieldName(fieldClass, classNameOffset);
+                            if (!className || className->find("Property") == std::string::npos)
+                            {
+                                classesValid = false;
+                                break;
+                            }
+                        }
+                        if (!classesValid)
+                            continue;
+                        ++classMatches;
+
+                        bool ownersValid = true;
+                        for (uintptr_t current : fields)
+                        {
+                            uintptr_t rawOwner = 0;
+                            const auto ownerAddress = Add(current, ownerOffset);
+                            if (!ownerAddress || !memory_.Read(*ownerAddress, rawOwner) ||
+                                (schema.features.fFieldOwnerMask && (rawOwner & 1u) == 0) ||
+                                (schema.features.fFieldOwnerMask ? (rawOwner & ~static_cast<uintptr_t>(1)) : rawOwner) != *guid)
+                            {
+                                ownersValid = false;
+                                break;
+                            }
+                            if (!schema.features.fFieldOwnerMask)
+                            {
+                                uint8_t isUObject = 0;
+                                const auto discriminator = Add(*ownerAddress, pointerSize);
+                                if (!discriminator || !memory_.Read(*discriminator, isUObject) || isUObject != 1)
+                                {
+                                    ownersValid = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!ownersValid)
+                            continue;
+                        ++ownerMatches;
+
+                        schema.ustruct.childProperties = propertiesOffset;
+                        schema.ffield.classPointer = classOffset;
+                        schema.ffield.owner = ownerOffset;
+                        schema.ffield.next = nextOffset;
+                        schema.ffield.name = nameOffset;
+                        schema.ffieldClass.name = classNameOffset;
+                        schema.ffieldClass.castFlags = classNameOffset + pointerSize;
+                        schema.validation.fields = true;
+                        report.evidence.push_back("resolved FField chain from CoreUObject.Guid properties; child_properties=" +
+                                                  std::to_string(propertiesOffset) + " class=" + std::to_string(classOffset) +
+                                                  " owner=" + std::to_string(ownerOffset) + " next=" + std::to_string(nextOffset) +
+                                                  " name=" + std::to_string(nameOffset) + " class_name=" +
+                                                  std::to_string(classNameOffset) + "; four names, classes and owners validated");
+                        return true;
+                    }
                 }
             }
         }
-        if (foundPropertiesOffset < 0)
-        {
-            report.failures.push_back("UStruct::ChildProperties was not resolved");
-            return false;
-        }
-        schema.ustruct.childProperties = foundPropertiesOffset;
-        schema.ffield.name = foundNameOffset;
-
-        for (int32_t nextOffset : {0x18, 0x20, 0x28, 0x30, 0x38})
-        {
-            uintptr_t next = 0;
-            const auto address = Add(firstField, nextOffset);
-            if (!address || !memory_.Read(*address, next) || !IsReadablePointer(memory_, next))
-                continue;
-            const auto nextName = readFieldName(next, foundNameOffset);
-            if (nextName && (*nextName == "B" || *nextName == "C"))
-            {
-                schema.ffield.next = nextOffset;
-                break;
-            }
-        }
-        if (schema.ffield.next < 0)
-        {
-            report.failures.push_back("FField::Next was not resolved");
-            return false;
-        }
-
-        for (int32_t classOffset : {0x08, 0x10, 0x18})
-        {
-            uintptr_t fieldClass = 0;
-            const auto address = Add(firstField, classOffset);
-            if (!address || !memory_.Read(*address, fieldClass) || !IsReadablePointer(memory_, fieldClass))
-                continue;
-            schema.ffield.classPointer = classOffset;
-            for (int32_t classNameOffset : {0x00, 0x08, 0x10, 0x18})
-            {
-                const auto nameAddress = Add(fieldClass, classNameOffset);
-                if (!nameAddress)
-                    continue;
-                int32_t raw = 0;
-                if (!memory_.Read(*nameAddress, raw))
-                    continue;
-                raw = binding_.decode.nameIndex(raw, *nameAddress);
-                const auto className = names.ReadName(raw);
-                if (className && className->find("Property") != std::string::npos)
-                {
-                    schema.ffieldClass.name = classNameOffset;
-                    break;
-                }
-            }
-            if (schema.ffieldClass.name >= 0)
-                break;
-        }
-        if (schema.ffield.classPointer < 0 || schema.ffieldClass.name < 0)
-        {
-            report.failures.push_back("FField::Class or FFieldClass::Name was not resolved");
-            return false;
-        }
-
-        const int32_t ownerStorageSize = schema.features.fFieldOwnerMask
-                                             ? static_cast<int32_t>(sizeof(uintptr_t))
-                                             : static_cast<int32_t>(sizeof(uintptr_t) * 2);
-        schema.ffield.owner = schema.ffield.next - ownerStorageSize;
-        schema.ffieldClass.castFlags = schema.ffieldClass.name + static_cast<int32_t>(sizeof(uintptr_t));
-
-        const auto ownerAddress = Add(firstField, schema.ffield.owner);
-        uintptr_t rawOwner = 0;
-        if (!ownerAddress || !memory_.Read(*ownerAddress, rawOwner))
-        {
-            report.failures.push_back("FField::Owner could not be read for profile validation");
-            return false;
-        }
-        const uintptr_t owner = schema.features.fFieldOwnerMask ? (rawOwner & ~static_cast<uintptr_t>(1)) : rawOwner;
-        if (owner != *guid)
-        {
-            report.failures.push_back("FField::Owner representation did not match the Guid owner");
-            return false;
-        }
-
-        schema.validation.fields = true;
-        report.evidence.push_back("resolved FField chain from CoreUObject.Guid properties; owner representation validated");
-        return true;
+        report.failures.push_back("UStruct::ChildProperties/FField chain was not resolved; pointer_width=" +
+                                  std::to_string(pointerSize) + " owner_mask=" +
+                                  std::to_string(schema.features.fFieldOwnerMask) + " readable_roots=" +
+                                  std::to_string(readableRoots) + " named_roots=" + std::to_string(namedRoots) +
+                                  " four_field_chains=" + std::to_string(chainedRoots) +
+                                  " class_matches=" + std::to_string(classMatches) +
+                                  " owner_matches=" + std::to_string(ownerMatches));
+        return false;
     }
 
     bool SchemaResolver::ResolvePropertySchema(EngineSchema &schema, SchemaResolutionReport &report) const
