@@ -1,4 +1,4 @@
-name: Android arm64 build
+name: Android native build
 
 on:
   push:
@@ -10,24 +10,31 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: android-arm64-${{ github.workflow }}-${{ github.ref }}
+  group: android-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  ANDROID_ABI: arm64-v8a
   ANDROID_PLATFORM: android-29
   NDK_VERSION: 25.2.9519653
   CMAKE_VERSION: 3.22.1
-  BUILD_DIR: build/android-arm64-release
 
 jobs:
   build:
-    name: Build Android arm64-v8a
+    name: Build Android ${{ matrix.abi }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        abi:
+          - arm64-v8a
+          - armeabi-v7a
+    env:
+      ANDROID_ABI: ${{ matrix.abi }}
+      BUILD_DIR: build/android-${{ matrix.abi }}-release
 
     steps:
       - name: Check out source
@@ -117,16 +124,16 @@ jobs:
           (
             cd dist
             tar -czf "$archive_name" "$package_name"
-            sha256sum "$archive_name" > SHA256SUMS
+            sha256sum "$archive_name" > "${archive_name}.sha256"
           )
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-arm64-${{ github.sha }}
+          name: android-${{ matrix.abi }}-${{ github.sha }}
           path: |
             dist/*.tar.gz
-            dist/SHA256SUMS
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -143,7 +150,8 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
-          name: android-arm64-${{ github.sha }}
+          pattern: android-*-${{ github.sha }}
+          merge-multiple: true
           path: dist
 
       - name: Create or update GitHub Release
@@ -155,11 +163,11 @@ jobs:
 
           tag="$GITHUB_REF_NAME"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" dist/*.tar.gz dist/SHA256SUMS \
+            gh release upload "$tag" dist/*.tar.gz dist/*.sha256 \
               --repo "$GITHUB_REPOSITORY" \
               --clobber
           else
-            gh release create "$tag" dist/*.tar.gz dist/SHA256SUMS \
+            gh release create "$tag" dist/*.tar.gz dist/*.sha256 \
               --repo "$GITHUB_REPOSITORY" \
               --title "AndUEFker $tag" \
               --generate-notes \
