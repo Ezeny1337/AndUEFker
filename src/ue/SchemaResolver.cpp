@@ -341,8 +341,9 @@ namespace anduefker::ue
         };
         int32_t bestOuterOffset = -1;
         int32_t bestOuterScore = 0;
-        size_t bestOuterObjects = 0;
-        size_t bestOuterSampleHits = 0;
+        size_t sourceOuterObjects = 0;
+        size_t sourceOuterSampleHits = 0;
+        int32_t sourceOuterScore = 0;
         for (int32_t offset = firstOuterOffset; offset <= 0x80; offset += pointerSize)
         {
             size_t validObjects = 0;
@@ -370,26 +371,35 @@ namespace anduefker::ue
                     ++sampleHits;
             }
             const int32_t score = static_cast<int32_t>(validObjects * 100 + sampleHits * 25 + nullHits);
+            if (offset == firstOuterOffset)
+            {
+                sourceOuterObjects = validObjects;
+                sourceOuterSampleHits = sampleHits;
+                sourceOuterScore = score;
+            }
             if (validObjects >= 3 && offset != schema.uobject.classPointer &&
                 (score > bestOuterScore || (score == bestOuterScore && offset == firstOuterOffset)))
             {
                 bestOuterScore = score;
                 bestOuterOffset = offset;
-                bestOuterObjects = validObjects;
-                bestOuterSampleHits = sampleHits;
             }
         }
-        if (bestOuterOffset < 0)
+        if (sourceOuterObjects < 3)
         {
-            report.failures.push_back("UObject::Outer was not resolved after excluding FName overlap; first_candidate=" +
-                                      std::to_string(firstOuterOffset));
+            report.failures.push_back("UObject::Outer source-layout candidate was rejected; offset=" +
+                                      std::to_string(firstOuterOffset) +
+                                      " valid_objects=" + std::to_string(sourceOuterObjects) +
+                                      " best_candidate=" + std::to_string(bestOuterOffset));
             return false;
         }
-        schema.uobject.outer = bestOuterOffset;
-        report.evidence.push_back("resolved UObject::Outer offset=" + std::to_string(bestOuterOffset) +
-                                  " valid_objects=" + std::to_string(bestOuterObjects) +
-                                  " sampled_objects=" + std::to_string(bestOuterSampleHits) +
-                                  " score=" + std::to_string(bestOuterScore));
+        schema.uobject.outer = firstOuterOffset;
+        report.evidence.push_back("resolved UObject::Outer from source-layout candidate offset=" +
+                                  std::to_string(firstOuterOffset) + " valid_objects=" +
+                                  std::to_string(sourceOuterObjects) + " sampled_objects=" +
+                                  std::to_string(sourceOuterSampleHits) + " score=" +
+                                  std::to_string(sourceOuterScore) + " rejected_best_candidate=" +
+                                  std::to_string(bestOuterOffset) + " rejected_score=" +
+                                  std::to_string(bestOuterScore));
 
         int32_t bestFlagsOffset = -1;
         int32_t bestFlagsHits = 0;
@@ -1539,7 +1549,9 @@ namespace anduefker::ue
         }
 
         schema.validation.functions = true;
-        report.evidence.push_back("resolved UField::Next and UStruct::Children for UFunction reflection");
+        report.evidence.push_back("resolved UField::Next and UStruct::Children for UFunction reflection; next=" +
+                                  std::to_string(schema.ufield.next) + " children=" +
+                                  std::to_string(schema.ustruct.children));
         return true;
     }
 
@@ -1706,11 +1718,12 @@ namespace anduefker::ue
                                        " step=" + std::to_string(pointerSize) +
                                        " value_offset=" + std::to_string(valueOffset) +
                                        " entry_stride=" + std::to_string(entryStride);
+        int32_t sourceOffset = -1;
         for (size_t index = 0; index < candidates.size() && index < 3; ++index)
             candidateSummary += " candidate[" + std::to_string(index) + "]" + describe(candidates[index]);
         if (pointerSize == 4 && schema.ufield.next >= 0)
         {
-            const int32_t sourceOffset = schema.ufield.next + pointerSize * 2 + 2 * static_cast<int32_t>(sizeof(int32_t));
+            sourceOffset = schema.ufield.next + pointerSize * 2 + 2 * static_cast<int32_t>(sizeof(int32_t));
             const auto source = std::find_if(candidates.begin(), candidates.end(), [sourceOffset](const EnumCandidate &candidate)
                                              { return candidate.offset == sourceOffset; });
             if (source != candidates.end())
@@ -1719,12 +1732,32 @@ namespace anduefker::ue
 
         const size_t requiredArrays = std::max<size_t>(4, enumObjects.size() / 2);
         const size_t requiredNonEmptyArrays = std::min<size_t>(4, enumObjects.size());
-        const bool ambiguous = candidates.size() > 1 &&
+        const EnumCandidate *selected = candidates.empty() ? nullptr : &candidates[0];
+        const bool sourceLayoutRequired = schema.family == EngineFamily::UE4FProperty &&
+                                          pointerSize == 4 && sourceOffset >= 0;
+        if (sourceLayoutRequired)
+        {
+            const auto source = std::find_if(candidates.begin(), candidates.end(), [sourceOffset](const EnumCandidate &candidate)
+                                             { return candidate.offset == sourceOffset; });
+            if (source == candidates.end() || source->validArrays < requiredArrays ||
+                source->nonEmptyArrays < requiredNonEmptyArrays || source->validEntries == 0)
+            {
+                report.failures.push_back("UEnum::Names source-layout candidate was rejected; required_headers=" +
+                                          std::to_string(requiredArrays) + " required_nonempty=" +
+                                          std::to_string(requiredNonEmptyArrays) + " source_offset=" +
+                                          std::to_string(sourceOffset) + " candidate=" +
+                                          (source == candidates.end() ? std::string("missing") : describe(*source)) +
+                                          candidateSummary);
+                return false;
+            }
+            selected = &*source;
+        }
+        const bool ambiguous = !sourceLayoutRequired && candidates.size() > 1 &&
                                candidates[0].nonEmptyArrays == candidates[1].nonEmptyArrays &&
                                candidates[0].validEntries == candidates[1].validEntries &&
                                candidates[0].validArrays == candidates[1].validArrays;
-        if (candidates.empty() || candidates[0].validArrays < requiredArrays ||
-            candidates[0].nonEmptyArrays < requiredNonEmptyArrays || ambiguous)
+        if (selected == nullptr || selected->validArrays < requiredArrays ||
+            selected->nonEmptyArrays < requiredNonEmptyArrays || ambiguous)
         {
             report.failures.push_back("UEnum::Names was not resolved from FName/int64 array samples; required_headers=" +
                                       std::to_string(requiredArrays) + " required_nonempty=" +
@@ -1732,9 +1765,11 @@ namespace anduefker::ue
                                       std::to_string(ambiguous) + candidateSummary);
             return false;
         }
-        schema.uenum.names = candidates[0].offset;
-        report.evidence.push_back("resolved UEnum::Names from FName/int64 entries;" + candidateSummary);
+        schema.uenum.names = selected->offset;
+        report.evidence.push_back("resolved UEnum::Names from FName/int64 entries; selected=" +
+                                  std::to_string(selected->offset) + ";" + candidateSummary);
 
+        // CppForm follows Names; UE4.25 has no EnumFlags, while later UE versions may include it.
         size_t formHits = 0;
         size_t flagHits = 0;
         for (uintptr_t enumObject : enumObjects)
