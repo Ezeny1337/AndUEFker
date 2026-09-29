@@ -313,8 +313,8 @@ namespace anduefker::ue
             return false;
         }
 
-        // Outer 是一个可为空的 UObject 指针
-        // 应优先选择其非零值能回调指向采样对象集（sampled object set）的字段，这可以避免误将 UObject 体内的任意可读指针接受为 Outer
+        // Outer 位于完整 FName 之后。ARM32 如果从 FName 内部开始探测，
+        // 可能把 Number 读成大量空值组成的伪指针，因此评分前排除该区域。
         const std::unordered_set<uintptr_t> sampleObjects = [&samples]()
         {
             std::unordered_set<uintptr_t> result;
@@ -325,11 +325,29 @@ namespace anduefker::ue
             }
             return result;
         }();
-        int32_t bestOuterOffset = -1;
-        int32_t bestOuterHits = 0;
-        for (int32_t offset = static_cast<int32_t>(sizeof(uintptr_t)); offset <= 0x80; offset += 4)
+        const int32_t pointerSize = static_cast<int32_t>(sizeof(uintptr_t));
+        const int32_t nameEnd = schema.uobject.name + schema.fname.size;
+        const int32_t firstOuterOffset = ((nameEnd + pointerSize - 1) / pointerSize) * pointerSize;
+        const auto readObjectName = [&](uintptr_t object) -> std::optional<std::string>
         {
-            int32_t hits = 0;
+            const auto address = Add(object, schema.uobject.name);
+            if (!address)
+                return std::nullopt;
+            int32_t rawName = 0;
+            if (!memory_.Read(*address, rawName))
+                return std::nullopt;
+            rawName = binding_.decode.nameIndex(rawName, *address);
+            return names.ReadName(rawName);
+        };
+        int32_t bestOuterOffset = -1;
+        int32_t bestOuterScore = 0;
+        size_t bestOuterObjects = 0;
+        size_t bestOuterSampleHits = 0;
+        for (int32_t offset = firstOuterOffset; offset <= 0x80; offset += pointerSize)
+        {
+            size_t validObjects = 0;
+            size_t sampleHits = 0;
+            size_t nullHits = 0;
             for (const auto &[index, object] : samples)
             {
                 (void)index;
@@ -340,17 +358,38 @@ namespace anduefker::ue
                 if (!memory_.Read(*address, value))
                     continue;
                 value = binding_.decode.objectOuter(value, *address);
-                if (value == 0 || sampleObjects.contains(value))
-                    ++hits;
+                if (value == 0)
+                {
+                    ++nullHits;
+                    continue;
+                }
+                if (value == object || !IsReadablePointer(memory_, value) || !readObjectName(value))
+                    continue;
+                ++validObjects;
+                if (sampleObjects.contains(value))
+                    ++sampleHits;
             }
-            if (hits > bestOuterHits && offset != schema.uobject.classPointer)
+            const int32_t score = static_cast<int32_t>(validObjects * 100 + sampleHits * 25 + nullHits);
+            if (validObjects >= 3 && offset != schema.uobject.classPointer &&
+                (score > bestOuterScore || (score == bestOuterScore && offset == firstOuterOffset)))
             {
-                bestOuterHits = hits;
+                bestOuterScore = score;
                 bestOuterOffset = offset;
+                bestOuterObjects = validObjects;
+                bestOuterSampleHits = sampleHits;
             }
         }
-        if (bestOuterHits >= 3)
-            schema.uobject.outer = bestOuterOffset;
+        if (bestOuterOffset < 0)
+        {
+            report.failures.push_back("UObject::Outer was not resolved after excluding FName overlap; first_candidate=" +
+                                      std::to_string(firstOuterOffset));
+            return false;
+        }
+        schema.uobject.outer = bestOuterOffset;
+        report.evidence.push_back("resolved UObject::Outer offset=" + std::to_string(bestOuterOffset) +
+                                  " valid_objects=" + std::to_string(bestOuterObjects) +
+                                  " sampled_objects=" + std::to_string(bestOuterSampleHits) +
+                                  " score=" + std::to_string(bestOuterScore));
 
         int32_t bestFlagsOffset = -1;
         int32_t bestFlagsHits = 0;
@@ -544,7 +583,10 @@ namespace anduefker::ue
             uintptr_t firstField = 0;
             if (!memory_.Read(*Add(*guid, *children), firstField))
                 return false;
-            for (int32_t offset = 0x20; offset <= 0x80; offset += 4)
+            const int32_t nextStart = schema.uobject.outer >= 0
+                                          ? schema.uobject.outer + static_cast<int32_t>(sizeof(uintptr_t))
+                                          : 0x20;
+            for (int32_t offset = nextStart; offset <= 0x80; offset += 4)
             {
                 uintptr_t next = 0;
                 const auto address = Add(firstField, offset);
@@ -589,8 +631,8 @@ namespace anduefker::ue
         const int32_t pointerSize = static_cast<int32_t>(sizeof(uintptr_t));
         const int32_t ownerStorageSize = schema.features.fFieldOwnerMask ? pointerSize : pointerSize * 2;
         // 在此 ABI 和 Owner 表示形式下，FField 的字段声明顺序依次为：
-        // 虚函数表指针、ClassPrivate、Owner、Next 以及 NamePrivate
-        // 在此优先采用源码定义的内存布局，然后再尝试有界备选方案
+        // 虚函数表指针、ClassPrivate、Owner、Next 以及 NamePrivate，
+        // 在此优先采用源码定义的内存布局，然后再尝试有界备选方案。
         const std::array<int32_t, 7> nameOffsets = pointerSize == 4
                                                        ? std::array<int32_t, 7>{schema.features.fFieldOwnerMask ? 0x10 : 0x14,
                                                                                 schema.features.fFieldOwnerMask ? 0x14 : 0x10, 0x18, 0x20, 0x28, 0x30, 0x38}
@@ -797,83 +839,47 @@ namespace anduefker::ue
             return true;
         };
 
-        for (int32_t offset = 0; offset <= 0x100 - 4; offset += 4)
+        const auto matchesUniform = [&](int32_t offset, int32_t expected)
         {
-            if (matchesInt32(offset, [](int32_t value)
-                             { return value; }))
+            for (const auto &[property, ignored] : properties)
             {
-                schema.property.offsetInternal = offset;
-                break;
-            }
-        }
-        if (schema.property.offsetInternal < 0)
-        {
-            report.failures.push_back("FProperty::Offset_Internal was not resolved");
-            return false;
-        }
-
-        // Guid 字段是四个 4 字节构成的标量属性（scalar properties）
-        // 这为 ElementSize 和 ArrayDim 提供了一个独立的鉴别特征（discriminator），而不是依赖源码中的定义顺序
-        for (int32_t offset = 0; offset <= schema.property.offsetInternal; offset += 4)
-        {
-            bool valid = true;
-            for (const auto &[property, expected] : properties)
-            {
-                (void)expected;
+                (void)ignored;
                 int32_t value = 0;
                 const auto address = Add(property, offset);
-                if (!address || !memory_.Read(*address, value) || value != 4)
-                {
-                    valid = false;
-                    break;
-                }
+                if (!address || !memory_.Read(*address, value) || value != expected)
+                    return false;
             }
-            if (valid && offset != schema.property.offsetInternal)
-            {
-                schema.property.elementSize = offset;
-                break;
-            }
-        }
-        if (schema.property.elementSize < 0)
+            return true;
+        };
+
+        const int32_t pointerSize = static_cast<int32_t>(sizeof(uintptr_t));
+        const int32_t fieldTail = schema.features.useFProperty
+                                      ? schema.ffield.name + schema.fname.size + static_cast<int32_t>(sizeof(uint32_t))
+                                      : schema.ufield.next + pointerSize;
+        const int32_t propertyStart = ((fieldTail + pointerSize - 1) / pointerSize) * pointerSize;
+
+        if (!matchesUniform(propertyStart, 1))
         {
-            report.failures.push_back("FProperty::ElementSize was not resolved");
+            report.failures.push_back("FProperty::ArrayDim source-layout candidate was rejected; offset=" +
+                                      std::to_string(propertyStart));
             return false;
         }
+        schema.property.arrayDim = propertyStart;
 
-        for (int32_t offset = 0; offset <= schema.property.elementSize; offset += 4)
+        const int32_t elementSizeOffset = propertyStart + static_cast<int32_t>(sizeof(int32_t));
+        if (!matchesUniform(elementSizeOffset, 4))
         {
-            bool valid = true;
-            for (const auto &[property, expected] : properties)
-            {
-                int32_t value = 0;
-                const auto address = Add(property, offset);
-                if (!address || !memory_.Read(*address, value) || value != 1)
-                {
-                    valid = false;
-                    break;
-                }
-            }
-            if (valid)
-            {
-                schema.property.arrayDim = offset;
-                break;
-            }
-        }
-        if (schema.property.arrayDim < 0)
-        {
-            report.failures.push_back("FProperty::ArrayDim was not resolved");
+            report.failures.push_back("FProperty::ElementSize source-layout candidate was rejected; offset=" +
+                                      std::to_string(elementSizeOffset));
             return false;
         }
+        schema.property.elementSize = elementSizeOffset;
 
-        // UE 5.6 的 EPropertyFlags 是 uint64_t。在 64 位目标上，它应当在
-        // ElementSize 之后、Offset_Internal 之前按自然边界对齐。之前按 4
-        // 字节扫描会把 ElementSize 的后半部分和填充区（例如 0xCDCDCDCD）
-        // 误当成 flags。
-        const int32_t flagsStart = (schema.property.elementSize + 4 +
-                                    static_cast<int32_t>(sizeof(uint64_t)) - 1) /
-                                   static_cast<int32_t>(sizeof(uint64_t)) * static_cast<int32_t>(sizeof(uint64_t));
-        const int32_t flagsEnd = schema.property.offsetInternal - static_cast<int32_t>(sizeof(uint64_t));
-        for (int32_t offset = flagsStart; offset <= flagsEnd; offset += static_cast<int32_t>(sizeof(uint64_t)))
+        // EPropertyFlags 位于 ArrayDim 和 ElementSize 之后，类型为 uint64_t。
+        // 只在后续的对齐位置搜索，再从选中的 flags 字段之后定位 Offset_Internal。
+        const int32_t flagsStart = propertyStart + static_cast<int32_t>(sizeof(int32_t) * 2);
+        for (int32_t offset = flagsStart; offset <= 0x100 - static_cast<int32_t>(sizeof(uint64_t));
+             offset += static_cast<int32_t>(sizeof(uint64_t)))
         {
             bool valid = true;
             for (const auto &[property, expected] : properties)
@@ -901,9 +907,29 @@ namespace anduefker::ue
             return false;
         }
 
+        for (int32_t offset = schema.property.propertyFlags + static_cast<int32_t>(sizeof(uint64_t));
+             offset <= 0x100 - static_cast<int32_t>(sizeof(int32_t)); offset += 4)
+        {
+            if (matchesInt32(offset, [](int32_t value)
+                             { return value; }))
+            {
+                schema.property.offsetInternal = offset;
+                break;
+            }
+        }
+        if (schema.property.offsetInternal < 0)
+        {
+            report.failures.push_back("FProperty::Offset_Internal was not resolved after PropertyFlags");
+            return false;
+        }
+
         schema.property.baseSize = schema.property.elementSize;
         schema.validation.properties = true;
-        report.evidence.push_back("resolved property ArrayDim/ElementSize/Flags/Offset_Internal from Guid chain");
+        report.evidence.push_back("resolved property ArrayDim/ElementSize/Flags/Offset_Internal from Guid chain; array_dim=" +
+                                  std::to_string(schema.property.arrayDim) + " element_size=" +
+                                  std::to_string(schema.property.elementSize) + " flags=" +
+                                  std::to_string(schema.property.propertyFlags) + " offset=" +
+                                  std::to_string(schema.property.offsetInternal));
         return true;
     }
 
@@ -956,9 +982,9 @@ namespace anduefker::ue
             }
         }
 
-        // FProperty 自身的链表字段和 RepNotifyFunc 位于所有具体属性负载之前
-        // 如果紧跟 PropertyFlags 开始探测 subtype
-        // 就会把 PropertyLinkNext/NextRef 等字段误认为 Array::Inner、Set::ElementProp或 Map::KeyProp
+        // FProperty 自身的链表字段和 RepNotifyFunc 位于所有具体属性负载之前，
+        // 如果紧跟 PropertyFlags 开始探测 subtype，
+        // 就会把 PropertyLinkNext/NextRef 等字段误认为 Array::Inner、Set::ElementProp或 Map::KeyProp。
         const int32_t fPropertyBaseTail = schema.property.offsetInternal + static_cast<int32_t>(sizeof(int32_t)) +
                                           static_cast<int32_t>(sizeof(uintptr_t) * 4) +
                                           std::max(schema.fname.size, static_cast<int32_t>(sizeof(uintptr_t)));
@@ -1059,11 +1085,9 @@ namespace anduefker::ue
                 const auto address = Add(field, offset);
                 return address && memory_.IsReadable(*address, sizeof(uintptr_t)) && memory_.Read(*address, value) && value != 0;
             };
-            // UE 5.6 declares SignatureFunction immediately after the
-            // FProperty base in all delegate property variants. The source
-            // derived offset is therefore the only candidate we need here;
-            // scanning arbitrary later fields creates false positives and
-            // unnecessary remote-read failures.
+            // 在所有的 Delegate 属性变体中，UE 5.6 都将 SignatureFunction 声明在紧跟 FProperty 基类之后的位置。
+            // 因此，通过源码推导出的偏移量是我们在此时所需的唯一候选值。
+            // 扫描后续的其他任意字段不仅会产生误报，还会导致不必要的远程读取失败。
             const int32_t offset = firstSubtypeOffset;
             size_t nonZeroHits = 0;
             size_t readableHits = 0;
@@ -1135,10 +1159,14 @@ namespace anduefker::ue
 
         struct FunctionSample
         {
+            struct Parameter
+            {
+                uint64_t flags = 0;
+                int32_t end = 0;
+            };
             uintptr_t address = 0;
             bool parameterChainValid = false;
-            int32_t parameterCount = 0;
-            int32_t parameterEnd = 0;
+            std::vector<Parameter> properties;
         };
 
         std::vector<FunctionSample> functions;
@@ -1155,7 +1183,7 @@ namespace anduefker::ue
                 continue;
             const auto className = readObjectName(classObject);
             if (className && *className == "Function")
-                functions.push_back(FunctionSample{*object});
+                functions.push_back(FunctionSample{*object, false, {}});
         }
         if (functions.size() < 2)
         {
@@ -1163,24 +1191,39 @@ namespace anduefker::ue
             return false;
         }
 
-        // 通过两个函数对象解析 UField::Next
-        // 下一个指针（Next）可能为空，因此在可用时，应利用前两个链表条目中的字段名称来进行解析
-        for (int32_t offset = 0x20; offset <= 0x100 && schema.ufield.next < 0; offset += 4)
+        // 通过两个函数对象解析 UField::Next，
+        // 下一个指针可能为空，因此在可用时，应利用前两个链表条目中的字段名称来进行解析。
+        const int32_t nextStart = schema.uobject.outer >= 0
+                                      ? schema.uobject.outer + static_cast<int32_t>(sizeof(uintptr_t))
+                                      : 0x20;
+        for (int32_t offset = nextStart; offset <= 0x100 && schema.ufield.next < 0; offset += 4)
         {
             size_t readable = 0;
+            size_t named = 0;
             for (const FunctionSample &sample : functions)
             {
                 uintptr_t next = 0;
                 const auto address = Add(sample.address, offset);
-                if (address && memory_.Read(*address, next) && (next == 0 || IsReadablePointer(memory_, next)))
+                if (!address || !memory_.Read(*address, next))
+                    continue;
+                if (next == 0)
+                {
                     ++readable;
+                    continue;
+                }
+                if (!IsReadablePointer(memory_, next))
+                    continue;
+                ++readable;
+                if (readObjectName(next))
+                    ++named;
             }
-            if (readable == functions.size())
+            if (readable == functions.size() && named > 0)
                 schema.ufield.next = offset;
         }
         if (schema.ufield.next < 0)
         {
-            report.failures.push_back("UField::Next was not resolved from UFunction samples");
+            report.failures.push_back("UField::Next was not resolved from UFunction samples; scan_start=" +
+                                      std::to_string(nextStart));
             return false;
         }
 
@@ -1191,8 +1234,8 @@ namespace anduefker::ue
             return false;
         }
 
-        // 记录每个函数的参数字段形状
-        // UE 将参数属性存放在 UStruct::ChildProperties 链中，NumParms 和 ParmsSize 必须与该链的独立解析结果一致
+        // 记录每个函数的参数字段形状，
+        // UE 将参数属性存放在 UStruct::ChildProperties 链中，NumParms 和 ParmsSize 必须与该链的独立解析结果一致。
         for (FunctionSample &sample : functions)
         {
             const auto firstAddress = Add(sample.address, schema.ustruct.childProperties);
@@ -1220,14 +1263,7 @@ namespace anduefker::ue
                     valid = false;
                     break;
                 }
-                // UFunction::InitializeDerivedMembers 只统计带有 CPF_Parm 的属性
-                // ChildProperties 还可能包含用于默认值的局部属性
-                // 它们不属于 NumParms/ParmsSize
-                if ((property->flags & 0x00000080ull) != 0)
-                {
-                    ++sample.parameterCount;
-                    sample.parameterEnd = std::max(sample.parameterEnd, static_cast<int32_t>(end));
-                }
+                sample.properties.push_back({property->flags, static_cast<int32_t>(end)});
                 current = field->nextAddress;
             }
             if (current != 0 || visited.size() > 256)
@@ -1235,7 +1271,7 @@ namespace anduefker::ue
             sample.parameterChainValid = valid;
         }
 
-        // UE 5.6 按以下顺序声明 UFunction 自身字段：
+        // UE 按以下顺序声明 UFunction 自身字段：
         //
         //   EFunctionFlags FunctionFlags;
         //   uint8         NumParms;
@@ -1261,35 +1297,55 @@ namespace anduefker::ue
         };
         const auto isPlausibleParameterShape = [](uint8_t numParams, uint16_t paramSize)
         {
-            // 有参数的函数必须预留参数存储空间，没有参数的函数不能声明一个任意的非零大小
+            // 有参数的函数必须预留参数存储空间，没有参数的函数不能声明一个任意的非零大小。
             return (numParams == 0 && paramSize == 0) ||
                    (numParams != 0 && paramSize != 0);
         };
 
-        // PropertiesSize 是字段偏移，而不是 sizeof(UStruct)
-        // 这里只把它用作下界锚点，后面的参数链一致性检查才是候选字段的语义验证
+        const auto expectedParameters = [](const FunctionSample &sample, uint32_t flags)
+        {
+            int32_t count = 0;
+            int32_t size = 0;
+            for (const FunctionSample::Parameter &property : sample.properties)
+            {
+                if ((property.flags & 0x80ull) != 0) // CPF_Parm
+                {
+                    ++count;
+                    size = property.end; // UE's InitializeDerivedMembers assigns, rather than takes the maximum.
+                }
+                else if ((flags & 0x00800000u) == 0 || (property.flags & 0x200ull) == 0) // FUNC_HasDefaults / CPF_ZeroConstructor
+                    break;
+            }
+            return std::pair{count, size};
+        };
+
+        // PropertiesSize 是字段偏移，而不是 sizeof(UStruct)。
+        // 这里只把它用作下界锚点，后面的参数链一致性检查才是候选字段的语义验证。
         int32_t functionDataStart = schema.ustruct.size >= 0 ? schema.ustruct.size + 4 : 0;
         functionDataStart = (functionDataStart + 3) & ~3;
 
-        int32_t bestFunctionFlagsOffset = -1;
-        size_t bestFunctionFlagsHits = 0;
-        size_t bestParameterShapeHits = 0;
+        struct FunctionCandidate
+        {
+            int32_t offset = -1;
+            size_t flagHits = 0;
+            size_t shapeHits = 0;
+            size_t countMismatches = 0;
+            size_t sizeMismatches = 0;
+            size_t bothMismatches = 0;
+            size_t invalidShapes = 0;
+        };
+        FunctionCandidate best;
+        FunctionCandidate source;
+        size_t tiedCandidates = 0;
         size_t parameterChainSamples = 0;
         for (const FunctionSample &sample : functions)
             parameterChainSamples += sample.parameterChainValid ? 1u : 0u;
-        // 在当前 Android Shipping/Cooked 配置中，UE 5.6 的 UStruct 字段
-        // 从 PropertiesSize 到 UFunction::FunctionFlags 之间包含：
-        // MinAlignment/StructStateFlags、Script、四条 PropertyLink、
-        // ScriptAndPropertyObjectReferences、UnresolvedScriptProperties 和
-        // UnversionedGameSchema，总计 88 字节。优先使用这个源码推导位置，
-        // 不让普通数据字段的“像 flags”值赢过真实布局。
+        // +88 只是 UE 5.6 的 UStruct 布局
         const int32_t sourceFunctionFlagsOffset = schema.ustruct.size >= 0 ? schema.ustruct.size + 88 : -1;
-        size_t sourceFunctionFlagsHits = 0;
-        size_t sourceParameterShapeHits = 0;
         for (int32_t offset = functionDataStart; offset <= 0x200; offset += 4)
         {
-            size_t flagHits = 0;
-            size_t parameterShapeHits = 0;
+            FunctionCandidate candidate;
+            candidate.offset = offset;
             for (const FunctionSample &sample : functions)
             {
                 if (!sample.parameterChainValid)
@@ -1311,71 +1367,98 @@ namespace anduefker::ue
                 if (!isPlausibleFunctionFlags(flags))
                     continue;
 
-                ++flagHits;
-                if (isPlausibleParameterShape(numParams, paramSize) &&
-                    numParams == sample.parameterCount && paramSize >= sample.parameterEnd)
-                    ++parameterShapeHits;
+                ++candidate.flagHits;
+                const auto [expectedCount, expectedSize] = expectedParameters(sample, flags);
+                const bool countMatches = expectedCount <= 0xFF && numParams == expectedCount;
+                const bool sizeMatches = expectedSize <= 0xFFFF && paramSize == expectedSize;
+                if (!isPlausibleParameterShape(numParams, paramSize))
+                    ++candidate.invalidShapes;
+                else if (countMatches && sizeMatches)
+                    ++candidate.shapeHits;
+                else if (!countMatches && !sizeMatches)
+                    ++candidate.bothMismatches;
+                else if (!countMatches)
+                    ++candidate.countMismatches;
+                else
+                    ++candidate.sizeMismatches;
             }
 
             if (offset == sourceFunctionFlagsOffset)
-            {
-                sourceFunctionFlagsHits = flagHits;
-                sourceParameterShapeHits = parameterShapeHits;
-            }
+                source = candidate;
 
-            if (flagHits > bestFunctionFlagsHits ||
-                (flagHits == bestFunctionFlagsHits && parameterShapeHits > bestParameterShapeHits))
+            if (candidate.shapeHits > best.shapeHits ||
+                (candidate.shapeHits == best.shapeHits && candidate.flagHits > best.flagHits))
             {
-                bestFunctionFlagsOffset = offset;
-                bestFunctionFlagsHits = flagHits;
-                bestParameterShapeHits = parameterShapeHits;
+                best = candidate;
+                tiedCandidates = 1;
             }
+            else if (candidate.shapeHits == best.shapeHits && candidate.flagHits == best.flagHits)
+                ++tiedCandidates;
         }
 
         const size_t requiredFunctionHits = std::max<size_t>(4, (parameterChainSamples * 3) / 4);
-        if (sourceFunctionFlagsOffset >= 0 && sourceFunctionFlagsHits >= requiredFunctionHits)
+        // 源码布局提示仅可在没有其他明确区别时用于打破平衡，绝不能盖过更优的语义证据。
+        const bool sourceLayoutApplies = version_.major == 5 && version_.minor == 6 && sizeof(uintptr_t) == 8;
+        const FunctionCandidate scannedBest = best;
+        if (sourceLayoutApplies && source.offset >= 0 &&
+            source.shapeHits == best.shapeHits && source.flagHits == best.flagHits)
+            best = source;
+        const std::string candidateSummary = " scanned_offset=" + std::to_string(scannedBest.offset) +
+                                             " scanned_flags=" + std::to_string(scannedBest.flagHits) +
+                                             " scanned_shapes=" + std::to_string(scannedBest.shapeHits) +
+                                             " source_5_6_offset=" + std::to_string(source.offset) +
+                                             " source_flags=" + std::to_string(source.flagHits) +
+                                             " source_shapes=" + std::to_string(source.shapeHits) +
+                                             " selected_offset=" + std::to_string(best.offset) +
+                                             " tied_candidates=" + std::to_string(tiedCandidates);
+        if (best.offset < 0 || best.flagHits < requiredFunctionHits || best.shapeHits < requiredFunctionHits ||
+            (tiedCandidates > 1 && (!sourceLayoutApplies || best.offset != source.offset)))
         {
-            bestFunctionFlagsOffset = sourceFunctionFlagsOffset;
-            bestFunctionFlagsHits = sourceFunctionFlagsHits;
-            bestParameterShapeHits = sourceParameterShapeHits;
-            report.evidence.push_back("UFunction::FunctionFlags preferred source-layout candidate offset=" +
-                                      std::to_string(sourceFunctionFlagsOffset) +
-                                      " flag_hits=" + std::to_string(sourceFunctionFlagsHits) +
-                                      " parameter_shape_hits=" + std::to_string(sourceParameterShapeHits));
-        }
-        if (bestFunctionFlagsOffset < 0 || bestFunctionFlagsHits < requiredFunctionHits)
-        {
-            report.failures.push_back("UFunction::FunctionFlags was not resolved consistently; parameter_chain_samples=" +
-                                      std::to_string(parameterChainSamples) +
-                                      " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
-                                      " parameter_shape_hits=" + std::to_string(bestParameterShapeHits));
+            std::string mismatchSamples;
+            size_t reportedSamples = 0;
+            for (size_t index = 0; index < functions.size() && reportedSamples < 3; ++index)
+            {
+                const FunctionSample &sample = functions[index];
+                if (!sample.parameterChainValid || best.offset < 0)
+                    continue;
+                const auto flagsAddress = Add(sample.address, best.offset);
+                const auto countAddress = Add(sample.address, best.offset + 4);
+                const auto sizeAddress = Add(sample.address, best.offset + 6);
+                uint32_t flags = 0;
+                uint8_t count = 0;
+                uint16_t size = 0;
+                if (!flagsAddress || !countAddress || !sizeAddress ||
+                    !memory_.Read(*flagsAddress, flags) || !memory_.Read(*countAddress, count) ||
+                    !memory_.Read(*sizeAddress, size) || !isPlausibleFunctionFlags(flags))
+                    continue;
+                const auto [expectedCount, expectedSize] = expectedParameters(sample, flags);
+                if (count == expectedCount && size == expectedSize)
+                    continue;
+                mismatchSamples += " sample_index=" + std::to_string(index) +
+                                   " expected_count=" + std::to_string(expectedCount) +
+                                   " actual_count=" + std::to_string(count) +
+                                   " expected_size=" + std::to_string(expectedSize) +
+                                   " actual_size=" + std::to_string(size);
+                ++reportedSamples;
+            }
+            report.failures.push_back("UFunction::NumParms/ParmsSize remain unresolved; parameter_chain_samples=" +
+                                      std::to_string(parameterChainSamples) + " required=" +
+                                      std::to_string(requiredFunctionHits) + candidateSummary +
+                                      " count_mismatch=" + std::to_string(best.countMismatches) +
+                                      " size_mismatch=" + std::to_string(best.sizeMismatches) +
+                                      " both_mismatch=" + std::to_string(best.bothMismatches) +
+                                      " invalid_shape=" + std::to_string(best.invalidShapes) + mismatchSamples);
             return false;
         }
-        schema.ufunction.functionFlags = bestFunctionFlagsOffset;
-        const bool parametersResolved = parameterChainSamples >= 4 && bestParameterShapeHits >= requiredFunctionHits;
-        if (parametersResolved)
-        {
-            schema.ufunction.numParams = bestFunctionFlagsOffset + 4;
-            schema.ufunction.paramSize = bestFunctionFlagsOffset + 6;
-            report.evidence.push_back("resolved UFunction::FunctionFlags, NumParms and ParmsSize from multiple samples; flags_offset=" +
-                                      std::to_string(schema.ufunction.functionFlags) +
-                                      " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
-                                      " parameter_shape_hits=" + std::to_string(bestParameterShapeHits));
-        }
-        else
-        {
-            report.failures.push_back("UFunction::NumParms/ParmsSize remain unresolved; parameter_chain_samples=" +
-                                      std::to_string(parameterChainSamples) +
-                                      " flag_hits=" + std::to_string(bestFunctionFlagsHits) +
-                                      " parameter_shape_hits=" + std::to_string(bestParameterShapeHits) +
-                                      " flags_offset=" + std::to_string(schema.ufunction.functionFlags));
-            report.evidence.push_back("resolved UFunction::FunctionFlags only; NumParms/ParmsSize were withheld because parameter-chain validation was insufficient");
-        }
+        schema.ufunction.functionFlags = best.offset;
+        schema.ufunction.numParams = best.offset + 4;
+        schema.ufunction.paramSize = best.offset + 6;
+        report.evidence.push_back("resolved UFunction::FunctionFlags, NumParms and ParmsSize from multiple samples;" + candidateSummary);
 
-        // UE 5.6 中 Func 相对于 FunctionFlags 只可能落在几个由条件编译决定的位置
-        // 即无 event graph、带 event graph、再加 Live Coding 指针
-        // 限制在这些源码布局位置，避免把对象后部其他可执行地址误认为 UFunction::Func
-        const std::array<int32_t, 4> nativeFunctionDeltas = {0x18, 0x28, 0x30, 0x38};
+        const std::vector<int32_t> nativeFunctionDeltas =
+            schema.family == EngineFamily::UE4FProperty && sizeof(uintptr_t) == 4
+                ? std::vector<int32_t>{0x14, 0x1C}
+                : std::vector<int32_t>{0x18, 0x28, 0x30, 0x38};
         int32_t bestNativeFunctionOffset = -1;
         size_t bestNativeFunctionHits = 0;
         for (const int32_t delta : nativeFunctionDeltas)
@@ -1398,7 +1481,11 @@ namespace anduefker::ue
         }
         if (bestNativeFunctionOffset < 0 || bestNativeFunctionHits < std::max<size_t>(2, functions.size() / 2))
         {
-            report.failures.push_back("UFunction::ExecFunction was not resolved");
+            report.failures.push_back("UFunction::ExecFunction was not resolved; flags_offset=" +
+                                      std::to_string(schema.ufunction.functionFlags) +
+                                      " best_native_offset=" + std::to_string(bestNativeFunctionOffset) +
+                                      " executable_hits=" + std::to_string(bestNativeFunctionHits) +
+                                      candidateSummary);
             return false;
         }
         schema.ufunction.nativeFunction = bestNativeFunctionOffset;
@@ -1500,20 +1587,30 @@ namespace anduefker::ue
         const int32_t valueOffset = (nameSize + static_cast<int32_t>(alignof(int64_t)) - 1) /
                                     static_cast<int32_t>(alignof(int64_t)) * static_cast<int32_t>(alignof(int64_t));
         const int32_t entryStride = valueOffset + static_cast<int32_t>(sizeof(int64_t));
-        const int32_t namesStart = std::max({0x30,
-                                             schema.ufield.next >= 0
-                                                 ? schema.ufield.next + static_cast<int32_t>(sizeof(uintptr_t))
-                                                 : 0x30});
+        const int32_t pointerSize = static_cast<int32_t>(sizeof(uintptr_t));
+        const int32_t namesStart = std::max(pointerSize == 4 ? 0x20 : 0x30,
+                                            schema.ufield.next >= 0 ? schema.ufield.next + pointerSize : 0);
 
-        int32_t bestNamesOffset = -1;
-        size_t bestValidArrays = 0;
-        size_t bestNonEmptyArrays = 0;
-        size_t bestValidEntries = 0;
-        for (int32_t offset = (namesStart + 7) & ~7; offset <= 0x180; offset += 8)
+        struct EnumCandidate
         {
+            int32_t offset = -1;
             size_t validArrays = 0;
+            size_t emptyArrays = 0;
+            size_t invalidHeaders = 0;
+            size_t unreadableNonEmpty = 0;
+            size_t readableNonEmptyArrays = 0;
             size_t nonEmptyArrays = 0;
             size_t validEntries = 0;
+            size_t nameFailures = 0;
+            size_t duplicateNames = 0;
+            size_t valueFailures = 0;
+        };
+        std::vector<EnumCandidate> candidates;
+        for (int32_t offset = (namesStart + pointerSize - 1) / pointerSize * pointerSize;
+             offset <= 0x180; offset += pointerSize)
+        {
+            EnumCandidate candidate;
+            candidate.offset = offset;
             for (uintptr_t enumObject : enumObjects)
             {
                 uintptr_t data = 0;
@@ -1526,65 +1623,118 @@ namespace anduefker::ue
                     !memory_.Read(*countAddress, count) || !memory_.Read(*capacityAddress, capacity))
                     continue;
                 if (count < 0 || count > 0x100000 || capacity < count || capacity > 0x100000)
+                {
+                    ++candidate.invalidHeaders;
                     continue;
+                }
                 if (count > 0 && (!IsReadablePointer(memory_, data) || !memory_.IsReadable(data, entryStride)))
+                {
+                    ++candidate.unreadableNonEmpty;
                     continue;
+                }
 
-                ++validArrays;
+                ++candidate.validArrays;
                 if (count == 0)
+                {
+                    ++candidate.emptyArrays;
                     continue;
+                }
+                ++candidate.readableNonEmptyArrays;
 
                 const int32_t sampleCount = std::min(count, 8);
                 const int32_t requiredEntries = std::min(count, 4);
                 int32_t decodedEntries = 0;
+                std::unordered_set<std::string> seenNames;
                 for (int32_t entryIndex = 0; entryIndex < sampleCount; ++entryIndex)
                 {
                     const auto entry = Add(data, entryIndex * entryStride);
                     if (!entry)
                         break;
+                    const auto entryName = names.ReadFName(*entry);
+                    if (!entryName || entryName->empty())
+                    {
+                        ++candidate.nameFailures;
+                        break;
+                    }
+                    if (!seenNames.insert(*entryName).second)
+                    {
+                        ++candidate.duplicateNames;
+                        break;
+                    }
                     const auto valueAddress = Add(*entry, valueOffset);
                     int64_t value = 0;
-                    const auto entryName = names.ReadFName(*entry);
-                    if (valueAddress && entryName && !entryName->empty() && memory_.Read(*valueAddress, value))
-                        ++decodedEntries;
+                    if (!valueAddress || !memory_.Read(*valueAddress, value))
+                    {
+                        ++candidate.valueFailures;
+                        break;
+                    }
+                    ++decodedEntries;
                 }
-                validEntries += static_cast<size_t>(decodedEntries);
+                candidate.validEntries += static_cast<size_t>(decodedEntries);
                 if (decodedEntries >= requiredEntries)
-                    ++nonEmptyArrays;
+                    ++candidate.nonEmptyArrays;
             }
+            candidates.push_back(candidate);
+        }
 
-            if (validArrays > bestValidArrays ||
-                (validArrays == bestValidArrays && nonEmptyArrays > bestNonEmptyArrays) ||
-                (validArrays == bestValidArrays && nonEmptyArrays == bestNonEmptyArrays &&
-                 validEntries > bestValidEntries))
-            {
-                bestNamesOffset = offset;
-                bestValidArrays = validArrays;
-                bestNonEmptyArrays = nonEmptyArrays;
-                bestValidEntries = validEntries;
-            }
+        std::sort(candidates.begin(), candidates.end(), [](const EnumCandidate &left, const EnumCandidate &right)
+                  {
+            if (left.nonEmptyArrays != right.nonEmptyArrays)
+                return left.nonEmptyArrays > right.nonEmptyArrays;
+            if (left.validEntries != right.validEntries)
+                return left.validEntries > right.validEntries;
+            if (left.validArrays != right.validArrays)
+                return left.validArrays > right.validArrays;
+            return left.offset < right.offset; });
+
+        const auto describe = [](const EnumCandidate &candidate)
+        {
+            return " offset=" + std::to_string(candidate.offset) +
+                   " headers=" + std::to_string(candidate.validArrays) +
+                   " empty=" + std::to_string(candidate.emptyArrays) +
+                   " invalid_header=" + std::to_string(candidate.invalidHeaders) +
+                   " unreadable_nonempty=" + std::to_string(candidate.unreadableNonEmpty) +
+                   " readable_nonempty=" + std::to_string(candidate.readableNonEmptyArrays) +
+                   " decoded_nonempty=" + std::to_string(candidate.nonEmptyArrays) +
+                   " entries=" + std::to_string(candidate.validEntries) +
+                   " name_fail=" + std::to_string(candidate.nameFailures) +
+                   " duplicate_name=" + std::to_string(candidate.duplicateNames) +
+                   " value_fail=" + std::to_string(candidate.valueFailures);
+        };
+        std::string candidateSummary = " samples=" + std::to_string(enumObjects.size()) +
+                                       " scan_start=" + std::to_string(namesStart) +
+                                       " step=" + std::to_string(pointerSize) +
+                                       " value_offset=" + std::to_string(valueOffset) +
+                                       " entry_stride=" + std::to_string(entryStride);
+        for (size_t index = 0; index < candidates.size() && index < 3; ++index)
+            candidateSummary += " candidate[" + std::to_string(index) + "]" + describe(candidates[index]);
+        if (pointerSize == 4 && schema.ufield.next >= 0)
+        {
+            const int32_t sourceOffset = schema.ufield.next + pointerSize * 2 + 2 * static_cast<int32_t>(sizeof(int32_t));
+            const auto source = std::find_if(candidates.begin(), candidates.end(), [sourceOffset](const EnumCandidate &candidate)
+                                             { return candidate.offset == sourceOffset; });
+            if (source != candidates.end())
+                candidateSummary += " source_layout" + describe(*source);
         }
 
         const size_t requiredArrays = std::max<size_t>(4, enumObjects.size() / 2);
         const size_t requiredNonEmptyArrays = std::min<size_t>(4, enumObjects.size());
-        if (bestNamesOffset < 0 || bestValidArrays < requiredArrays ||
-            bestNonEmptyArrays < requiredNonEmptyArrays)
+        const bool ambiguous = candidates.size() > 1 &&
+                               candidates[0].nonEmptyArrays == candidates[1].nonEmptyArrays &&
+                               candidates[0].validEntries == candidates[1].validEntries &&
+                               candidates[0].validArrays == candidates[1].validArrays;
+        if (candidates.empty() || candidates[0].validArrays < requiredArrays ||
+            candidates[0].nonEmptyArrays < requiredNonEmptyArrays || ambiguous)
         {
-            report.failures.push_back("UEnum::Names was not resolved from FName/int64 array samples; valid_arrays=" +
-                                      std::to_string(bestValidArrays) +
-                                      " non_empty_arrays=" + std::to_string(bestNonEmptyArrays) +
-                                      " valid_entries=" + std::to_string(bestValidEntries));
+            report.failures.push_back("UEnum::Names was not resolved from FName/int64 array samples; required_headers=" +
+                                      std::to_string(requiredArrays) + " required_nonempty=" +
+                                      std::to_string(requiredNonEmptyArrays) + " ambiguous=" +
+                                      std::to_string(ambiguous) + candidateSummary);
             return false;
         }
-        schema.uenum.names = bestNamesOffset;
-        report.evidence.push_back("resolved UEnum::Names from FName/int64 entries; offset=" +
-                                  std::to_string(schema.uenum.names) +
-                                  " valid_arrays=" + std::to_string(bestValidArrays) +
-                                  " non_empty_arrays=" + std::to_string(bestNonEmptyArrays) +
-                                  " valid_entries=" + std::to_string(bestValidEntries));
+        schema.uenum.names = candidates[0].offset;
+        report.evidence.push_back("resolved UEnum::Names from FName/int64 entries;" + candidateSummary);
 
-        // 在源码布局中，UEnum 将 CppForm 和 EEnumFlags 紧跟在 name/value pairs 的 TArray 之后存储
-        // 将这些保持为可选探测项，因为已 Cook 或分支构建版本可能会插入其他字段
         size_t formHits = 0;
         size_t flagHits = 0;
         for (uintptr_t enumObject : enumObjects)
@@ -1595,7 +1745,8 @@ namespace anduefker::ue
             uint8_t enumFlags = 0;
             if (enumFormAddress && memory_.Read(*enumFormAddress, cppForm) && cppForm <= 2)
                 ++formHits;
-            if (enumFlagsAddress && memory_.Read(*enumFlagsAddress, enumFlags) && (enumFlags & ~0x03u) == 0)
+            if (schema.family == EngineFamily::UE5FProperty && enumFlagsAddress &&
+                memory_.Read(*enumFlagsAddress, enumFlags) && (enumFlags & ~0x03u) == 0)
                 ++flagHits;
         }
         if (formHits >= requiredNonEmptyArrays)
@@ -1603,7 +1754,7 @@ namespace anduefker::ue
             schema.uenum.cppForm = schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2);
             report.evidence.push_back("resolved UEnum::CppForm; hits=" + std::to_string(formHits));
         }
-        if (flagHits >= requiredNonEmptyArrays)
+        if (schema.family == EngineFamily::UE5FProperty && flagHits >= requiredNonEmptyArrays)
         {
             schema.uenum.flags = schema.uenum.cppForm >= 0 ? schema.uenum.cppForm + 1 : schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2) + 1;
             report.evidence.push_back("resolved UEnum::EnumFlags; hits=" + std::to_string(flagHits));

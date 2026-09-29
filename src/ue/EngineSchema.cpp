@@ -7,7 +7,8 @@ namespace anduefker::ue
         const bool base = validation.uobject && validation.fname && validation.structs;
         if (!base)
             return false;
-        if (uobject.internalIndex < 0 || uobject.classPointer < 0 || uobject.name < 0 || uobject.flags < 0)
+        if (uobject.internalIndex < 0 || uobject.classPointer < 0 || uobject.name < 0 ||
+            uobject.outer < 0 || uobject.flags < 0)
             return false;
         if (ustruct.superStruct < 0 || ustruct.children < 0 || ustruct.size < 0)
             return false;
