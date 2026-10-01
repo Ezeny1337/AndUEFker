@@ -22,6 +22,7 @@ namespace anduefker::ue
         bool fFieldOwnerMask = false;
         bool enumHasUnderlyingType = false;
         bool enumHasFlags = false;
+        bool enumFlagsIsByte = false;
         bool enumHasPackage = false;
         bool enumUsesFNameData = false;
         bool enumStoresValues = true;

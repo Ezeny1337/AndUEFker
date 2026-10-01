@@ -42,6 +42,7 @@ namespace anduefker::ue
         result.largeWorldCoordinates = version.major >= 5;
         result.enumHasUnderlyingType = false;
         result.enumHasFlags = (version.major == 4 && version.minor >= 27) || version.major >= 5;
+        result.enumFlagsIsByte = version.major > 5 || (version.major == 5 && version.minor >= 3);
         result.enumHasPackage = version.major > 5 || (version.major == 5 && version.minor >= 1);
         result.enumUsesFNameData = false;
         // 在源码的运行时布局中，反射出的 FProperty/UProperty ArrayDim 字段仍保持为 int32 类型

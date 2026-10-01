@@ -1776,37 +1776,58 @@ namespace anduefker::ue
         report.evidence.push_back("resolved UEnum::Names from FName/int64 entries; selected=" +
                                   std::to_string(selected->offset) + ";" + candidateSummary);
 
-        // CppForm follows Names; UE4.25 has no EnumFlags, while later UE versions may include it.
+        // Names 是一个 TArray<TPair<FName, int64>> 类型的容器。
+        // CppForm 紧跟在完整的 TArray 标头（Header）之后，而不是跟在两个指针大小的字段之后。
+        // ECppForm 是一个 int32 类型的枚举。
+        const int32_t enumNamesArraySize =
+            ((pointerSize + static_cast<int32_t>(sizeof(int32_t) * 2) + pointerSize - 1) /
+             pointerSize) *
+            pointerSize;
+        const int32_t cppFormOffset = schema.uenum.names + enumNamesArraySize;
+        const int32_t enumFlagsOffset = cppFormOffset + static_cast<int32_t>(sizeof(uint32_t));
         size_t formHits = 0;
         size_t flagHits = 0;
         for (uintptr_t enumObject : enumObjects)
         {
-            const auto enumFormAddress = Add(enumObject, schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2));
-            const auto enumFlagsAddress = enumFormAddress ? Add(*enumFormAddress, 1) : std::nullopt;
-            uint8_t cppForm = 0;
-            uint8_t enumFlags = 0;
+            const auto enumFormAddress = Add(enumObject, cppFormOffset);
+            const auto enumFlagsAddress = Add(enumObject, enumFlagsOffset);
+            uint32_t cppForm = 0;
             if (enumFormAddress && memory_.Read(*enumFormAddress, cppForm) && cppForm <= 2)
+            {
                 ++formHits;
-            if (schema.features.enumHasFlags && enumFlagsAddress &&
-                memory_.Read(*enumFlagsAddress, enumFlags) && (enumFlags & ~0x03u) == 0)
-                ++flagHits;
+                if (schema.features.enumHasFlags && enumFlagsAddress)
+                {
+                    bool validFlags = false;
+                    if (schema.features.enumFlagsIsByte)
+                    {
+                        uint8_t enumFlags = 0;
+                        validFlags = memory_.Read(*enumFlagsAddress, enumFlags) &&
+                                     (enumFlags & ~0x03u) == 0;
+                    }
+                    else
+                    {
+                        uint32_t enumFlags = 0;
+                        const uint32_t allowedFlags = profile_.family == EngineFamily::UE4FProperty ? 0x01u : 0x03u;
+                        validFlags = memory_.Read(*enumFlagsAddress, enumFlags) &&
+                                     (enumFlags & ~allowedFlags) == 0;
+                    }
+                    if (validFlags)
+                        ++flagHits;
+                }
+            }
         }
         if (formHits >= requiredNonEmptyArrays)
         {
-            schema.uenum.cppForm = schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2);
-            report.evidence.push_back("resolved UEnum::CppForm; hits=" + std::to_string(formHits));
+            schema.uenum.cppForm = cppFormOffset;
+            report.evidence.push_back("resolved UEnum::CppForm; offset=" + std::to_string(cppFormOffset) +
+                                      " hits=" + std::to_string(formHits));
         }
-        if (schema.features.enumHasFlags && flagHits >= requiredNonEmptyArrays)
+        if (schema.features.enumHasFlags && formHits >= requiredNonEmptyArrays &&
+            flagHits >= requiredNonEmptyArrays)
         {
-            schema.uenum.flags = schema.uenum.cppForm >= 0 ? schema.uenum.cppForm + 1 : schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2) + 1;
-            report.evidence.push_back("resolved UEnum::EnumFlags; hits=" + std::to_string(flagHits));
-        }
-        if (schema.features.enumHasFlags && schema.uenum.flags < 0)
-        {
-            report.failures.push_back("UEnum::EnumFlags was required by the structure profile but was not resolved; hits=" +
-                                      std::to_string(flagHits) + " required=" +
-                                      std::to_string(requiredNonEmptyArrays));
-            return false;
+            schema.uenum.flags = enumFlagsOffset;
+            report.evidence.push_back("resolved UEnum::EnumFlags; offset=" +
+                                      std::to_string(enumFlagsOffset) + " hits=" + std::to_string(flagHits));
         }
         if (schema.features.enumHasPackage)
         {
