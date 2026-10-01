@@ -347,7 +347,7 @@ namespace anduefker::ue
 
     std::optional<int32_t> ObjectModelReader::StructSize(uintptr_t structure) const
     {
-        const auto address = Add(structure, schema_.ustruct.size);
+        const auto address = Add(structure, schema_.ustruct.propertiesSizeOffset);
         if (!address)
             return std::nullopt;
         int32_t value = 0;

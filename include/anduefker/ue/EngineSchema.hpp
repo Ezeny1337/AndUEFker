@@ -5,6 +5,14 @@
 
 namespace anduefker::ue
 {
+    enum class EnumTailLayout
+    {
+        Legacy,
+        Flags,
+        FlagsDisplayNamePackage,
+        FlagsPackageDisplayName,
+    };
+
     enum class EngineFamily
     {
         Unknown,
@@ -24,6 +32,8 @@ namespace anduefker::ue
         bool enumHasFlags = false;
         bool enumFlagsIsByte = false;
         bool enumHasPackage = false;
+        bool enumFlagsRequired = false;
+        EnumTailLayout enumTailLayout = EnumTailLayout::Legacy;
         bool enumUsesFNameData = false;
         bool enumStoresValues = true;
         bool arrayDimIsByte = false;
@@ -74,9 +84,10 @@ namespace anduefker::ue
         int32_t superStruct = -1;
         int32_t children = -1;
         int32_t childProperties = -1;
-        int32_t size = -1;
+        int32_t propertiesSizeOffset = -1;
         int32_t minAlignment = -1;
         int32_t structBaseChain = -1;
+        int32_t tail = -1;
     };
 
     struct UClassSchema

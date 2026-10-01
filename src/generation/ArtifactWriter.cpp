@@ -1014,7 +1014,7 @@ namespace anduefker::generation
         stream << "    \"ustruct\": {\"super\":" << schema.ustruct.superStruct
                << ",\"children\":" << schema.ustruct.children
                << ",\"child_properties\":" << schema.ustruct.childProperties
-               << ",\"size\":" << schema.ustruct.size << "},\n";
+               << ",\"size\":" << schema.ustruct.propertiesSizeOffset << "},\n";
         stream << "    \"property\": {\"array_dim\":" << schema.property.arrayDim
                << ",\"element_size\":" << schema.property.elementSize
                << ",\"flags\":" << schema.property.propertyFlags

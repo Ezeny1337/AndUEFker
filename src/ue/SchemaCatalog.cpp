@@ -7,10 +7,10 @@ namespace anduefker::ue
         return {
             {"ue4-uproperty", "UE4 UProperty", "4.23-4.24", ParseEngineVersion("4.24.0"),
              EngineFamily::UE4UProperty, FeaturesFor(ParseEngineVersion("4.24.0"))},
-            {"ue4-fproperty", "UE4 FProperty", "4.25-4.26", ParseEngineVersion("4.25.0"),
+            {"ue4-fproperty", "UE4 FProperty", "4.25-4.27", ParseEngineVersion("4.25.0"),
              EngineFamily::UE4FProperty, FeaturesFor(ParseEngineVersion("4.25.0"))},
-            {"ue4-fproperty-enumflags", "UE4 FProperty with enum flags", "4.27", ParseEngineVersion("4.27.0"),
-             EngineFamily::UE4FProperty, FeaturesFor(ParseEngineVersion("4.27.0"))},
+            {"ue4-fproperty-enumflags", "UE4 FProperty with enum flags", "4.26-4.27", ParseEngineVersion("4.26.0"),
+             EngineFamily::UE4FProperty, FeaturesFor(ParseEngineVersion("4.26.0"))},
             {"ue5-ffield-explicit", "UE5 FField explicit owner", "5.0", ParseEngineVersion("5.0.0"),
              EngineFamily::UE5FProperty, FeaturesFor(ParseEngineVersion("5.0.0"))},
             {"ue5-ffield-explicit-package", "UE5 FField explicit owner with enum package", "5.1-5.2",
@@ -41,9 +41,20 @@ namespace anduefker::ue
         result.useNamePool = version.major > 4 || (version.major == 4 && version.minor >= 23);
         result.largeWorldCoordinates = version.major >= 5;
         result.enumHasUnderlyingType = false;
-        result.enumHasFlags = (version.major == 4 && version.minor >= 27) || version.major >= 5;
+        result.enumHasFlags = (version.major == 4 && version.minor >= 26) || version.major >= 5;
         result.enumFlagsIsByte = version.major > 5 || (version.major == 5 && version.minor >= 3);
         result.enumHasPackage = version.major > 5 || (version.major == 5 && version.minor >= 1);
+        result.enumFlagsRequired = result.enumHasFlags;
+        if (result.enumHasPackage)
+        {
+            result.enumTailLayout = version.major == 5 && version.minor >= 5
+                                        ? EnumTailLayout::FlagsPackageDisplayName
+                                        : EnumTailLayout::FlagsDisplayNamePackage;
+        }
+        else if (result.enumHasFlags)
+            result.enumTailLayout = EnumTailLayout::Flags;
+        else
+            result.enumTailLayout = EnumTailLayout::Legacy;
         result.enumUsesFNameData = false;
         // 在源码的运行时布局中，反射出的 FProperty/UProperty ArrayDim 字段仍保持为 int32 类型
         // 生成参数描述符中的 byte-sized ArrayDim 字段属于另一种不同的契约
