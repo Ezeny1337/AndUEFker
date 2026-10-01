@@ -868,26 +868,47 @@ namespace anduefker::ue
                                       : schema.ufield.next + pointerSize;
         const int32_t propertyStart = ((fieldTail + pointerSize - 1) / pointerSize) * pointerSize;
 
-        if (!matchesUniform(propertyStart, 1))
+        struct PropertyHeaderCandidate
         {
-            report.failures.push_back("FProperty::ArrayDim source-layout candidate was rejected; offset=" +
-                                      std::to_string(propertyStart));
-            return false;
+            int32_t arrayDim = -1;
+            int32_t elementSize = -1;
+            bool sourceLayout = false;
+        };
+        std::vector<PropertyHeaderCandidate> headerCandidates;
+        const int32_t candidateStart = std::max<int32_t>(0, propertyStart - pointerSize);
+        for (int32_t arrayDimOffset = candidateStart; arrayDimOffset <= 0xA0 - static_cast<int32_t>(sizeof(int32_t) * 2);
+             arrayDimOffset += static_cast<int32_t>(sizeof(int32_t)))
+        {
+            const int32_t elementSizeOffset = arrayDimOffset + static_cast<int32_t>(sizeof(int32_t));
+            if (!matchesUniform(arrayDimOffset, 1) || !matchesUniform(elementSizeOffset, 4))
+                continue;
+            headerCandidates.push_back({arrayDimOffset, elementSizeOffset, arrayDimOffset == propertyStart});
         }
-        schema.property.arrayDim = propertyStart;
 
-        const int32_t elementSizeOffset = propertyStart + static_cast<int32_t>(sizeof(int32_t));
-        if (!matchesUniform(elementSizeOffset, 4))
+        const auto sourceHeader = std::find_if(headerCandidates.begin(), headerCandidates.end(),
+                                               [](const PropertyHeaderCandidate &candidate)
+                                               { return candidate.sourceLayout; });
+        const PropertyHeaderCandidate *selectedHeader = sourceHeader != headerCandidates.end()
+                                                            ? &*sourceHeader
+                                                            : (headerCandidates.empty() ? nullptr : &headerCandidates.front());
+        if (selectedHeader == nullptr)
         {
-            report.failures.push_back("FProperty::ElementSize source-layout candidate was rejected; offset=" +
-                                      std::to_string(elementSizeOffset));
+            report.failures.push_back("FProperty::ArrayDim/ElementSize candidates were rejected; source_offset=" +
+                                      std::to_string(propertyStart) + " scan_start=" +
+                                      std::to_string(candidateStart) + " candidates=0");
             return false;
         }
-        schema.property.elementSize = elementSizeOffset;
+        schema.property.arrayDim = selectedHeader->arrayDim;
+        schema.property.elementSize = selectedHeader->elementSize;
+        report.evidence.push_back("resolved FProperty::ArrayDim/ElementSize candidate; source_offset=" +
+                                  std::to_string(propertyStart) + " selected_array_dim=" +
+                                  std::to_string(schema.property.arrayDim) + " selected_element_size=" +
+                                  std::to_string(schema.property.elementSize) + " candidates=" +
+                                  std::to_string(headerCandidates.size()));
 
         // EPropertyFlags 位于 ArrayDim 和 ElementSize 之后，类型为 uint64_t。
         // 只在后续的对齐位置搜索，再从选中的 flags 字段之后定位 Offset_Internal。
-        const int32_t flagsStart = propertyStart + static_cast<int32_t>(sizeof(int32_t) * 2);
+        const int32_t flagsStart = schema.property.elementSize + static_cast<int32_t>(sizeof(int32_t));
         for (int32_t offset = flagsStart; offset <= 0x100 - static_cast<int32_t>(sizeof(uint64_t));
              offset += static_cast<int32_t>(sizeof(uint64_t)))
         {
