@@ -6,7 +6,6 @@
 #include <utility>
 #include <vector>
 
-#include "anduefker/ue/EngineVersion.hpp"
 #include "anduefker/ue/ObjectModelReader.hpp"
 #include "anduefker/ue/SchemaCatalog.hpp"
 
@@ -29,6 +28,9 @@ namespace anduefker::ue
     struct SchemaResolutionReport
     {
         bool accepted = false;
+        int32_t score = 0;
+        std::string profileId;
+        std::string profileLabel;
         std::vector<std::string> evidence;
         std::vector<std::string> failures;
     };
@@ -38,7 +40,7 @@ namespace anduefker::ue
     public:
         SchemaResolver(const IMemorySource &memory,
                        const RuntimeBinding &binding,
-                       const EngineVersion &version,
+                       const EngineProfile &profile,
                        SchemaProbeNames names = {});
 
         [[nodiscard]] SchemaResolutionReport Resolve(EngineSchema &schema) const;
@@ -67,7 +69,7 @@ namespace anduefker::ue
 
         const IMemorySource &memory_;
         const RuntimeBinding &binding_;
-        EngineVersion version_;
+        EngineProfile profile_;
         SchemaProbeNames names_;
     };
 } // namespace anduefker::ue

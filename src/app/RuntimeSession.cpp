@@ -4,12 +4,13 @@
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <utility>
 #include <vector>
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
-#include "anduefker/ue/EngineVersion.hpp"
+#include "anduefker/ue/SchemaCatalog.hpp"
 
 namespace anduefker::app
 {
@@ -17,8 +18,8 @@ namespace anduefker::app
     using ::anduefker::binding::LocatedAddress;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::memory::ReadStats;
-    using ::anduefker::ue::EngineVersion;
-    using ::anduefker::ue::ParseEngineVersion;
+    using ::anduefker::ue::EngineProfile;
+    using ::anduefker::ue::SchemaCatalog;
 
     namespace
     {
@@ -41,16 +42,6 @@ namespace anduefker::app
             std::ostringstream stream;
             stream << "0x" << std::hex << std::uppercase << address;
             return stream.str();
-        }
-
-        std::vector<EngineVersion> EngineVersionProfiles()
-        {
-            return {
-                ParseEngineVersion("5.6.0"),
-                ParseEngineVersion("5.2.0"),
-                ParseEngineVersion("4.27.0"),
-                ParseEngineVersion("4.22.0"),
-            };
         }
 
         const char *ParseStatusName(ParseStatus status)
@@ -225,28 +216,59 @@ namespace anduefker::app
             Note(RuntimeLogLevel::Debug, "binding: " + evidence);
 
         EngineSchema schema;
-        EngineVersion selectedProfile;
+        EngineProfile selectedProfile;
         SchemaResolutionReport schemaReport;
         bool schemaAccepted = false;
+        bool schemaAmbiguous = false;
+        int32_t bestProfileScore = std::numeric_limits<int32_t>::min();
+        std::vector<std::string> acceptedProfiles;
         std::vector<std::string> profileFailures;
         Note(RuntimeLogLevel::Info, "Detecting Unreal Engine schema profile...");
-        for (const EngineVersion &profile : EngineVersionProfiles())
+        for (const EngineProfile &profile : SchemaCatalog::Profiles())
         {
             EngineSchema candidateSchema;
             SchemaResolver resolver(*memory_, context_.Binding(), profile);
             const SchemaResolutionReport candidateReport = resolver.Resolve(candidateSchema);
+            Note(RuntimeLogLevel::Debug, "schema_candidate id=" + profile.id +
+                                             " range=" + profile.versionRange +
+                                             " accepted=" + std::to_string(candidateReport.accepted) +
+                                             " score=" + std::to_string(candidateReport.score));
             if (candidateReport.accepted)
             {
-                schema = std::move(candidateSchema);
-                schemaReport = candidateReport;
-                selectedProfile = profile;
-                schemaAccepted = true;
-                break;
+                if (!schemaAccepted || candidateReport.score > bestProfileScore)
+                {
+                    schema = std::move(candidateSchema);
+                    schemaReport = candidateReport;
+                    selectedProfile = profile;
+                    bestProfileScore = candidateReport.score;
+                    schemaAccepted = true;
+                    schemaAmbiguous = false;
+                    acceptedProfiles = {profile.id};
+                }
+                else if (candidateReport.score == bestProfileScore)
+                {
+                    schemaAmbiguous = true;
+                    acceptedProfiles.push_back(profile.id);
+                }
+                continue;
             }
 
-            profileFailures.push_back(profile.ToString() + ": " +
+            profileFailures.push_back(profile.id + ": " +
                                       (candidateReport.failures.empty() ? "schema probes rejected the profile"
                                                                         : candidateReport.failures.front()));
+        }
+
+        if (schemaAccepted && schemaAmbiguous)
+        {
+            std::string ambiguousProfiles;
+            for (size_t index = 0; index < acceptedProfiles.size(); ++index)
+            {
+                if (index != 0)
+                    ambiguousProfiles += ",";
+                ambiguousProfiles += acceptedProfiles[index];
+            }
+            schemaReport.evidence.push_back("equivalent structure profiles passed with equal score: " + ambiguousProfiles +
+                                            "; selected=" + selectedProfile.id);
         }
 
         if (!schemaAccepted)
@@ -272,7 +294,8 @@ namespace anduefker::app
             return RuntimeSessionStatus::BindingReady;
         }
         context_.CommitSchema(std::move(schema));
-        Note(RuntimeLogLevel::Info, "Engine schema resolved; profile=" + selectedProfile.ToString() +
+        Note(RuntimeLogLevel::Info, "Engine schema resolved; profile=" + selectedProfile.id +
+                                        " range=" + selectedProfile.versionRange +
                                         " source=runtime-schema-probe");
 
         Note(RuntimeLogLevel::Info, "Collecting common object classes...");

@@ -20,6 +20,10 @@ namespace anduefker::ue
             property.propertyFlags < 0 || property.offsetInternal < 0 ||
             ufunction.functionFlags < 0 || ufunction.nativeFunction < 0 || uenum.names < 0)
             return false;
+        if (features.enumHasFlags && uenum.flags < 0)
+            return false;
+        if (features.enumHasPackage && uenum.enumPackage < 0)
+            return false;
         return validation.properties && validation.functions && validation.enums;
     }
 } // namespace anduefker::ue
