@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -329,8 +328,8 @@ namespace anduefker::ue
             return false;
         }
 
-        // Outer 位于完整 FName 之后。ARM32 如果从 FName 内部开始探测，
-        // 可能把 Number 读成大量空值组成的伪指针，因此评分前排除该区域。
+        // Outer 位于完整 FName 之后。ARM32 如果从 FName 内部开始探测
+        // 可能把 Number 读成大量空值组成的伪指针，因此评分前排除该区域
         const std::unordered_set<uintptr_t> sampleObjects = [&samples]()
         {
             std::unordered_set<uintptr_t> result;
@@ -506,31 +505,51 @@ namespace anduefker::ue
             return false;
         }
 
-        const std::array<std::pair<uintptr_t, int32_t>, 3> knownSizes = {
-            std::pair{*guid, 0x10}, std::pair{*color, 0x04},
-            std::pair{*vector, schema.features.largeWorldCoordinates ? 0x18 : 0x0C}};
+        // FVector 的大小由 FLargeWorldCoordinatesReal 决定，而该类型受构建配置影响不能只根据 UE 主版本决定
+        // 优先尝试 profile 的预期值，同时保留另一种 ABI变体，避免把 LWC 当成版本事实
+        const std::array<int32_t, 2> vectorSizes = schema.features.largeWorldCoordinates
+                                                       ? std::array<int32_t, 2>{0x18, 0x0C}
+                                                       : std::array<int32_t, 2>{0x0C, 0x18};
+        struct StructSizeCandidate
+        {
+            int32_t offset = -1;
+            int32_t vectorSize = 0;
+        };
+        std::vector<StructSizeCandidate> sizeCandidates;
         for (int32_t offset = 0; offset <= 0x100 - 4; offset += 4)
         {
-            bool matches = true;
-            for (const auto &[object, expected] : knownSizes)
+            for (const int32_t vectorSize : vectorSizes)
             {
-                int32_t actual = 0;
-                const auto address = Add(object, offset);
-                if (!address || !memory_.Read(*address, actual) || actual != expected)
+                const std::array<std::pair<uintptr_t, int32_t>, 3> knownSizes = {
+                    std::pair{*guid, 0x10}, std::pair{*color, 0x04}, std::pair{*vector, vectorSize}};
+                bool matches = true;
+                for (const auto &[object, expected] : knownSizes)
                 {
-                    matches = false;
-                    break;
+                    int32_t actual = 0;
+                    const auto address = Add(object, offset);
+                    if (!address || !memory_.Read(*address, actual) || actual != expected)
+                    {
+                        matches = false;
+                        break;
+                    }
                 }
+                if (matches)
+                    sizeCandidates.push_back({offset, vectorSize});
             }
-            if (matches)
-            {
-                schema.ustruct.propertiesSizeOffset = offset;
-                break;
-            }
+        }
+        if (!sizeCandidates.empty())
+        {
+            schema.ustruct.propertiesSizeOffset = sizeCandidates.front().offset;
+            schema.features.largeWorldCoordinates = sizeCandidates.front().vectorSize == 0x18;
+            report.evidence.push_back("resolved UStruct::PropertiesSize; offset=" +
+                                      std::to_string(schema.ustruct.propertiesSizeOffset) +
+                                      " guid_size=16 color_size=4 vector_size=" +
+                                      std::to_string(sizeCandidates.front().vectorSize) +
+                                      " candidates=" + std::to_string(sizeCandidates.size()));
         }
         if (schema.ustruct.propertiesSizeOffset < 0)
         {
-            report.failures.push_back("UStruct::Size was not resolved from Guid/Color/Vector");
+            report.failures.push_back("UStruct::PropertiesSize was not resolved from Guid/Color/Vector size variants");
             return false;
         }
 
@@ -593,7 +612,8 @@ namespace anduefker::ue
                     if (!address || !memory_.Read(*address, field) || !IsReadablePointer(memory_, field))
                         continue;
                     const auto fieldName = readObjectName(field);
-                    if (fieldName && (*fieldName == "A" || *fieldName == "B" || *fieldName == "R"))
+                    if (fieldName && (*fieldName == "A" || *fieldName == "B" || *fieldName == "C" ||
+                                      *fieldName == "D" || *fieldName == "R"))
                         return offset;
                 }
                 return std::nullopt;
@@ -854,18 +874,6 @@ namespace anduefker::ue
             return false;
         }
 
-        auto matchesInt32 = [&](int32_t offset, const std::function<int32_t(int32_t)> &transform)
-        {
-            for (const auto &[property, expected] : properties)
-            {
-                int32_t value = 0;
-                const auto address = Add(property, offset);
-                if (!address || !memory_.Read(*address, value) || transform(value) != expected)
-                    return false;
-            }
-            return true;
-        };
-
         const auto matchesUniform = [&](int32_t offset, int32_t expected)
         {
             for (const auto &[property, ignored] : properties)
@@ -902,74 +910,119 @@ namespace anduefker::ue
             headerCandidates.push_back({arrayDimOffset, elementSizeOffset, arrayDimOffset == propertyStart});
         }
 
-        const auto sourceHeader = std::find_if(headerCandidates.begin(), headerCandidates.end(),
-                                               [](const PropertyHeaderCandidate &candidate)
-                                               { return candidate.sourceLayout; });
-        const PropertyHeaderCandidate *selectedHeader = sourceHeader != headerCandidates.end()
-                                                            ? &*sourceHeader
-                                                            : (headerCandidates.empty() ? nullptr : &headerCandidates.front());
-        if (selectedHeader == nullptr)
+        if (headerCandidates.empty())
         {
             report.failures.push_back("FProperty::ArrayDim/ElementSize candidates were rejected; source_offset=" +
                                       std::to_string(propertyStart) + " scan_start=" +
                                       std::to_string(candidateStart) + " candidates=0");
             return false;
         }
-        schema.property.arrayDim = selectedHeader->arrayDim;
-        schema.property.elementSize = selectedHeader->elementSize;
-        report.evidence.push_back("resolved FProperty::ArrayDim/ElementSize candidate; source_offset=" +
-                                  std::to_string(propertyStart) + " selected_array_dim=" +
-                                  std::to_string(schema.property.arrayDim) + " selected_element_size=" +
-                                  std::to_string(schema.property.elementSize) + " candidates=" +
-                                  std::to_string(headerCandidates.size()));
 
-        // EPropertyFlags 位于 ArrayDim 和 ElementSize 之后，类型为 uint64_t。
-        // 只在后续的对齐位置搜索，再从选中的 flags 字段之后定位 Offset_Internal。
-        const int32_t flagsStart = schema.property.elementSize + static_cast<int32_t>(sizeof(int32_t));
-        for (int32_t offset = flagsStart; offset <= 0x100 - static_cast<int32_t>(sizeof(uint64_t));
-             offset += static_cast<int32_t>(sizeof(uint64_t)))
+        struct PropertyTailCandidate
         {
-            bool valid = true;
-            for (const auto &[property, expected] : properties)
+            PropertyHeaderCandidate header;
+            int32_t propertyFlags = -1;
+            int32_t offsetInternal = -1;
+            size_t exactOffsetHits = 0;
+            size_t plausibleOffsetHits = 0;
+        };
+        std::vector<PropertyTailCandidate> tailCandidates;
+        PropertyTailCandidate bestNearCandidate;
+        bool haveNearCandidate = false;
+        // EPropertyFlags 位于 ArrayDim 和 ElementSize 之后，类型为 uint64_t
+        // UE5.5+ 还可能在 PropertyFlags 与 Offset_Internal 之间插入 RepIndex、BlueprintReplicationCondition 和 editor-only IndexInOwner
+        // 遍历完整的有界尾部候选，而不是把 Offset_Internal 固定在某一个 delta 上
+        for (const PropertyHeaderCandidate &header : headerCandidates)
+        {
+            for (int32_t flagsOffset = header.elementSize + static_cast<int32_t>(sizeof(int32_t));
+                 flagsOffset <= 0x100 - static_cast<int32_t>(sizeof(uint64_t)); flagsOffset += 4)
             {
-                (void)expected;
-                uint64_t flags = 0;
-                const auto address = Add(property, offset);
-                if (!address || !memory_.Read(*address, flags) || flags == 0 ||
-                    (flags & 0xE000000000000000ull) != 0 ||
-                    (flags & 0xFFFFFFFFull) == 0xCDCDCDCDull)
+                bool flagsValid = true;
+                for (const auto &[property, ignored] : properties)
                 {
-                    valid = false;
-                    break;
+                    (void)ignored;
+                    uint64_t flags = 0;
+                    const auto address = Add(property, flagsOffset);
+                    if (!address || !memory_.Read(*address, flags) || flags == 0 ||
+                        (flags & 0xE000000000000000ull) != 0 ||
+                        (flags & 0xFFFFFFFFull) == 0xCDCDCDCDull)
+                    {
+                        flagsValid = false;
+                        break;
+                    }
+                }
+                if (!flagsValid)
+                    continue;
+
+                for (int32_t offset = flagsOffset + static_cast<int32_t>(sizeof(uint64_t));
+                     offset <= 0x120 - static_cast<int32_t>(sizeof(int32_t)); offset += 4)
+                {
+                    size_t exactOffsetHits = 0;
+                    size_t plausibleOffsetHits = 0;
+                    for (const auto &[property, expected] : properties)
+                    {
+                        int32_t value = 0;
+                        const auto address = Add(property, offset);
+                        if (!address || !memory_.Read(*address, value))
+                            continue;
+                        if (value == expected)
+                            ++exactOffsetHits;
+                        if (value >= 0 && value <= 0x10000)
+                            ++plausibleOffsetHits;
+                    }
+                    PropertyTailCandidate candidate{header, flagsOffset, offset, exactOffsetHits,
+                                                    plausibleOffsetHits};
+                    if (exactOffsetHits == properties.size())
+                        tailCandidates.push_back(candidate);
+                    if (!haveNearCandidate ||
+                        exactOffsetHits > bestNearCandidate.exactOffsetHits ||
+                        (exactOffsetHits == bestNearCandidate.exactOffsetHits &&
+                         plausibleOffsetHits > bestNearCandidate.plausibleOffsetHits))
+                    {
+                        bestNearCandidate = candidate;
+                        haveNearCandidate = true;
+                    }
                 }
             }
-            if (valid)
-            {
-                schema.property.propertyFlags = offset;
-                break;
-            }
-        }
-        if (schema.property.propertyFlags < 0)
-        {
-            report.failures.push_back("FProperty::PropertyFlags was not resolved");
-            return false;
         }
 
-        for (int32_t offset = schema.property.propertyFlags + static_cast<int32_t>(sizeof(uint64_t));
-             offset <= 0x100 - static_cast<int32_t>(sizeof(int32_t)); offset += 4)
+        std::sort(tailCandidates.begin(), tailCandidates.end(),
+                  [](const PropertyTailCandidate &left, const PropertyTailCandidate &right)
+                  {
+                      if (left.header.sourceLayout != right.header.sourceLayout)
+                          return left.header.sourceLayout;
+                      if (left.exactOffsetHits != right.exactOffsetHits)
+                          return left.exactOffsetHits > right.exactOffsetHits;
+                      return left.propertyFlags < right.propertyFlags;
+                  });
+        if (tailCandidates.empty())
         {
-            if (matchesInt32(offset, [](int32_t value)
-                             { return value; }))
-            {
-                schema.property.offsetInternal = offset;
-                break;
-            }
-        }
-        if (schema.property.offsetInternal < 0)
-        {
-            report.failures.push_back("FProperty::Offset_Internal was not resolved after PropertyFlags");
+            std::string nearSummary = " none";
+            if (haveNearCandidate)
+                nearSummary = " header_array_dim=" + std::to_string(bestNearCandidate.header.arrayDim) +
+                              " header_element_size=" + std::to_string(bestNearCandidate.header.elementSize) +
+                              " flags=" + std::to_string(bestNearCandidate.propertyFlags) +
+                              " offset=" + std::to_string(bestNearCandidate.offsetInternal) +
+                              " exact_hits=" + std::to_string(bestNearCandidate.exactOffsetHits) +
+                              " plausible_hits=" + std::to_string(bestNearCandidate.plausibleOffsetHits);
+            report.failures.push_back("FProperty::Offset_Internal was not resolved after PropertyFlags; headers=" +
+                                      std::to_string(headerCandidates.size()) + " tail_candidates=0 near=" +
+                                      nearSummary);
             return false;
         }
+        const PropertyTailCandidate &selectedTail = tailCandidates.front();
+        schema.property.arrayDim = selectedTail.header.arrayDim;
+        schema.property.elementSize = selectedTail.header.elementSize;
+        schema.property.propertyFlags = selectedTail.propertyFlags;
+        schema.property.offsetInternal = selectedTail.offsetInternal;
+        report.evidence.push_back("resolved FProperty layout candidate; source_offset=" +
+                                  std::to_string(propertyStart) + " selected_array_dim=" +
+                                  std::to_string(schema.property.arrayDim) + " selected_element_size=" +
+                                  std::to_string(schema.property.elementSize) + " flags=" +
+                                  std::to_string(schema.property.propertyFlags) + " offset=" +
+                                  std::to_string(schema.property.offsetInternal) + " headers=" +
+                                  std::to_string(headerCandidates.size()) + " tail_candidates=" +
+                                  std::to_string(tailCandidates.size()));
 
         schema.property.baseSize = schema.property.elementSize;
         schema.validation.properties = true;
@@ -1211,6 +1264,11 @@ namespace anduefker::ue
             {
                 uint64_t flags = 0;
                 int32_t end = 0;
+                int32_t offset = -1;
+                int32_t elementSize = 0;
+                int32_t arrayDim = 0;
+                std::string name;
+                std::string className;
             };
             uintptr_t address = 0;
             bool parameterChainValid = false;
@@ -1282,11 +1340,14 @@ namespace anduefker::ue
             return false;
         }
 
-        // 记录每个函数的参数字段形状
-        // UE 将参数属性存放在 UStruct::ChildProperties 链中，NumParms 和 ParmsSize 必须与该链的独立解析结果一致
+        // 记录每个函数的参数字段形状。UProperty 和 FProperty 使用不同的 UStruct 链：
+        // UE4.23-4.24 使用 Children，UE4.25+ 使用 ChildProperties。
+        // 这两个字段语义相同，但不能在 Resolver 中无条件读取其中一个。
+        const int32_t propertyChainOffset = schema.features.useFProperty ? schema.ustruct.childProperties
+                                                                         : schema.ustruct.children;
         for (FunctionSample &sample : functions)
         {
-            const auto firstAddress = Add(sample.address, schema.ustruct.childProperties);
+            const auto firstAddress = Add(sample.address, propertyChainOffset);
             uintptr_t current = 0;
             if (!firstAddress || !memory_.Read(*firstAddress, current))
                 continue;
@@ -1311,7 +1372,13 @@ namespace anduefker::ue
                     valid = false;
                     break;
                 }
-                sample.properties.push_back({property->flags, static_cast<int32_t>(end)});
+                sample.properties.push_back({property->flags,
+                                             static_cast<int32_t>(end),
+                                             property->offset,
+                                             property->elementSize,
+                                             property->arrayDim,
+                                             property->name,
+                                             property->className});
                 current = field->nextAddress;
             }
             if (current != 0 || visited.size() > 256)
@@ -1492,8 +1559,10 @@ namespace anduefker::ue
                 ++tiedCandidates;
         }
 
-        const size_t requiredFunctionHits = std::max<size_t>(4, (parameterChainSamples * 3) / 4);
-        const size_t requiredNativeHits = std::max<size_t>(2, parameterChainSamples / 4);
+        const size_t requiredFunctionHits = std::max<size_t>(4, (functions.size() * 3) / 4);
+        const size_t requiredNativeHits = std::max<size_t>(2, functions.size() / 4);
+        const bool parameterSemanticsComplete = parameterChainSamples >= requiredFunctionHits &&
+                                                best.shapeHits >= requiredFunctionHits;
         const std::string candidateSummary = " selected_flags=" + std::to_string(best.flagHits) +
                                              " selected_shapes=" + std::to_string(best.shapeHits) +
                                              " selected_offset=" + std::to_string(best.offset) +
@@ -1501,9 +1570,39 @@ namespace anduefker::ue
                                              " native_flags=" + std::to_string(best.nativeFlagHits) +
                                              " native_executable=" + std::to_string(best.nativeExecutableHits) +
                                              " native_missing=" + std::to_string(best.nativeMissingHits) +
-                                             " tied_candidates=" + std::to_string(tiedCandidates);
-        if (best.offset < 0 || best.flagHits < requiredFunctionHits || best.shapeHits < requiredFunctionHits ||
-            best.nativeOffset < 0 || best.nativeExecutableHits < requiredNativeHits ||
+                                             " tied_candidates=" + std::to_string(tiedCandidates) +
+                                             " parameter_chain_offset=" + std::to_string(propertyChainOffset) +
+                                             " parameter_semantics=" +
+                                             std::string(parameterSemanticsComplete ? "complete" : "partial");
+        if (!parameterSemanticsComplete)
+        {
+            report.evidence.push_back("UFunction structural layout found but parameter semantics were incomplete;" +
+                                      candidateSummary + " count_mismatch=" +
+                                      std::to_string(best.countMismatches) + " size_mismatch=" +
+                                      std::to_string(best.sizeMismatches) + " both_mismatch=" +
+                                      std::to_string(best.bothMismatches) + " invalid_shape=" +
+                                      std::to_string(best.invalidShapes));
+            size_t reportedParameters = 0;
+            for (size_t sampleIndex = 0; sampleIndex < functions.size() && reportedParameters < 8; ++sampleIndex)
+            {
+                for (const FunctionSample::Parameter &parameter : functions[sampleIndex].properties)
+                {
+                    if (reportedParameters >= 8)
+                        break;
+                    report.evidence.push_back("UFunction parameter sample=" + std::to_string(sampleIndex) +
+                                              " name=" + parameter.name + " class=" + parameter.className +
+                                              " flags=" + std::to_string(parameter.flags) +
+                                              " cpf_parm=" + std::to_string((parameter.flags & 0x80ull) != 0) +
+                                              " offset=" + std::to_string(parameter.offset) +
+                                              " element_size=" + std::to_string(parameter.elementSize) +
+                                              " array_dim=" + std::to_string(parameter.arrayDim));
+                    ++reportedParameters;
+                }
+            }
+        }
+        if (best.offset < 0 || best.flagHits < requiredFunctionHits || !parameterSemanticsComplete ||
+            best.nativeOffset < 0 ||
+            best.nativeExecutableHits < requiredNativeHits ||
             (tiedCandidates > 1 && best.nativeExecutableHits == 0))
         {
             std::string mismatchSamples;
