@@ -1408,7 +1408,7 @@ namespace anduefker::ue
 
         const size_t requiredFunctionHits = std::max<size_t>(4, (parameterChainSamples * 3) / 4);
         // 源码布局提示仅可在没有其他明确区别时用于打破平衡，绝不能盖过更优的语义证据。
-        const bool sourceLayoutApplies = version_.major == 5 && version_.minor == 6 && sizeof(uintptr_t) == 8;
+        const bool sourceLayoutApplies = profile_.id == "ue5-modern" && sizeof(uintptr_t) == 8;
         const FunctionCandidate scannedBest = best;
         if (sourceLayoutApplies && source.offset >= 0 &&
             source.shapeHits == best.shapeHits && source.flagHits == best.flagHits)
