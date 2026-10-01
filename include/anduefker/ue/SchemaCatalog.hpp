@@ -3,8 +3,26 @@
 #include "anduefker/ue/EngineSchema.hpp"
 #include "anduefker/ue/EngineVersion.hpp"
 
+#include <vector>
+
 namespace anduefker::ue
 {
+    struct EngineProfile
+    {
+        std::string id;
+        std::string label;
+        std::string versionRange;
+        EngineVersion representativeVersion;
+        EngineFamily family = EngineFamily::Unknown;
+        EngineFeatures features;
+
+        [[nodiscard]] bool IsValid() const
+        {
+            return !id.empty() && !label.empty() && representativeVersion.IsValid() &&
+                   family != EngineFamily::Unknown;
+        }
+    };
+
     /**
      * @brief 在运行时探测之前对原始 UE 布局族进行分类
      *
@@ -14,6 +32,7 @@ namespace anduefker::ue
     class SchemaCatalog
     {
     public:
+        [[nodiscard]] static std::vector<EngineProfile> Profiles();
         [[nodiscard]] static EngineFeatures FeaturesFor(const EngineVersion &version);
         [[nodiscard]] static EngineFamily FamilyFor(const EngineVersion &version);
     };

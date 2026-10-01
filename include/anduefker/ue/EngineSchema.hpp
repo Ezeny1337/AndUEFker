@@ -21,10 +21,13 @@ namespace anduefker::ue
         bool outlineNumberName = false;
         bool fFieldOwnerMask = false;
         bool enumHasUnderlyingType = false;
+        bool enumHasFlags = false;
+        bool enumHasPackage = false;
         bool enumUsesFNameData = false;
         bool enumStoresValues = true;
         bool arrayDimIsByte = false;
         bool largeWorldCoordinates = false;
+        bool objectArrayMayPackItem = false;
     };
 
     struct FNameSchema
@@ -96,6 +99,7 @@ namespace anduefker::ue
         int32_t cppForm = -1;
         int32_t flags = -1;
         int32_t underlyingType = -1;
+        int32_t enumPackage = -1;
     };
 
     struct PropertySchema
@@ -132,6 +136,9 @@ namespace anduefker::ue
         bool properties = false;
         bool functions = false;
         bool enums = false;
+        std::string profileId;
+        std::string profileLabel;
+        std::string profileVersionRange;
         std::string familyEvidence;
         std::string failure;
     };

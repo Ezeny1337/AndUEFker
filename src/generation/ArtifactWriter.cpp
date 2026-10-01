@@ -650,6 +650,10 @@ namespace anduefker::generation
         stream << "  \"schema_version\": 1,\n";
         stream << "  \"package\": \"" << JsonEscape(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << JsonEscape(context_.Schema().validation.familyEvidence) << "\",\n";
+        stream << "  \"profile\": {\"id\":\""
+               << JsonEscape(context_.Schema().validation.profileId) << "\",\"label\":\""
+               << JsonEscape(context_.Schema().validation.profileLabel) << "\",\"version_range\":\""
+               << JsonEscape(context_.Schema().validation.profileVersionRange) << "\"},\n";
         stream << "  \"status\": \"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"artifact_kind\": \"" << (reflection_.status == ParseStatus::Partial ? "partial" : "complete") << "\",\n";
         stream << "  \"module\": \"" << JsonEscape(context_.Module().name) << "\",\n";
@@ -962,6 +966,9 @@ namespace anduefker::generation
         std::ostringstream stream;
         stream << "{\n  \"schema_version\": 1,\n";
         stream << "  \"engine\": \"" << JsonEscape(schema.validation.familyEvidence) << "\",\n";
+        stream << "  \"profile\": {\"id\":\"" << JsonEscape(schema.validation.profileId)
+               << "\",\"label\":\"" << JsonEscape(schema.validation.profileLabel)
+               << "\",\"version_range\":\"" << JsonEscape(schema.validation.profileVersionRange) << "\"},\n";
         stream << "  \"module\": {\"name\":\"" << JsonEscape(context_.Module().name)
                << "\",\"base\":\"" << Hex(context_.Module().base) << "\",\"end\":\""
                << Hex(context_.Module().end) << "\",\"architecture\":\""
@@ -1046,6 +1053,10 @@ namespace anduefker::generation
         stream << "{\n  \"schema_version\": 1,\n";
         stream << "  \"status\": \"" << StatusName(reflection_.status) << "\",\n";
         stream << "  \"engine\": \"" << JsonEscape(context_.Schema().validation.familyEvidence) << "\",\n";
+        stream << "  \"profile\": {\"id\":\""
+               << JsonEscape(context_.Schema().validation.profileId) << "\",\"label\":\""
+               << JsonEscape(context_.Schema().validation.profileLabel) << "\",\"version_range\":\""
+               << JsonEscape(context_.Schema().validation.profileVersionRange) << "\"},\n";
         stream << "  \"stats\": {\"parsed_types\": " << reflection_.stats.parsedTypes
                << ", \"parsed_enums\": " << reflection_.stats.parsedEnums
                << ", \"parsed_functions\": " << reflection_.stats.parsedFunctions

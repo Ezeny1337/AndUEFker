@@ -30,9 +30,9 @@ namespace anduefker::ue
 
     SchemaResolver::SchemaResolver(const IMemorySource &memory,
                                    const RuntimeBinding &binding,
-                                   const EngineVersion &version,
+                                   const EngineProfile &profile,
                                    SchemaProbeNames names)
-        : memory_(memory), binding_(binding), version_(version), names_(std::move(names))
+        : memory_(memory), binding_(binding), profile_(profile), names_(std::move(names))
     {
     }
 
@@ -1562,6 +1562,13 @@ namespace anduefker::ue
             return false;
         NameStoreReader names(memory_, binding_.nameRoot.address, binding_.names, binding_.decode,
                               schema.fname, schema.features);
+        const auto readObjectName = [&](uintptr_t object) -> std::optional<std::string>
+        {
+            const auto address = Add(object, schema.uobject.name);
+            if (!address)
+                return std::nullopt;
+            return names.ReadFName(*address);
+        };
         std::vector<uintptr_t> enumObjects;
         for (int32_t index = 0; index < objects.Count(); ++index)
         {
@@ -1780,7 +1787,7 @@ namespace anduefker::ue
             uint8_t enumFlags = 0;
             if (enumFormAddress && memory_.Read(*enumFormAddress, cppForm) && cppForm <= 2)
                 ++formHits;
-            if (schema.family == EngineFamily::UE5FProperty && enumFlagsAddress &&
+            if (schema.features.enumHasFlags && enumFlagsAddress &&
                 memory_.Read(*enumFlagsAddress, enumFlags) && (enumFlags & ~0x03u) == 0)
                 ++flagHits;
         }
@@ -1789,10 +1796,54 @@ namespace anduefker::ue
             schema.uenum.cppForm = schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2);
             report.evidence.push_back("resolved UEnum::CppForm; hits=" + std::to_string(formHits));
         }
-        if (schema.family == EngineFamily::UE5FProperty && flagHits >= requiredNonEmptyArrays)
+        if (schema.features.enumHasFlags && flagHits >= requiredNonEmptyArrays)
         {
             schema.uenum.flags = schema.uenum.cppForm >= 0 ? schema.uenum.cppForm + 1 : schema.uenum.names + static_cast<int32_t>(sizeof(uintptr_t) * 2) + 1;
             report.evidence.push_back("resolved UEnum::EnumFlags; hits=" + std::to_string(flagHits));
+        }
+        if (schema.features.enumHasFlags && schema.uenum.flags < 0)
+        {
+            report.failures.push_back("UEnum::EnumFlags was required by the structure profile but was not resolved; hits=" +
+                                      std::to_string(flagHits) + " required=" +
+                                      std::to_string(requiredNonEmptyArrays));
+            return false;
+        }
+        if (schema.features.enumHasPackage)
+        {
+            if (schema.uenum.cppForm < 0)
+            {
+                report.failures.push_back("UEnum::CppForm was required to locate EnumPackage but was not resolved");
+                return false;
+            }
+            const int32_t pointerAlignment = static_cast<int32_t>(sizeof(uintptr_t));
+            const int32_t displayNameFunction = ((schema.uenum.cppForm + 2 + pointerAlignment - 1) /
+                                                 pointerAlignment) *
+                                                pointerAlignment;
+            const int32_t packageOffset = displayNameFunction + pointerAlignment;
+            size_t packageHits = 0;
+            for (uintptr_t enumObject : enumObjects)
+            {
+                const auto packageAddress = Add(enumObject, packageOffset);
+                const auto outerAddress = Add(enumObject, schema.uobject.outer);
+                uintptr_t outer = 0;
+                if (!packageAddress || !outerAddress || !memory_.Read(*outerAddress, outer))
+                    continue;
+                outer = binding_.decode.objectOuter(outer, *outerAddress);
+                const auto packageName = names.ReadFName(*packageAddress);
+                const auto outerName = outer == 0 ? std::optional<std::string>{} : readObjectName(outer);
+                if (packageName && outerName && *packageName == *outerName)
+                    ++packageHits;
+            }
+            if (packageHits < requiredNonEmptyArrays)
+            {
+                report.failures.push_back("UEnum::EnumPackage was required by the structure profile but was not resolved; offset=" +
+                                          std::to_string(packageOffset) + " hits=" + std::to_string(packageHits) +
+                                          " required=" + std::to_string(requiredNonEmptyArrays));
+                return false;
+            }
+            schema.uenum.enumPackage = packageOffset;
+            report.evidence.push_back("resolved UEnum::EnumPackage; offset=" + std::to_string(packageOffset) +
+                                      " hits=" + std::to_string(packageHits));
         }
         schema.validation.enums = true;
         report.evidence.push_back(schema.features.enumUsesFNameData ? "UE5.6 FNameData enum family selected" : "legacy enum container family selected");
@@ -1802,16 +1853,19 @@ namespace anduefker::ue
     SchemaResolutionReport SchemaResolver::Resolve(EngineSchema &schema) const
     {
         SchemaResolutionReport report;
-        schema.family = SchemaCatalog::FamilyFor(version_);
-        schema.features = SchemaCatalog::FeaturesFor(version_);
-        report.evidence.push_back("engine feature matrix version=" + version_.ToString() +
+        report.profileId = profile_.id;
+        report.profileLabel = profile_.label;
+        schema.family = profile_.family;
+        schema.features = profile_.features;
+        report.evidence.push_back("engine structure profile=" + profile_.id +
+                                  " version_range=" + profile_.versionRange +
                                   " use_fproperty=" + std::to_string(schema.features.useFProperty) +
                                   " use_name_pool=" + std::to_string(schema.features.useNamePool) +
                                   " ffield_owner_mask=" + std::to_string(schema.features.fFieldOwnerMask) +
                                   " large_world_coordinates=" + std::to_string(schema.features.largeWorldCoordinates));
-        if (schema.family == EngineFamily::Unknown)
+        if (!profile_.IsValid())
         {
-            report.failures.push_back("engine version is unknown");
+            report.failures.push_back("engine structure profile is invalid");
             return report;
         }
 
@@ -1826,13 +1880,30 @@ namespace anduefker::ue
         schema.validation.fname = binding_.names.IsValid();
         if (schema.features.useFProperty)
             schema.validation.fields = true;
-        schema.validation.familyEvidence = version_.ToString();
+        schema.validation.profileId = profile_.id;
+        schema.validation.profileLabel = profile_.label;
+        schema.validation.profileVersionRange = profile_.versionRange;
+        schema.validation.familyEvidence = profile_.versionRange;
         if (!schema.validation.properties || !schema.validation.functions || !schema.validation.enums)
         {
             report.failures.push_back("one or more schema semantic probes failed");
             return report;
         }
         report.accepted = schema.IsReadyForReflection();
+        if (report.accepted)
+        {
+            report.score = 100;
+            if (schema.uobject.outer == schema.uobject.name + schema.fname.size)
+                report.score += 10;
+            if (schema.ufield.next == schema.uobject.outer + static_cast<int32_t>(sizeof(uintptr_t)))
+                report.score += 10;
+            if (schema.uenum.names >= 0 && schema.uenum.cppForm >= 0)
+                report.score += 5;
+            if (schema.features.enumHasFlags && schema.uenum.flags >= 0)
+                report.score += 5;
+            if (schema.features.enumHasPackage && schema.uenum.enumPackage >= 0)
+                report.score += 5;
+        }
         return report;
     }
 } // namespace anduefker::ue
