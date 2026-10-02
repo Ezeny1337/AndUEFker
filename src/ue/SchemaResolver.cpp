@@ -1037,10 +1037,7 @@ namespace anduefker::ue
     bool SchemaResolver::ResolvePropertySubtypes(EngineSchema &schema, SchemaResolutionReport &report) const
     {
         if (!schema.features.useFProperty)
-        {
-            report.evidence.push_back("property subtype probing skipped for UProperty family");
-            return true;
-        }
+            report.evidence.push_back("property subtype probing enabled for UProperty family");
 
         ObjectModelReader model(memory_, binding_, schema);
         if (!model.Initialize())
@@ -1058,8 +1055,11 @@ namespace anduefker::ue
         std::vector<uintptr_t> delegateSamples;
         const auto isDelegatePropertyName = [](const std::string &name)
         {
-            return name == "DelegateProperty" || name == "MulticastDelegateProperty" ||
-                   name == "MulticastInlineDelegateProperty" || name == "MulticastSparseDelegateProperty";
+            const std::string normalized = name.size() > 1 && name[0] == 'U' && name[1] >= 'A' && name[1] <= 'Z'
+                                               ? name.substr(1)
+                                               : name;
+            return normalized == "DelegateProperty" || normalized == "MulticastDelegateProperty" ||
+                   normalized == "MulticastInlineDelegateProperty" || normalized == "MulticastSparseDelegateProperty";
         };
         const ObjectStoreReader &objects = model.Objects();
         for (int32_t index = 0; index < objects.Count() && samples.size() < wanted.size(); ++index)
@@ -1075,11 +1075,15 @@ namespace anduefker::ue
                 continue;
             for (const FieldMetadata &field : model.Fields(*first, 2048))
             {
+                const std::string propertyClassName = field.className.size() > 1 && field.className[0] == 'U' &&
+                                                              field.className[1] >= 'A' && field.className[1] <= 'Z'
+                                                          ? field.className.substr(1)
+                                                          : field.className;
                 if (isDelegatePropertyName(field.className) && delegateSamples.size() < 128)
                     delegateSamples.push_back(field.address);
-                if (std::find(wanted.begin(), wanted.end(), field.className) != wanted.end() &&
-                    !samples.contains(field.className))
-                    samples.emplace(field.className, field.address);
+                if (std::find(wanted.begin(), wanted.end(), propertyClassName) != wanted.end() &&
+                    !samples.contains(propertyClassName))
+                    samples.emplace(propertyClassName, field.address);
             }
         }
 
@@ -1940,7 +1944,7 @@ namespace anduefker::ue
 
         // Names 是一个 TArray<TPair<FName, int64>> 类型的容器
         // CppForm 紧跟在完整的 TArray 标头（Header）之后，而不是跟在两个指针大小的字段之后
-        // ECppForm 是一个 int32 类型的枚举
+        // UE5.5+ 将 ECppForm 改为 uint8，其他已支持布局使用默认的 int32 宽度
         const int32_t enumNamesArraySize =
             ((pointerSize + static_cast<int32_t>(sizeof(int32_t) * 2) + pointerSize - 1) /
              pointerSize) *
@@ -1950,9 +1954,10 @@ namespace anduefker::ue
             return (offset + alignment - 1) / alignment * alignment;
         };
         const int32_t cppFormOffset = schema.uenum.names + enumNamesArraySize;
-        const int32_t enumFlagsOffset = cppFormOffset + static_cast<int32_t>(sizeof(uint32_t));
+        const int32_t cppFormWidth = schema.features.enumCppFormIsByte ? 1 : static_cast<int32_t>(sizeof(uint32_t));
+        const int32_t enumFlagsOffset = cppFormOffset + cppFormWidth;
         const int32_t enumFlagsWidth = schema.features.enumFlagsIsByte ? 1 : static_cast<int32_t>(sizeof(uint32_t));
-        int32_t enumDisplayNameOffset = alignOffset(cppFormOffset + static_cast<int32_t>(sizeof(uint32_t)), pointerSize);
+        int32_t enumDisplayNameOffset = alignOffset(cppFormOffset + cppFormWidth, pointerSize);
         int32_t enumPackageOffset = -1;
         if (schema.features.enumTailLayout == EnumTailLayout::FlagsDisplayNamePackage)
         {
@@ -1976,7 +1981,16 @@ namespace anduefker::ue
             const auto enumFlagsAddress = Add(enumObject, enumFlagsOffset);
             const auto enumDisplayNameAddress = Add(enumObject, enumDisplayNameOffset);
             uint32_t cppForm = 0;
-            if (enumFormAddress && memory_.Read(*enumFormAddress, cppForm) && cppForm <= 2)
+            bool cppFormValid = false;
+            if (schema.features.enumCppFormIsByte)
+            {
+                uint8_t rawCppForm = 0;
+                cppFormValid = enumFormAddress && memory_.Read(*enumFormAddress, rawCppForm);
+                cppForm = rawCppForm;
+            }
+            else
+                cppFormValid = enumFormAddress && memory_.Read(*enumFormAddress, cppForm);
+            if (cppFormValid && cppForm <= 2)
             {
                 ++formHits;
                 uintptr_t displayNameFunction = 0;
@@ -2016,7 +2030,7 @@ namespace anduefker::ue
                                       " hits=" + std::to_string(formHits));
         }
         const bool flagsConfirmed = schema.features.enumHasFlags && formHits >= requiredNonEmptyArrays &&
-                                    flagHits >= requiredNonEmptyArrays && nonZeroFlagHits > 0 &&
+                                    flagHits >= requiredNonEmptyArrays &&
                                     displayPointerHits >= requiredNonEmptyArrays;
         if (flagsConfirmed)
         {
@@ -2034,7 +2048,7 @@ namespace anduefker::ue
                                       " display_pointer_hits=" + std::to_string(displayPointerHits));
             if (schema.features.enumFlagsRequired)
             {
-                report.failures.push_back("UEnum::EnumFlags was required but no nonzero field-presence evidence was found; hits=" +
+                report.failures.push_back("UEnum::EnumFlags was required but no structurally valid field-presence evidence was found; hits=" +
                                           std::to_string(flagHits) + " nonzero=" + std::to_string(nonZeroFlagHits) +
                                           " display_pointer_hits=" + std::to_string(displayPointerHits));
                 return false;
@@ -2089,6 +2103,7 @@ namespace anduefker::ue
         report.profileId = profile_.id;
         report.profileLabel = profile_.label;
         schema.family = profile_.family;
+        schema.layout = profile_.layout;
         schema.features = profile_.features;
         report.evidence.push_back("engine structure profile=" + profile_.id +
                                   " version_range=" + profile_.versionRange +
@@ -2096,7 +2111,9 @@ namespace anduefker::ue
                                   " use_name_pool=" + std::to_string(schema.features.useNamePool) +
                                   " ffield_owner_mask=" + std::to_string(schema.features.fFieldOwnerMask) +
                                   " large_world_coordinates=" + std::to_string(schema.features.largeWorldCoordinates) +
+                                  " layout=" + SchemaLayoutVariantName(schema.layout) +
                                   " enum_tail=" + EnumTailLayoutName(schema.features.enumTailLayout) +
+                                  " enum_cpp_form_byte=" + std::to_string(schema.features.enumCppFormIsByte) +
                                   " enum_flags_required=" + std::to_string(schema.features.enumFlagsRequired));
         if (!profile_.IsValid())
         {

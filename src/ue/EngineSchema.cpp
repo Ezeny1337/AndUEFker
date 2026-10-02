@@ -2,6 +2,30 @@
 
 namespace anduefker::ue
 {
+    const char *SchemaLayoutVariantName(SchemaLayoutVariant variant)
+    {
+        switch (variant)
+        {
+        case SchemaLayoutVariant::UProperty:
+            return "uproperty";
+        case SchemaLayoutVariant::FProperty:
+            return "fproperty";
+        case SchemaLayoutVariant::FPropertyEnumFlags:
+            return "fproperty-enumflags";
+        case SchemaLayoutVariant::FFieldExplicit:
+            return "ffield-explicit";
+        case SchemaLayoutVariant::FFieldExplicitPackage:
+            return "ffield-explicit-package";
+        case SchemaLayoutVariant::FFieldTagged:
+            return "ffield-tagged";
+        case SchemaLayoutVariant::FFieldTaggedModern:
+            return "ffield-tagged-modern";
+        case SchemaLayoutVariant::Unknown:
+            return "unknown";
+        }
+        return "unknown";
+    }
+
     bool EngineSchema::IsReadyForReflection() const
     {
         const bool base = validation.uobject && validation.fname && validation.structs;

@@ -13,6 +13,20 @@ namespace anduefker::ue
         FlagsPackageDisplayName,
     };
 
+    enum class SchemaLayoutVariant
+    {
+        Unknown,
+        UProperty,
+        FProperty,
+        FPropertyEnumFlags,
+        FFieldExplicit,
+        FFieldExplicitPackage,
+        FFieldTagged,
+        FFieldTaggedModern,
+    };
+
+    [[nodiscard]] const char *SchemaLayoutVariantName(SchemaLayoutVariant variant);
+
     enum class EngineFamily
     {
         Unknown,
@@ -30,6 +44,7 @@ namespace anduefker::ue
         bool fFieldOwnerMask = false;
         bool enumHasUnderlyingType = false;
         bool enumHasFlags = false;
+        bool enumCppFormIsByte = false;
         bool enumFlagsIsByte = false;
         bool enumHasPackage = false;
         bool enumFlagsRequired = false;
@@ -158,6 +173,7 @@ namespace anduefker::ue
     struct EngineSchema
     {
         EngineFamily family = EngineFamily::Unknown;
+        SchemaLayoutVariant layout = SchemaLayoutVariant::Unknown;
         EngineFeatures features;
         FNameSchema fname;
         UObjectSchema uobject;

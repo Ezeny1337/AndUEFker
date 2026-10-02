@@ -31,6 +31,8 @@ namespace anduefker::reflection
 
     PropertyKind ReflectionReader::PropertyKindFromName(const std::string &name) const
     {
+        if (name.size() > 1 && name[0] == 'U' && name[1] >= 'A' && name[1] <= 'Z')
+            return PropertyKindFromName(name.substr(1));
         if (name == "BoolProperty")
             return PropertyKind::Bool;
         if (name == "ByteProperty")

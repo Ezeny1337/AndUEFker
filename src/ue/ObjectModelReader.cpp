@@ -6,6 +6,13 @@ namespace anduefker::ue
 {
     namespace
     {
+        std::string NormalizePropertyClassName(const std::string &name)
+        {
+            if (name.size() > 1 && name[0] == 'U' && name[1] >= 'A' && name[1] <= 'Z')
+                return name.substr(1);
+            return name;
+        }
+
         std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
         {
             if (offset < 0)
@@ -264,21 +271,22 @@ namespace anduefker::ue
             uintptr_t value = 0;
             return address && memory_.Read(*address, value) ? value : 0;
         };
-        if (base->className == "ObjectProperty" || base->className == "ObjectPropertyBase" ||
-            base->className == "SoftObjectProperty" || base->className == "WeakObjectProperty" ||
-            base->className == "LazyObjectProperty" || base->className == "InterfaceProperty")
+        const std::string propertyClassName = NormalizePropertyClassName(base->className);
+        if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" ||
+            propertyClassName == "SoftObjectProperty" || propertyClassName == "WeakObjectProperty" ||
+            propertyClassName == "LazyObjectProperty" || propertyClassName == "InterfaceProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.objectClass);
-        else if (base->className == "ClassProperty" || base->className == "SoftClassProperty")
+        else if (propertyClassName == "ClassProperty" || propertyClassName == "SoftClassProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.classMetaClass);
-        else if (base->className == "StructProperty")
+        else if (propertyClassName == "StructProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.structType);
-        else if (base->className == "ByteProperty")
+        else if (propertyClassName == "ByteProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.byteEnum);
-        else if (base->className == "ArrayProperty")
+        else if (propertyClassName == "ArrayProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.arrayInner);
-        else if (base->className == "SetProperty")
+        else if (propertyClassName == "SetProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.setElement);
-        else if (base->className == "MapProperty")
+        else if (propertyClassName == "MapProperty")
         {
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.mapBase);
             const int32_t valueOffset = schema_.propertySubtypes.mapBase >= 0
@@ -286,7 +294,7 @@ namespace anduefker::ue
                                             : -1;
             result.secondaryAddress = readOptionalPointer(valueOffset);
         }
-        else if (base->className == "EnumProperty")
+        else if (propertyClassName == "EnumProperty")
         {
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.enumBase);
             const int32_t enumOffset = schema_.propertySubtypes.enumBase >= 0
@@ -294,10 +302,10 @@ namespace anduefker::ue
                                            : -1;
             result.secondaryAddress = readOptionalPointer(enumOffset);
         }
-        else if (base->className == "OptionalProperty")
+        else if (propertyClassName == "OptionalProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.optionalValue);
-        else if (base->className == "DelegateProperty" || base->className == "MulticastDelegateProperty" ||
-                 base->className == "MulticastInlineDelegateProperty" || base->className == "MulticastSparseDelegateProperty")
+        else if (propertyClassName == "DelegateProperty" || propertyClassName == "MulticastDelegateProperty" ||
+                 propertyClassName == "MulticastInlineDelegateProperty" || propertyClassName == "MulticastSparseDelegateProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.delegateSignature);
 
         return result;

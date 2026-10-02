@@ -17,6 +17,7 @@ namespace anduefker::generation
     using ::anduefker::binding::ObjectContainerKind;
     using ::anduefker::binding::RuntimeBinding;
     using ::anduefker::ue::EngineSchema;
+    using ::anduefker::ue::SchemaLayoutVariantName;
 
     namespace
     {
@@ -968,7 +969,8 @@ namespace anduefker::generation
         stream << "  \"engine\": \"" << JsonEscape(schema.validation.familyEvidence) << "\",\n";
         stream << "  \"profile\": {\"id\":\"" << JsonEscape(schema.validation.profileId)
                << "\",\"label\":\"" << JsonEscape(schema.validation.profileLabel)
-               << "\",\"version_range\":\"" << JsonEscape(schema.validation.profileVersionRange) << "\"},\n";
+               << "\",\"version_range\":\"" << JsonEscape(schema.validation.profileVersionRange)
+               << "\",\"layout\":\"" << SchemaLayoutVariantName(schema.layout) << "\"},\n";
         stream << "  \"module\": {\"name\":\"" << JsonEscape(context_.Module().name)
                << "\",\"base\":\"" << Hex(context_.Module().base) << "\",\"end\":\""
                << Hex(context_.Module().end) << "\",\"architecture\":\""

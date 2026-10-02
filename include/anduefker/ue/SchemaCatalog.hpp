@@ -15,11 +15,12 @@ namespace anduefker::ue
         EngineVersion representativeVersion;
         EngineFamily family = EngineFamily::Unknown;
         EngineFeatures features;
+        SchemaLayoutVariant layout = SchemaLayoutVariant::Unknown;
 
         [[nodiscard]] bool IsValid() const
         {
             return !id.empty() && !label.empty() && representativeVersion.IsValid() &&
-                   family != EngineFamily::Unknown;
+                   family != EngineFamily::Unknown && layout != SchemaLayoutVariant::Unknown;
         }
     };
 
@@ -34,6 +35,8 @@ namespace anduefker::ue
     public:
         [[nodiscard]] static std::vector<EngineProfile> Profiles();
         [[nodiscard]] static EngineFeatures FeaturesFor(const EngineVersion &version);
+        [[nodiscard]] static EngineFeatures FeaturesForLayout(SchemaLayoutVariant layout);
+        [[nodiscard]] static SchemaLayoutVariant LayoutFor(const EngineVersion &version);
         [[nodiscard]] static EngineFamily FamilyFor(const EngineVersion &version);
     };
 } // namespace anduefker::ue

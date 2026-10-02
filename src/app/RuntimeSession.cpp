@@ -20,6 +20,7 @@ namespace anduefker::app
     using ::anduefker::memory::ReadStats;
     using ::anduefker::ue::EngineProfile;
     using ::anduefker::ue::SchemaCatalog;
+    using ::anduefker::ue::SchemaLayoutVariantName;
 
     namespace
     {
@@ -231,6 +232,7 @@ namespace anduefker::app
             const SchemaResolutionReport candidateReport = resolver.Resolve(candidateSchema);
             Note(RuntimeLogLevel::Debug, "schema_candidate id=" + profile.id +
                                              " range=" + profile.versionRange +
+                                             " layout=" + SchemaLayoutVariantName(profile.layout) +
                                              " accepted=" + std::to_string(candidateReport.accepted) +
                                              " score=" + std::to_string(candidateReport.score));
             if (candidateReport.accepted)
