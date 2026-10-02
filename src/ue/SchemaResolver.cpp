@@ -1015,7 +1015,8 @@ namespace anduefker::ue
         schema.property.elementSize = selectedTail.header.elementSize;
         schema.property.propertyFlags = selectedTail.propertyFlags;
         schema.property.offsetInternal = selectedTail.offsetInternal;
-        report.evidence.push_back("resolved FProperty layout candidate; source_offset=" +
+        report.evidence.push_back("resolved " + std::string(schema.features.useFProperty ? "FProperty" : "UProperty") +
+                                  " layout candidate; source_offset=" +
                                   std::to_string(propertyStart) + " selected_array_dim=" +
                                   std::to_string(schema.property.arrayDim) + " selected_element_size=" +
                                   std::to_string(schema.property.elementSize) + " flags=" +
@@ -1055,7 +1056,8 @@ namespace anduefker::ue
         std::vector<uintptr_t> delegateSamples;
         const auto isDelegatePropertyName = [](const std::string &name)
         {
-            const std::string normalized = name.size() > 1 && name[0] == 'U' && name[1] >= 'A' && name[1] <= 'Z'
+            const std::string normalized = name.size() > 1 && (name[0] == 'U' || name[0] == 'F') &&
+                                                   name[1] >= 'A' && name[1] <= 'Z'
                                                ? name.substr(1)
                                                : name;
             return normalized == "DelegateProperty" || normalized == "MulticastDelegateProperty" ||
@@ -1075,7 +1077,8 @@ namespace anduefker::ue
                 continue;
             for (const FieldMetadata &field : model.Fields(*first, 2048))
             {
-                const std::string propertyClassName = field.className.size() > 1 && field.className[0] == 'U' &&
+                const std::string propertyClassName = field.className.size() > 1 &&
+                                                              (field.className[0] == 'U' || field.className[0] == 'F') &&
                                                               field.className[1] >= 'A' && field.className[1] <= 'Z'
                                                           ? field.className.substr(1)
                                                           : field.className;
@@ -1292,7 +1295,8 @@ namespace anduefker::ue
             if (!memory_.Read(*classAddress, classObject))
                 continue;
             const auto className = readObjectName(classObject);
-            if (className && *className == "Function")
+            if (className && (*className == "Function" || *className == "DelegateFunction" ||
+                              *className == "SparseDelegateFunction" || *className == "VerseFunction"))
                 functions.push_back(FunctionSample{*object, false, {}});
         }
         if (functions.size() < 2)

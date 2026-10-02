@@ -8,7 +8,8 @@ namespace anduefker::ue
     {
         std::string NormalizePropertyClassName(const std::string &name)
         {
-            if (name.size() > 1 && name[0] == 'U' && name[1] >= 'A' && name[1] <= 'Z')
+            if (name.size() > 1 && (name[0] == 'U' || name[0] == 'F') &&
+                name[1] >= 'A' && name[1] <= 'Z')
                 return name.substr(1);
             return name;
         }

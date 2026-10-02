@@ -8,6 +8,30 @@ namespace anduefker::reflection
 {
     namespace
     {
+        std::string NormalizeFieldClassName(const std::string &name)
+        {
+            if (name.size() > 1 && (name[0] == 'U' || name[0] == 'F') &&
+                name[1] >= 'A' && name[1] <= 'Z')
+                return name.substr(1);
+            return name;
+        }
+
+        bool IsFunctionClassName(const std::string &name)
+        {
+            const std::string normalized = NormalizeFieldClassName(name);
+            return normalized == "Function" || normalized == "DelegateFunction" ||
+                   normalized == "SparseDelegateFunction" || normalized == "VerseFunction";
+        }
+
+        bool IsPropertyClassName(const std::string &name)
+        {
+            const std::string normalized = NormalizeFieldClassName(name);
+            if (normalized == "ObjectPropertyBase")
+                return true;
+            return normalized == "Property" ||
+                   (normalized.size() >= 8 && normalized.compare(normalized.size() - 8, 8, "Property") == 0);
+        }
+
         std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
         {
             if (offset < 0 || base > UINTPTR_MAX - static_cast<uintptr_t>(offset))
@@ -31,70 +55,69 @@ namespace anduefker::reflection
 
     PropertyKind ReflectionReader::PropertyKindFromName(const std::string &name) const
     {
-        if (name.size() > 1 && name[0] == 'U' && name[1] >= 'A' && name[1] <= 'Z')
-            return PropertyKindFromName(name.substr(1));
-        if (name == "BoolProperty")
+        const std::string normalized = NormalizeFieldClassName(name);
+        if (normalized == "BoolProperty")
             return PropertyKind::Bool;
-        if (name == "ByteProperty")
+        if (normalized == "ByteProperty")
             return PropertyKind::Byte;
-        if (name == "Int8Property")
+        if (normalized == "Int8Property")
             return PropertyKind::Int8;
-        if (name == "Int16Property")
+        if (normalized == "Int16Property")
             return PropertyKind::Int16;
-        if (name == "IntProperty" || name == "Int32Property")
+        if (normalized == "IntProperty" || normalized == "Int32Property")
             return PropertyKind::Int32;
-        if (name == "Int64Property")
+        if (normalized == "Int64Property")
             return PropertyKind::Int64;
-        if (name == "UInt16Property")
+        if (normalized == "UInt16Property")
             return PropertyKind::UInt16;
-        if (name == "UInt32Property")
+        if (normalized == "UInt32Property")
             return PropertyKind::UInt32;
-        if (name == "UInt64Property")
+        if (normalized == "UInt64Property")
             return PropertyKind::UInt64;
-        if (name == "FloatProperty")
+        if (normalized == "FloatProperty")
             return PropertyKind::Float;
-        if (name == "DoubleProperty")
+        if (normalized == "DoubleProperty")
             return PropertyKind::Double;
-        if (name == "NameProperty")
+        if (normalized == "NameProperty")
             return PropertyKind::Name;
-        if (name == "StrProperty")
+        if (normalized == "StrProperty")
             return PropertyKind::String;
-        if (name == "TextProperty")
+        if (normalized == "TextProperty")
             return PropertyKind::Text;
-        if (name == "ObjectProperty" || name == "ObjectPtrProperty")
+        if (normalized == "ObjectProperty" || normalized == "ObjectPtrProperty")
             return PropertyKind::Object;
-        if (name == "SoftObjectProperty")
+        if (normalized == "SoftObjectProperty")
             return PropertyKind::SoftObject;
-        if (name == "WeakObjectProperty")
+        if (normalized == "WeakObjectProperty")
             return PropertyKind::WeakObject;
-        if (name == "LazyObjectProperty")
+        if (normalized == "LazyObjectProperty")
             return PropertyKind::LazyObject;
-        if (name == "ClassProperty")
+        if (normalized == "ClassProperty")
             return PropertyKind::Class;
-        if (name == "SoftClassProperty")
+        if (normalized == "SoftClassProperty")
             return PropertyKind::SoftClass;
-        if (name == "StructProperty")
+        if (normalized == "StructProperty")
             return PropertyKind::Struct;
-        if (name == "EnumProperty")
+        if (normalized == "EnumProperty")
             return PropertyKind::Enum;
-        if (name == "ArrayProperty")
+        if (normalized == "ArrayProperty")
             return PropertyKind::Array;
-        if (name == "SetProperty")
+        if (normalized == "SetProperty")
             return PropertyKind::Set;
-        if (name == "MapProperty")
+        if (normalized == "MapProperty")
             return PropertyKind::Map;
-        if (name == "InterfaceProperty")
+        if (normalized == "InterfaceProperty")
             return PropertyKind::Interface;
-        if (name == "DelegateProperty")
+        if (normalized == "DelegateProperty")
             return PropertyKind::Delegate;
-        if (name == "MulticastDelegateProperty" || name == "MulticastInlineDelegateProperty" ||
-            name == "MulticastSparseDelegateProperty")
+        if (normalized == "MulticastDelegateProperty" || normalized == "MulticastInlineDelegateProperty" ||
+            normalized == "MulticastSparseDelegateProperty")
             return PropertyKind::MulticastDelegate;
-        if (name == "FieldPathProperty")
+        if (normalized == "FieldPathProperty")
             return PropertyKind::FieldPath;
-        if (name == "OptionalProperty")
+        if (normalized == "OptionalProperty")
             return PropertyKind::Optional;
-        if (name == "Utf8StrProperty" || name == "AnsiStrProperty")
+        if (normalized == "Utf8StrProperty" || normalized == "AnsiStrProperty")
             return PropertyKind::String;
         return PropertyKind::Unknown;
     }
@@ -275,6 +298,17 @@ namespace anduefker::reflection
         int64_t cursor = 0;
         while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
         {
+            const auto field = objects_.Field(current);
+            if (!field)
+            {
+                ++stats.failures;
+                break;
+            }
+            if (!IsPropertyClassName(field->className))
+            {
+                current = field->nextAddress;
+                continue;
+            }
             const auto property = ReadProperty(current, 0, stats);
             if (property)
                 type.properties.push_back(*property);
@@ -337,9 +371,6 @@ namespace anduefker::reflection
                     cursor = static_cast<int64_t>(property->offset) + total;
                 }
             }
-            const auto field = objects_.Field(current);
-            if (!field)
-                break;
             current = field->nextAddress;
         }
     }
@@ -356,6 +387,17 @@ namespace anduefker::reflection
         bool sawProperty = false;
         while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
         {
+            const auto field = objects_.Field(current);
+            if (!field)
+            {
+                ++stats.failures;
+                break;
+            }
+            if (!IsPropertyClassName(field->className))
+            {
+                current = field->nextAddress;
+                continue;
+            }
             const auto property = ReadProperty(current, 0, stats);
             if (!property)
             {
@@ -371,12 +413,6 @@ namespace anduefker::reflection
             }
             if (!isParameter)
             {
-                const auto field = objects_.Field(current);
-                if (!field)
-                {
-                    ++stats.failures;
-                    break;
-                }
                 current = field->nextAddress;
                 continue;
             }
@@ -436,12 +472,6 @@ namespace anduefker::reflection
             {
                 cursor = static_cast<int64_t>(property->offset) + total;
             }
-            const auto field = objects_.Field(current);
-            if (!field)
-            {
-                ++stats.failures;
-                break;
-            }
             current = field->nextAddress;
         }
 
@@ -467,7 +497,7 @@ namespace anduefker::reflection
                 ++stats.failures;
                 break;
             }
-            if (field->className == "Function")
+            if (IsFunctionClassName(field->className))
             {
                 FunctionIR function;
                 function.address = current;
