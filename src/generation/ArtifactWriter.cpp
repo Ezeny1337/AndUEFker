@@ -671,6 +671,12 @@ namespace anduefker::generation
         stream << "    \"unresolved_type_details\": " << stats.unresolvedTypeDetails << ",\n";
         stream << "    \"layout_conflicts\": " << stats.layoutConflicts << ",\n";
         stream << "    \"skipped_objects\": " << stats.skippedObjects << ",\n";
+        stream << "    \"empty_object_slots\": " << stats.emptyObjectSlots << ",\n";
+        stream << "    \"object_read_failures\": " << stats.objectReadFailures << ",\n";
+        stream << "    \"class_name_read_failures\": " << stats.classNameReadFailures << ",\n";
+        stream << "    \"skipped_class_default_objects\": " << stats.skippedClassDefaultObjects << ",\n";
+        stream << "    \"skipped_incomplete_objects\": " << stats.skippedIncompleteObjects << ",\n";
+        stream << "    \"object_diagnostic_samples_omitted\": " << stats.objectDiagnosticSamplesOmitted << ",\n";
         stream << "    \"failures\": " << stats.failures << ",\n";
         stream << "    \"opaque_fields\": " << opaqueFields << "\n";
         stream << "  }\n";
@@ -686,6 +692,13 @@ namespace anduefker::generation
         stream << "  \"summary\": {\"unknown_properties\": " << reflection_.stats.unknownProperties
                << ", \"unresolved_type_details\": " << reflection_.stats.unresolvedTypeDetails
                << ", \"layout_conflicts\": " << reflection_.stats.layoutConflicts
+               << ", \"skipped_objects\": " << reflection_.stats.skippedObjects
+               << ", \"empty_object_slots\": " << reflection_.stats.emptyObjectSlots
+               << ", \"object_read_failures\": " << reflection_.stats.objectReadFailures
+               << ", \"class_name_read_failures\": " << reflection_.stats.classNameReadFailures
+               << ", \"skipped_class_default_objects\": " << reflection_.stats.skippedClassDefaultObjects
+               << ", \"skipped_incomplete_objects\": " << reflection_.stats.skippedIncompleteObjects
+               << ", \"object_diagnostic_samples_omitted\": " << reflection_.stats.objectDiagnosticSamplesOmitted
                << ", \"failures\": " << reflection_.stats.failures << "},\n";
         stream << "  \"diagnostics\": [";
         for (size_t index = 0; index < reflection_.diagnostics.size(); ++index)
@@ -1088,6 +1101,15 @@ namespace anduefker::generation
                << ", \"parsed_properties\": " << reflection_.stats.parsedProperties
                << ", \"unknown_properties\": " << reflection_.stats.unknownProperties
                << ", \"unresolved_type_details\": " << reflection_.stats.unresolvedTypeDetails
+               << ", \"object_slots\": " << reflection_.stats.objectSlots
+               << ", \"valid_objects\": " << reflection_.stats.validObjects
+               << ", \"skipped_objects\": " << reflection_.stats.skippedObjects
+               << ", \"empty_object_slots\": " << reflection_.stats.emptyObjectSlots
+               << ", \"object_read_failures\": " << reflection_.stats.objectReadFailures
+               << ", \"class_name_read_failures\": " << reflection_.stats.classNameReadFailures
+               << ", \"skipped_class_default_objects\": " << reflection_.stats.skippedClassDefaultObjects
+               << ", \"skipped_incomplete_objects\": " << reflection_.stats.skippedIncompleteObjects
+               << ", \"object_diagnostic_samples_omitted\": " << reflection_.stats.objectDiagnosticSamplesOmitted
                << ", \"failures\": " << reflection_.stats.failures << "},\n";
         stream << "  \"types\": [\n";
         for (size_t index = 0; index < reflection_.types.size(); ++index)

@@ -590,22 +590,65 @@ namespace anduefker::reflection
         }
         result.stats.objectSlots = objects_.Count();
 
+        constexpr int32_t maxObjectSamplesPerReason = 8;
+        const auto recordObjectDiagnostic = [&](int32_t count, const auto &message)
+        {
+            if (count <= maxObjectSamplesPerReason)
+                result.diagnostics.push_back(message());
+            else
+                ++result.stats.objectDiagnosticSamplesOmitted;
+        };
+        const auto objectIdentity = [&](int32_t index, uintptr_t object, const std::string &className,
+                                        uint32_t flags)
+        {
+            const auto name = objects_.Name(object);
+            return "index=" + std::to_string(index) + " address=" + std::to_string(object) +
+                   " class=" + className + " name=" + (name ? *name : "<unreadable>") +
+                   " flags=" + std::to_string(flags);
+        };
+
         std::unordered_set<uintptr_t> seenTypes;
         for (int32_t index = 0; index < objects_.Count(); ++index)
         {
-            const auto object = objects_.ObjectAt(index);
-            if (!object)
+            const ObjectReadResult objectResult = objects_.Objects().ReadObject(index);
+            if (!objectResult.IsValid())
             {
                 ++result.stats.skippedObjects;
+                if (objectResult.status == ObjectReadStatus::Empty)
+                {
+                    ++result.stats.emptyObjectSlots;
+                    recordObjectDiagnostic(result.stats.emptyObjectSlots, [&]
+                                           { return "empty object slot: index=" + std::to_string(index) +
+                                                    " read_address=" + std::to_string(objectResult.readAddress); });
+                }
+                else
+                {
+                    ++result.stats.objectReadFailures;
+                    ++result.stats.failures;
+                    recordObjectDiagnostic(result.stats.objectReadFailures, [&]
+                                           { return "object slot could not be read: index=" + std::to_string(index) +
+                                                    " reason=" + ::anduefker::ue::ObjectReadStatusName(objectResult.status) +
+                                                    " read_address=" + std::to_string(objectResult.readAddress) +
+                                                    " pointer=" + std::to_string(objectResult.address) +
+                                                    " read_error=" + std::to_string(static_cast<int>(objectResult.readError)); });
+                }
                 continue;
             }
+            const uintptr_t object = objectResult.address;
             ++result.stats.validObjects;
-            const auto className = objects_.ClassName(*object);
+            const auto className = objects_.ClassName(object);
             if (!className)
+            {
+                ++result.stats.classNameReadFailures;
+                ++result.stats.failures;
+                recordObjectDiagnostic(result.stats.classNameReadFailures, [&]
+                                       { return "object class name could not be read: index=" + std::to_string(index) +
+                                                " address=" + std::to_string(object); });
                 continue;
+            }
             if (*className != "Enum" && *className != "Class" && *className != "ScriptStruct")
                 continue;
-            const auto objectFlags = objects_.Flags(*object);
+            const auto objectFlags = objects_.Flags(object);
             if (!objectFlags)
             {
                 ++result.stats.failures;
@@ -613,33 +656,39 @@ namespace anduefker::reflection
             }
             if ((*objectFlags & ::anduefker::ue::kRFClassDefaultObject) != 0)
             {
+                ++result.stats.skippedClassDefaultObjects;
                 ++result.stats.skippedObjects;
+                recordObjectDiagnostic(result.stats.skippedClassDefaultObjects, [&]
+                                       { return "skipped reflection class default object: " +
+                                                objectIdentity(index, object, *className, *objectFlags); });
                 continue;
             }
             if ((*objectFlags & ::anduefker::ue::kRFIncompleteLoad) != 0)
             {
+                ++result.stats.skippedIncompleteObjects;
                 ++result.stats.skippedObjects;
                 ++result.stats.failures;
-                result.diagnostics.push_back("reflection definition is not fully loaded: address=" +
-                                             std::to_string(*object));
+                recordObjectDiagnostic(result.stats.skippedIncompleteObjects, [&]
+                                       { return "reflection definition is not fully loaded: " +
+                                                objectIdentity(index, object, *className, *objectFlags); });
                 continue;
             }
             if (*className == "Enum")
             {
-                const auto name = objects_.Name(*object);
+                const auto name = objects_.Name(object);
                 if (!name)
                 {
                     ++result.stats.failures;
                     continue;
                 }
                 EnumIR enumeration;
-                enumeration.address = *object;
+                enumeration.address = object;
                 enumeration.name = *name;
-                const auto fullName = objects_.FullName(*object);
+                const auto fullName = objects_.FullName(object);
                 enumeration.fullName = fullName ? *fullName : ("Enum " + *name);
                 if (schema_.uenum.cppForm >= 0)
                 {
-                    const auto address = Add(*object, schema_.uenum.cppForm);
+                    const auto address = Add(object, schema_.uenum.cppForm);
                     if (address)
                     {
                         if (schema_.features.enumCppFormIsByte)
@@ -658,7 +707,7 @@ namespace anduefker::reflection
                 }
                 if (schema_.uenum.flags >= 0)
                 {
-                    const auto address = Add(*object, schema_.uenum.flags);
+                    const auto address = Add(object, schema_.uenum.flags);
                     if (address)
                     {
                         if (schema_.features.enumFlagsIsByte)
@@ -675,7 +724,7 @@ namespace anduefker::reflection
                         }
                     }
                 }
-                for (const EnumValueMetadata &value : objects_.EnumValues(*object))
+                for (const EnumValueMetadata &value : objects_.EnumValues(object))
                     enumeration.values.push_back(EnumValueIR{value.name, value.value});
                 result.enums.push_back(std::move(enumeration));
                 ++result.stats.parsedEnums;
@@ -683,10 +732,10 @@ namespace anduefker::reflection
             }
             if (*className != "Class" && *className != "ScriptStruct")
                 continue;
-            if (!seenTypes.insert(*object).second)
+            if (!seenTypes.insert(object).second)
                 continue;
 
-            const auto type = ReadType(*object, *className == "Class" ? TypeKind::Class : TypeKind::Struct, result);
+            const auto type = ReadType(object, *className == "Class" ? TypeKind::Class : TypeKind::Struct, result);
             if (!type)
             {
                 ++result.stats.failures;
@@ -695,6 +744,11 @@ namespace anduefker::reflection
             result.types.push_back(*type);
             ++result.stats.parsedTypes;
         }
+
+        if (result.stats.objectDiagnosticSamplesOmitted != 0)
+            result.diagnostics.push_back("object diagnostic samples omitted=" +
+                                         std::to_string(result.stats.objectDiagnosticSamplesOmitted) +
+                                         "; sample limit per reason=" + std::to_string(maxObjectSamplesPerReason));
 
         std::unordered_map<uintptr_t, size_t> enumByAddress;
         for (size_t index = 0; index < result.enums.size(); ++index)

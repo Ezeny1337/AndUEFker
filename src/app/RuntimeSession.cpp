@@ -419,6 +419,8 @@ namespace anduefker::app
             reflection_.diagnostics.push_back("unresolved type details=" + std::to_string(reflection_.stats.unresolvedTypeDetails));
         if (reflection_.stats.layoutConflicts != 0)
             reflection_.diagnostics.push_back("layout conflicts=" + std::to_string(reflection_.stats.layoutConflicts));
+        for (const std::string &diagnostic : reflection_.diagnostics)
+            Note(RuntimeLogLevel::Debug, "reflection: " + diagnostic);
         Note(RuntimeLogLevel::Info, "Reflection status=" + std::to_string(static_cast<int>(reflection_.status)) +
                                         " types=" + std::to_string(reflection_.stats.parsedTypes) +
                                         " properties=" + std::to_string(reflection_.stats.parsedProperties) +
@@ -426,6 +428,15 @@ namespace anduefker::app
                                         " enums=" + std::to_string(reflection_.stats.parsedEnums) +
                                         " unknown_properties=" + std::to_string(reflection_.stats.unknownProperties) +
                                         " unresolved_type_details=" + std::to_string(reflection_.stats.unresolvedTypeDetails) +
+                                        " object_slots=" + std::to_string(reflection_.stats.objectSlots) +
+                                        " valid_objects=" + std::to_string(reflection_.stats.validObjects) +
+                                        " skipped_objects=" + std::to_string(reflection_.stats.skippedObjects) +
+                                        " empty_object_slots=" + std::to_string(reflection_.stats.emptyObjectSlots) +
+                                        " object_read_failures=" + std::to_string(reflection_.stats.objectReadFailures) +
+                                        " class_name_read_failures=" + std::to_string(reflection_.stats.classNameReadFailures) +
+                                        " skipped_class_default_objects=" + std::to_string(reflection_.stats.skippedClassDefaultObjects) +
+                                        " skipped_incomplete_objects=" + std::to_string(reflection_.stats.skippedIncompleteObjects) +
+                                        " object_diagnostic_samples_omitted=" + std::to_string(reflection_.stats.objectDiagnosticSamplesOmitted) +
                                         " failures=" + std::to_string(reflection_.stats.failures));
         if (reflection_.status == ParseStatus::Failed)
         {

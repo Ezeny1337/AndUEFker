@@ -171,7 +171,14 @@ namespace anduefker::ir
         int32_t unknownProperties = 0;
         int32_t unresolvedTypeDetails = 0;
         int32_t layoutConflicts = 0;
+        // 包含空槽、槽位读取失败、类默认对象和未完成加载的反射定义。
         int32_t skippedObjects = 0;
+        int32_t emptyObjectSlots = 0;
+        int32_t objectReadFailures = 0;
+        int32_t classNameReadFailures = 0;
+        int32_t skippedClassDefaultObjects = 0;
+        int32_t skippedIncompleteObjects = 0;
+        int32_t objectDiagnosticSamplesOmitted = 0;
         int32_t failures = 0;
     };
 

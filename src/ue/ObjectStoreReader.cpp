@@ -33,12 +33,30 @@ namespace anduefker::ue
     {
     }
 
-    std::optional<uintptr_t> ObjectStoreReader::ReadPointer(uintptr_t address) const
+    const char *ObjectReadStatusName(ObjectReadStatus status)
     {
-        uintptr_t value = 0;
-        if (!memory_.Read(address, value))
-            return std::nullopt;
-        return value;
+        switch (status)
+        {
+        case ObjectReadStatus::Valid:
+            return "valid";
+        case ObjectReadStatus::Empty:
+            return "empty";
+        case ObjectReadStatus::NotInitialized:
+            return "not-initialized";
+        case ObjectReadStatus::InvalidIndex:
+            return "invalid-index";
+        case ObjectReadStatus::AddressOverflow:
+            return "address-overflow";
+        case ObjectReadStatus::UnreadableChunk:
+            return "unreadable-chunk";
+        case ObjectReadStatus::InvalidChunk:
+            return "invalid-chunk";
+        case ObjectReadStatus::UnreadableObject:
+            return "unreadable-object";
+        case ObjectReadStatus::InvalidObject:
+            return "invalid-object";
+        }
+        return "unknown";
     }
 
     bool ObjectStoreReader::Initialize()
@@ -72,49 +90,58 @@ namespace anduefker::ue
         return true;
     }
 
-    std::optional<uintptr_t> ObjectStoreReader::ReadItemAddress(int32_t index) const
-    {
-        if (!initialized_ || index < 0 || index >= count_)
-            return std::nullopt;
-
-        if (layout_.kind == ObjectContainerKind::Fixed)
-            return AddScaled(storage_, index, layout_.itemStride);
-
-        if (layout_.elementsPerChunk <= 0)
-            return std::nullopt;
-
-        const int32_t chunkIndex = index / layout_.elementsPerChunk;
-        const int32_t withinChunk = index % layout_.elementsPerChunk;
-        const auto chunkSlot = AddScaled(storage_, chunkIndex, static_cast<int32_t>(sizeof(uintptr_t)));
-        if (!chunkSlot)
-            return std::nullopt;
-
-        const auto rawChunk = ReadPointer(*chunkSlot);
-        if (!rawChunk)
-            return std::nullopt;
-        const uintptr_t chunk = decode_.objectChunk(*rawChunk, *chunkSlot);
-        if (chunk == 0 || !memory_.IsReadable(chunk, sizeof(uintptr_t)))
-            return std::nullopt;
-        return AddScaled(chunk, withinChunk, layout_.itemStride);
-    }
-
     std::optional<uintptr_t> ObjectStoreReader::ObjectAt(int32_t index) const
     {
-        const auto item = ReadItemAddress(index);
+        const ObjectReadResult result = ReadObject(index);
+        return result.IsValid() ? std::optional<uintptr_t>(result.address) : std::nullopt;
+    }
+
+    ObjectReadResult ObjectStoreReader::ReadObject(int32_t index) const
+    {
+        if (!initialized_)
+            return {};
+        if (index < 0 || index >= count_)
+            return {ObjectReadStatus::InvalidIndex};
+
+        std::optional<uintptr_t> item;
+        if (layout_.kind == ObjectContainerKind::Fixed)
+        {
+            item = AddScaled(storage_, index, layout_.itemStride);
+        }
+        else
+        {
+            const int32_t chunkIndex = index / layout_.elementsPerChunk;
+            const int32_t withinChunk = index % layout_.elementsPerChunk;
+            const auto chunkSlot = AddScaled(storage_, chunkIndex, static_cast<int32_t>(sizeof(uintptr_t)));
+            if (!chunkSlot)
+                return {ObjectReadStatus::AddressOverflow};
+
+            uintptr_t rawChunk = 0;
+            const auto read = memory_.ReadBytes(*chunkSlot, &rawChunk, sizeof(rawChunk));
+            if (!read.Ok())
+                return {ObjectReadStatus::UnreadableChunk, 0, *chunkSlot, read.error};
+            const uintptr_t chunk = decode_.objectChunk(rawChunk, *chunkSlot);
+            if (chunk == 0 || !memory_.IsReadable(chunk, sizeof(uintptr_t)))
+                return {ObjectReadStatus::InvalidChunk, chunk, *chunkSlot};
+            item = AddScaled(chunk, withinChunk, layout_.itemStride);
+        }
         if (!item)
-            return std::nullopt;
+            return {ObjectReadStatus::AddressOverflow};
 
         const auto objectSlot = AddOffset(*item, static_cast<uintptr_t>(layout_.itemObjectOffset));
         if (!objectSlot)
-            return std::nullopt;
+            return {ObjectReadStatus::AddressOverflow};
 
-        const auto rawObject = ReadPointer(*objectSlot);
-        if (!rawObject || *rawObject == 0)
-            return std::nullopt;
+        uintptr_t rawObject = 0;
+        const auto read = memory_.ReadBytes(*objectSlot, &rawObject, sizeof(rawObject));
+        if (!read.Ok())
+            return {ObjectReadStatus::UnreadableObject, 0, *objectSlot, read.error};
+        if (rawObject == 0)
+            return {ObjectReadStatus::Empty, 0, *objectSlot};
 
-        const uintptr_t object = decode_.objectPointer(*rawObject, *objectSlot);
+        const uintptr_t object = decode_.objectPointer(rawObject, *objectSlot);
         if (object == 0 || !memory_.IsReadable(object, sizeof(uintptr_t)))
-            return std::nullopt;
-        return object;
+            return {ObjectReadStatus::InvalidObject, object, *objectSlot};
+        return {ObjectReadStatus::Valid, object, *objectSlot};
     }
 } // namespace anduefker::ue

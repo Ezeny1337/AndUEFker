@@ -32,6 +32,8 @@ namespace anduefker::reflection
     using ::anduefker::ue::IsPropertyFieldKind;
     using ::anduefker::ue::NormalizeRuntimeFieldName;
     using ::anduefker::ue::ObjectModelReader;
+    using ::anduefker::ue::ObjectReadResult;
+    using ::anduefker::ue::ObjectReadStatus;
     using ::anduefker::ue::PropertyMetadata;
 
     class ReflectionReader

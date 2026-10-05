@@ -13,6 +13,32 @@ namespace anduefker::ue
     using ::anduefker::binding::ObjectContainerKind;
     using ::anduefker::binding::ObjectContainerLayout;
     using ::anduefker::memory::IMemorySource;
+    using ::anduefker::memory::ReadError;
+
+    enum class ObjectReadStatus
+    {
+        Valid,
+        Empty,
+        NotInitialized,
+        InvalidIndex,
+        AddressOverflow,
+        UnreadableChunk,
+        InvalidChunk,
+        UnreadableObject,
+        InvalidObject,
+    };
+
+    [[nodiscard]] const char *ObjectReadStatusName(ObjectReadStatus status);
+
+    struct ObjectReadResult
+    {
+        ObjectReadStatus status = ObjectReadStatus::NotInitialized;
+        uintptr_t address = 0;
+        uintptr_t readAddress = 0;
+        ReadError readError = ReadError::None;
+
+        [[nodiscard]] bool IsValid() const { return status == ObjectReadStatus::Valid; }
+    };
 
     class ObjectStoreReader
     {
@@ -26,11 +52,9 @@ namespace anduefker::ue
         [[nodiscard]] bool IsInitialized() const { return initialized_; }
         [[nodiscard]] int32_t Count() const { return count_; }
         [[nodiscard]] std::optional<uintptr_t> ObjectAt(int32_t index) const;
+        [[nodiscard]] ObjectReadResult ReadObject(int32_t index) const;
 
     private:
-        [[nodiscard]] std::optional<uintptr_t> ReadItemAddress(int32_t index) const;
-        [[nodiscard]] std::optional<uintptr_t> ReadPointer(uintptr_t address) const;
-
         const IMemorySource &memory_;
         uintptr_t root_ = 0;
         ObjectContainerLayout layout_;
