@@ -93,27 +93,6 @@ namespace anduefker::ue
         [[nodiscard]] SchemaResolutionReport Resolve(EngineSchema &schema) const;
 
     private:
-        [[nodiscard]] std::optional<uintptr_t> FindObjectByName(const EngineSchema &schema,
-                                                                const std::string &name) const;
-        [[nodiscard]] bool FindPointerField(uintptr_t first,
-                                            uintptr_t expected,
-                                            int32_t minOffset,
-                                            int32_t maxOffset,
-                                            int32_t &result) const;
-        [[nodiscard]] bool FindInt32Field(uintptr_t object,
-                                          int32_t expected,
-                                          int32_t minOffset,
-                                          int32_t maxOffset,
-                                          int32_t &result) const;
-        [[nodiscard]] bool ValidateUObjectSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolveUObjectSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolveStructSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolveFieldSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolvePropertySchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolvePropertySubtypes(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolveFunctionSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        [[nodiscard]] bool ResolveEnumSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-
         const IMemorySource &memory_;
         const RuntimeBinding &binding_;
         EngineProfile profile_;

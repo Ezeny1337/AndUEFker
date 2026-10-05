@@ -61,7 +61,13 @@ add_library(anduefker_core STATIC
     src/ue/ObjectModelReader.cpp
     src/ue/ObjectStoreReader.cpp
     src/ue/SchemaCatalog.cpp
+    src/ue/SchemaEnum.cpp
+    src/ue/SchemaField.cpp
+    src/ue/SchemaFunction.cpp
+    src/ue/SchemaObject.cpp
+    src/ue/SchemaProperty.cpp
     src/ue/SchemaResolver.cpp
+    src/ue/SchemaStruct.cpp
     src/ue/SchemaSelection.cpp
 )
 
