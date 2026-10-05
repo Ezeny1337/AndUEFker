@@ -58,7 +58,8 @@ namespace anduefker::generation
             std::vector<std::string> diagnostics;
             [[nodiscard]] ParseStatus Status() const
             {
-                return opaqueFields == 0 && omittedFields == 0 && layoutWarnings == 0 ? ParseStatus::Complete : ParseStatus::Partial;
+                // 不透明容器是有意的描述，而不是缺少字段
+                return omittedFields == 0 && layoutWarnings == 0 ? ParseStatus::Complete : ParseStatus::Partial;
             }
             void Warn(std::string message)
             {

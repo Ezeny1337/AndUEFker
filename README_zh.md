@@ -181,7 +181,7 @@ AndUEFker 会在绑定和 Schema 解析阶段记录以下证据：
 
 命令行程序在完整产物就绪时返回 `0`，反射读取或 SDK 描述部分完成时返回 `3`，其他失败或未完成运行阶段返回 `1`。
 
-`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。不透明字段、遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。采集一致性只覆盖实际观测并复核的字节，最多重试一次；`capture.atomic_snapshot` 始终为 `false`，不表示获得了活动进程的原子快照。
+`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Opaque 容器表示字段类型已识别，但内部实现没有展开；它本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。采集一致性只覆盖实际观测并复核的字节，最多重试一次；`capture.atomic_snapshot` 始终为 `false`，不表示获得了活动进程的原子快照。
 
 ## Issue
 

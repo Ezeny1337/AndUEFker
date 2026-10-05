@@ -181,7 +181,7 @@ The generated `manifest.json` reports one of the following artifact states:
 
 The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
 
-`manifest.json` records `reflection_status` and `sdk_status` separately. Opaque fields, omitted fields and description layout warnings make the SDK description partial. Capture consistency covers only observed and rechecked bytes, with at most one retry; `capture.atomic_snapshot` is always `false`.
+`manifest.json` records `reflection_status` and `sdk_status` separately. Opaque containers are intentional descriptions of known fields whose internal implementation is not expanded; they do not by themselves make the SDK description partial. Omitted fields and description layout warnings do. Capture consistency covers only observed and rechecked bytes, with at most one retry; `capture.atomic_snapshot` is always `false`.
 
 ## Issues
 
