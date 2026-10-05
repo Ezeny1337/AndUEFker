@@ -60,7 +60,32 @@ The runtime session follows these stages:
 - Ninja.
 - A host environment capable of building Android `arm64-v8a` and `armeabi-v7a` code.
 
-### Configure and build
+### Build script
+
+`build.sh` wraps the Android toolchain configuration and enables ThinLTO. It supports three modes:
+
+| Mode | Configuration | Purpose |
+| --- | --- | --- |
+| `verify` | Release, ThinLTO, no size-specific optimization | Fast compile verification; default mode. |
+| `release` | Release, `-Oz`, ThinLTO, without `NDEBUG`, stripped | Small distributable binary. |
+| `debug` | Debug symbols, ThinLTO, with `NDEBUG` | Debuggable binary. |
+
+Set `ANDROID_NDK_HOME` (or `ANDROID_NDK_ROOT`) before running the script. If only `ANDROID_SDK_ROOT` is set, the script discovers the newest installed NDK.
+
+```bash
+chmod +x build.sh
+
+# Fast compile verification, arm64-v8a by default.
+./build.sh
+
+# Size-optimized release binary.
+./build.sh --mode release --abi arm64-v8a
+
+# Debug-symbol binary with NDEBUG enabled.
+./build.sh --mode debug --abi armeabi-v7a --jobs 4
+```
+
+### Direct CMake configuration
 
 The following is the same toolchain shape used by the GitHub Actions workflow:
 
@@ -69,6 +94,7 @@ cmake -S . -B build/android-arm64-release -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-29 \
+  -DANDUEFKER_ENABLE_THINLTO=ON \
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build/android-arm64-release --parallel

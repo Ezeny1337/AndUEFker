@@ -14,6 +14,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(ANDUEFKER_ENABLE_THINLTO "Enable ThinLTO for native targets" ON)
+option(ANDUEFKER_OPTIMIZE_FOR_SIZE "Use Clang size optimization for native targets" OFF)
+option(ANDUEFKER_FORCE_NDEBUG "Define NDEBUG for all native targets" OFF)
+option(ANDUEFKER_DISABLE_NDEBUG "Undefine NDEBUG for all native targets" OFF)
+
+if(ANDUEFKER_FORCE_NDEBUG AND ANDUEFKER_DISABLE_NDEBUG)
+    message(FATAL_ERROR "ANDUEFKER_FORCE_NDEBUG and ANDUEFKER_DISABLE_NDEBUG are mutually exclusive")
+endif()
+
 set(KITTY_MEMORY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/KittyMemoryEx")
 file(GLOB KITTY_MEMORY_SOURCES CONFIGURE_DEPENDS "${KITTY_MEMORY_DIR}/*.cpp")
 
@@ -92,3 +101,29 @@ target_link_libraries(anduefker_core PUBLIC kitty_memory_ex ue_analyzer)
 add_executable(AndUEFker src/app/main.cpp)
 target_link_libraries(AndUEFker PRIVATE anduefker_core)
 target_compile_options(AndUEFker PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+set(ANDUEFKER_NATIVE_TARGETS kitty_memory_ex ue_analyzer anduefker_core AndUEFker)
+foreach(target IN LISTS ANDUEFKER_NATIVE_TARGETS)
+    target_compile_options(${target} PRIVATE
+        -ffunction-sections
+        -fdata-sections
+    )
+    if(ANDUEFKER_ENABLE_THINLTO)
+        target_compile_options(${target} PRIVATE -flto=thin)
+    endif()
+    if(ANDUEFKER_OPTIMIZE_FOR_SIZE)
+        target_compile_options(${target} PRIVATE -Oz)
+    endif()
+    if(ANDUEFKER_FORCE_NDEBUG)
+        target_compile_options(${target} PRIVATE -DNDEBUG)
+    elseif(ANDUEFKER_DISABLE_NDEBUG)
+        target_compile_options(${target} PRIVATE -UNDEBUG)
+    endif()
+endforeach()
+
+if(ANDUEFKER_ENABLE_THINLTO)
+    target_link_options(AndUEFker PRIVATE -flto=thin)
+endif()
+
+# Android's lld removes unused function/data sections from the final executable.
+target_link_options(AndUEFker PRIVATE -Wl,--gc-sections)
