@@ -104,7 +104,7 @@ namespace anduefker::memory
 
     void RemoteMemorySource::PutCached(uintptr_t address, const uint8_t *data, size_t size) const
     {
-        if (!cacheEnabled_ || data == nullptr || size == 0 || size > kPageSize)
+        if (!cacheEnabled_ || maxCacheSize_ < kPageSize || data == nullptr || size == 0 || size > kPageSize)
             return;
 
         const uintptr_t page = PageAddress(address);
@@ -136,14 +136,13 @@ namespace anduefker::memory
 
     void RemoteMemorySource::Touch(CachePage &page) const
     {
-        lru_.erase(page.lru);
-        lru_.push_front(page.address);
+        lru_.splice(lru_.begin(), lru_, page.lru);
         page.lru = lru_.begin();
     }
 
     void RemoteMemorySource::EvictIfNeeded() const
     {
-        while (cacheSize_ + kPageSize > maxCacheSize_ && !lru_.empty())
+        while (cacheSize_ > maxCacheSize_ - kPageSize && !lru_.empty())
         {
             const uintptr_t page = lru_.back();
             lru_.pop_back();
@@ -160,6 +159,23 @@ namespace anduefker::memory
     }
 
     ReadResult RemoteMemorySource::ReadBytes(uintptr_t address, void *buffer, size_t size) const
+    {
+        return ReadImpl(address, buffer, size, true);
+    }
+
+    ReadResult RemoteMemorySource::ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const
+    {
+        return ReadImpl(address, buffer, size, false);
+    }
+
+    void RemoteMemorySource::EnableCache(bool enabled) const
+    {
+        if (cacheEnabled_ != enabled)
+            ClearCache();
+        cacheEnabled_ = enabled;
+    }
+
+    ReadResult RemoteMemorySource::ReadImpl(uintptr_t address, void *buffer, size_t size, bool useCache) const
     {
         ReadResult result{ReadError::None, address, size, 0};
         ++stats_.operations;
@@ -184,7 +200,7 @@ namespace anduefker::memory
             return result;
         }
 
-        if (const uint8_t *cached = GetCached(address, size))
+        if (const uint8_t *cached = useCache ? GetCached(address, size) : nullptr)
         {
             std::memcpy(buffer, cached, size);
             result.transferred = size;
@@ -201,7 +217,8 @@ namespace anduefker::memory
             return result;
         }
 
-        PutCached(address, static_cast<const uint8_t *>(buffer), size);
+        if (useCache)
+            PutCached(address, static_cast<const uint8_t *>(buffer), size);
         return result;
     }
 } // namespace anduefker::memory

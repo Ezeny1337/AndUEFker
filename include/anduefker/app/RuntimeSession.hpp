@@ -52,6 +52,7 @@ namespace anduefker::app
         SchemaReady,
         ReflectionPartial,
         ReflectionReady,
+        ArtifactPartial,
     };
 
     struct RuntimeSessionConfig
@@ -77,7 +78,8 @@ namespace anduefker::app
     private:
         void Note(std::string message);
         void Note(RuntimeLogLevel level, std::string message);
-        void FlushDiagnostics() const;
+        [[nodiscard]] bool FlushDiagnostics() const;
+        [[nodiscard]] RuntimeSessionStatus RunImpl();
 
         RuntimeSessionConfig config_;
         std::shared_ptr<RemoteMemorySource> memory_;

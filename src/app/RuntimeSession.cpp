@@ -4,7 +4,8 @@
 
 #include <filesystem>
 #include <fstream>
-#include <limits>
+#include <exception>
+#include <new>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -44,20 +45,6 @@ namespace anduefker::app
             std::ostringstream stream;
             stream << "0x" << std::hex << std::uppercase << address;
             return stream.str();
-        }
-
-        const char *ParseStatusName(ParseStatus status)
-        {
-            switch (status)
-            {
-            case ParseStatus::Complete:
-                return "Complete";
-            case ParseStatus::Partial:
-                return "Partial";
-            case ParseStatus::Failed:
-                return "Failed";
-            }
-            return "Failed";
         }
 
         const char *LevelName(RuntimeLogLevel level)
@@ -114,7 +101,7 @@ namespace anduefker::app
         logEntries_.push_back({level, message});
         diagnostics_.push_back(message);
 
-        // Immediate console output for non-debug messages
+        // 非 debug 消息立即输出到控制台。
         if (level != RuntimeLogLevel::Debug)
         {
             const char *levelName = level == RuntimeLogLevel::Error     ? "ERROR"
@@ -125,30 +112,81 @@ namespace anduefker::app
         }
     }
 
-    void RuntimeSession::FlushDiagnostics() const
+    bool RuntimeSession::FlushDiagnostics() const
     {
         const std::string path = LogPath();
         if (path.empty())
-            return;
+            return true;
         std::error_code error;
         const std::filesystem::path logPath(path);
         if (logPath.has_parent_path())
             std::filesystem::create_directories(logPath.parent_path(), error);
         if (error)
-            return;
+            return false;
         std::ofstream stream(path, std::ios::out | std::ios::trunc);
         if (!stream.is_open())
-            return;
+            return false;
         for (const RuntimeLogEntry &entry : logEntries_)
             stream << '[' << LevelName(entry.level) << "] " << entry.message << '\n';
+        stream.flush();
+        if (!stream.good())
+            return false;
+        stream.close();
+        return !stream.fail();
     }
 
     RuntimeSessionStatus RuntimeSession::Run()
+    {
+        RuntimeSessionStatus status = RuntimeSessionStatus::Failed;
+        try
+        {
+            status = RunImpl();
+        }
+        catch (const std::bad_alloc &)
+        {
+            std::fprintf(stderr, "Runtime session failed: memory allocation failed\n");
+        }
+        catch (const std::exception &error)
+        {
+            std::fprintf(stderr, "Runtime session exception: %s\n", error.what());
+            try
+            {
+                failures_.push_back(error.what());
+                Note(RuntimeLogLevel::Error, std::string("Runtime session exception: ") + error.what());
+            }
+            catch (...)
+            {
+                std::fprintf(stderr, "Exception details could not be stored\n");
+            }
+        }
+        catch (...)
+        {
+            std::fprintf(stderr, "Runtime session failed: unknown exception\n");
+        }
+        try
+        {
+            if (!FlushDiagnostics())
+            {
+                std::fprintf(stderr, "Runtime log write or close failed\n");
+                status = RuntimeSessionStatus::Failed;
+            }
+        }
+        catch (...)
+        {
+            std::fprintf(stderr, "Runtime log could not be flushed\n");
+            status = RuntimeSessionStatus::Failed;
+        }
+        return status;
+    }
+
+    RuntimeSessionStatus RuntimeSession::RunImpl()
     {
         failures_.clear();
         diagnostics_.clear();
         logEntries_.clear();
         reflection_ = {};
+        artifacts_ = {};
+        context_ = RuntimeContext(memory_);
         Note("=== Runtime Session Started ===");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
@@ -157,7 +195,6 @@ namespace anduefker::app
         {
             failures_.push_back("target process was not found");
             Note(RuntimeLogLevel::Error, failures_.back());
-            FlushDiagnostics();
             return RuntimeSessionStatus::Failed;
         }
         Note(RuntimeLogLevel::Debug, "Target PID=" + std::to_string(pid));
@@ -165,7 +202,6 @@ namespace anduefker::app
         {
             failures_.push_back("remote memory source initialization failed");
             Note(RuntimeLogLevel::Error, failures_.back());
-            FlushDiagnostics();
             return RuntimeSessionStatus::Failed;
         }
 
@@ -174,7 +210,6 @@ namespace anduefker::app
         {
             failures_.push_back("Unreal module was not found");
             Note(RuntimeLogLevel::Error, failures_.back());
-            FlushDiagnostics();
             return RuntimeSessionStatus::Failed;
         }
         context_.SetModule(std::move(module));
@@ -209,7 +244,6 @@ namespace anduefker::app
         {
             failures_.push_back("runtime binding failed; static symbol candidates were insufficient");
             Note(RuntimeLogLevel::Error, failures_.back());
-            FlushDiagnostics();
             return RuntimeSessionStatus::Failed;
         }
         context_.CommitBinding(*binding);
@@ -231,7 +265,6 @@ namespace anduefker::app
                                             : schemaBootstrap->failure;
             failures_.push_back(failure);
             Note(RuntimeLogLevel::Error, failure);
-            FlushDiagnostics();
             return RuntimeSessionStatus::BindingReady;
         }
         std::vector<EngineSchema> candidateSchemas;
@@ -273,36 +306,7 @@ namespace anduefker::app
                 candidateSchemas.push_back(std::move(candidateSchema));
             }
 
-            int32_t bestScore = std::numeric_limits<int32_t>::min();
-            for (size_t index = 0; index < schemaSelection.candidates.size(); ++index)
-            {
-                const SchemaCandidateSummary &candidate = schemaSelection.candidates[index];
-                if (!candidate.accepted)
-                    continue;
-                if (!schemaSelection.accepted || candidate.score > bestScore)
-                {
-                    schemaSelection.accepted = true;
-                    schemaSelection.ambiguous = false;
-                    schemaSelection.layoutAmbiguous = false;
-                    schemaSelection.selectedIndex = index;
-                    bestScore = candidate.score;
-                    continue;
-                }
-                if (candidate.score == bestScore)
-                {
-                    schemaSelection.ambiguous = true;
-                    if (!candidateSchemas[index].HasSameReflectionLayout(candidateSchemas[schemaSelection.selectedIndex]))
-                        schemaSelection.layoutAmbiguous = true;
-                }
-            }
-
-            if (schemaSelection.accepted && schemaSelection.layoutAmbiguous)
-            {
-                schemaSelection.accepted = false;
-                schemaSelection.candidates[schemaSelection.selectedIndex].accepted = false;
-                schemaSelection.candidates[schemaSelection.selectedIndex].failures.push_back(
-                    "schema selection is ambiguous across distinct layout variants");
-            }
+            schemaSelection = ::anduefker::ue::SelectSchemaCandidates(std::move(schemaSelection.candidates), candidateSchemas);
         };
 
         for (int attempt = 0; attempt < 2; ++attempt)
@@ -384,7 +388,6 @@ namespace anduefker::app
         if (!schemaAccepted)
         {
             failures_.insert(failures_.end(), schemaReport.failures.begin(), schemaReport.failures.end());
-            FlushDiagnostics();
             return RuntimeSessionStatus::BindingReady;
         }
         context_.CommitSchema(std::move(schema));
@@ -392,6 +395,12 @@ namespace anduefker::app
                                         " range=" + selectedProfile.versionRange +
                                         " source=runtime-schema-probe");
 
+        if (!memory_->RefreshAddressSpace())
+        {
+            failures_.push_back("address-space refresh failed before reflection capture");
+            Note(RuntimeLogLevel::Error, failures_.back());
+            return RuntimeSessionStatus::SchemaReady;
+        }
         Note(RuntimeLogLevel::Info, "Collecting common object classes...");
         binding::CommonObjectCollector collector(*memory_, context_.Binding(), context_.Schema());
         std::vector<binding::CommonObjectInfo> commonObjects = collector.Collect();
@@ -407,9 +416,21 @@ namespace anduefker::app
         updatedBinding.commonObjects = std::move(commonObjects);
         context_.CommitBinding(std::move(updatedBinding));
 
+        const ReadStats beforeReflection = memory_->Stats();
         ReflectionReader reader(*memory_, context_.Binding(), context_.Schema(),
                                 context_.Module().base, context_.Module().end);
         reflection_ = reader.Read();
+        const ReadStats afterReflection = memory_->Stats();
+        Note(RuntimeLogLevel::Debug, "memory stats stage=reflection operations=" + std::to_string(afterReflection.operations - beforeReflection.operations) +
+                                         " requested_bytes=" + std::to_string(afterReflection.requestedBytes - beforeReflection.requestedBytes) +
+                                         " transferred_bytes=" + std::to_string(afterReflection.transferredBytes - beforeReflection.transferredBytes) +
+                                         " failures=" + std::to_string(afterReflection.failures - beforeReflection.failures));
+        Note(RuntimeLogLevel::Info, "Capture observations_stable=" + std::to_string(reflection_.capture.observationsStable) +
+                                        " attempts=" + std::to_string(reflection_.capture.attempts) +
+                                        " observed_ranges=" + std::to_string(reflection_.capture.observedRanges) +
+                                        " changed_ranges=" + std::to_string(reflection_.capture.changedRanges) +
+                                        " unreadable_ranges=" + std::to_string(reflection_.capture.unreadableRanges) +
+                                        " limit_exceeded=" + std::to_string(reflection_.capture.limitExceeded) + " atomic_snapshot=0");
         reflection_.diagnostics.push_back("reflection status=" + std::string(ParseStatusName(reflection_.status)));
         if (reflection_.stats.failures != 0)
             reflection_.diagnostics.push_back("reflection read failures=" + std::to_string(reflection_.stats.failures));
@@ -434,13 +455,15 @@ namespace anduefker::app
                                         " empty_object_slots=" + std::to_string(reflection_.stats.emptyObjectSlots) +
                                         " object_read_failures=" + std::to_string(reflection_.stats.objectReadFailures) +
                                         " class_name_read_failures=" + std::to_string(reflection_.stats.classNameReadFailures) +
+                                        " enum_read_failures=" + std::to_string(reflection_.stats.enumReadFailures) +
+                                        " identity_failures=" + std::to_string(reflection_.stats.identityFailures) +
+                                        " unvisited_objects=" + std::to_string(reflection_.stats.unvisitedObjects) +
                                         " skipped_class_default_objects=" + std::to_string(reflection_.stats.skippedClassDefaultObjects) +
                                         " skipped_incomplete_objects=" + std::to_string(reflection_.stats.skippedIncompleteObjects) +
                                         " object_diagnostic_samples_omitted=" + std::to_string(reflection_.stats.objectDiagnosticSamplesOmitted) +
                                         " failures=" + std::to_string(reflection_.stats.failures));
         if (reflection_.status == ParseStatus::Failed)
         {
-            FlushDiagnostics();
             return RuntimeSessionStatus::SchemaReady;
         }
         if (reflection_.status == ParseStatus::Partial)
@@ -453,18 +476,22 @@ namespace anduefker::app
             {
                 failures_.push_back(artifacts_.error);
                 Note(RuntimeLogLevel::Error, failures_.back());
-                FlushDiagnostics();
                 return RuntimeSessionStatus::Failed;
             }
             Note(RuntimeLogLevel::Info, "Artifact status=" + std::string(ParseStatusName(artifacts_.status)) +
                                             " files=" + std::to_string(artifacts_.filesWritten) +
                                             " opaque_fields=" + std::to_string(artifacts_.opaqueFields) +
+                                            " reflection_status=" + ParseStatusName(artifacts_.reflectionStatus) +
+                                            " sdk_status=" + ParseStatusName(artifacts_.sdkStatus) +
+                                            " omitted_fields=" + std::to_string(artifacts_.omittedFields) +
+                                            " layout_warnings=" + std::to_string(artifacts_.layoutWarnings) +
                                             " output=" + artifacts_.outputPath.string());
         }
         Note(RuntimeLogLevel::Info, "=== Runtime Session Completed ===");
-        FlushDiagnostics();
         if (reflection_.status == ParseStatus::Partial)
             return RuntimeSessionStatus::ReflectionPartial;
+        if (artifacts_.status == ParseStatus::Partial)
+            return RuntimeSessionStatus::ArtifactPartial;
         return RuntimeSessionStatus::ReflectionReady;
     }
 } // namespace anduefker::app

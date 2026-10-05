@@ -76,6 +76,9 @@ namespace anduefker::ue
         std::vector<SchemaCandidateSummary> candidates;
     };
 
+    [[nodiscard]] SchemaSelectionResult SelectSchemaCandidates(std::vector<SchemaCandidateSummary> candidates,
+                                                               const std::vector<EngineSchema> &schemas);
+
     class SchemaResolver
     {
     public:

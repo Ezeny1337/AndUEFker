@@ -144,23 +144,26 @@ namespace anduefker::ue
         for (size_t index = 0; index < chars.size() && chars[index] != 0; ++index)
         {
             uint32_t codePoint = chars[index];
-            if (codePoint >= 0xD800 && codePoint <= 0xDBFF && index + 1 < chars.size())
+            if (codePoint >= 0xD800 && codePoint <= 0xDBFF)
             {
+                if (index + 1 >= chars.size())
+                    return std::nullopt;
                 const uint32_t low = chars[index + 1];
-                if (low >= 0xDC00 && low <= 0xDFFF)
-                {
-                    codePoint = 0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
-                    ++index;
-                }
+                if (low < 0xDC00 || low > 0xDFFF)
+                    return std::nullopt;
+                codePoint = 0x10000 + ((codePoint - 0xD800) << 10) + (low - 0xDC00);
+                ++index;
             }
+            else if (codePoint >= 0xDC00 && codePoint <= 0xDFFF)
+                return std::nullopt;
             AppendUtf8(result, codePoint);
         }
         return result;
     }
 
-    std::optional<std::string> NameStoreReader::ReadEntry(uintptr_t entry) const
+    std::optional<std::string> NameStoreReader::ReadEntry(uintptr_t entry, size_t depth) const
     {
-        if (entry == 0)
+        if (entry == 0 || depth >= 32)
             return std::nullopt;
 
         if (layout_.kind == NameContainerKind::Array)
@@ -194,11 +197,12 @@ namespace anduefker::ue
             if (!indexAddress || !numberAddress)
                 return std::nullopt;
             int32_t rawIndex = 0;
-            int32_t number = 0;
+            uint32_t number = 0;
             if (!memory_.Read(*indexAddress, rawIndex) || !memory_.Read(*numberAddress, number))
                 return std::nullopt;
             const int32_t index = decode_.nameIndex(rawIndex, *indexAddress);
-            auto base = ReadName(index);
+            const auto baseEntry = EntryAt(index);
+            auto base = baseEntry ? ReadEntry(*baseEntry, depth + 1) : std::nullopt;
             if (!base)
                 return std::nullopt;
             if (number > 0)
@@ -216,7 +220,7 @@ namespace anduefker::ue
     std::optional<std::string> NameStoreReader::ReadName(int32_t index) const
     {
         const auto entry = EntryAt(index);
-        return entry ? ReadEntry(*entry) : std::nullopt;
+        return entry ? ReadEntry(*entry, 0) : std::nullopt;
     }
 
     std::optional<std::string> NameStoreReader::ReadFName(uintptr_t fnameAddress) const
@@ -229,24 +233,23 @@ namespace anduefker::ue
         {
             const auto displayAddress = AddOffset(fnameAddress, static_cast<uintptr_t>(fname_.displayIndex));
             int32_t rawDisplayIndex = 0;
-            if (displayAddress && memory_.Read(*displayAddress, rawDisplayIndex))
-            {
-                const int32_t displayIndex = decode_.nameIndex(rawDisplayIndex, *displayAddress);
-                const auto displayName = ReadName(displayIndex);
-                if (displayName && !displayName->empty() && *displayName != "None")
-                    *name = *displayName;
-            }
+            if (!displayAddress || !memory_.Read(*displayAddress, rawDisplayIndex))
+                return std::nullopt;
+            const int32_t displayIndex = decode_.nameIndex(rawDisplayIndex, *displayAddress);
+            const auto displayName = ReadName(displayIndex);
+            if (!displayName || displayName->empty())
+                return std::nullopt;
+            *name = *displayName;
         }
 
         if (fname_.numberLayout == FNameNumberLayout::Inline && fname_.number >= 0)
         {
             const auto numberAddress = AddOffset(fnameAddress, static_cast<uintptr_t>(fname_.number));
-            if (numberAddress)
-            {
-                uint32_t number = 0;
-                if (memory_.Read(*numberAddress, number) && number > 0)
-                    *name += "_" + std::to_string(number - 1);
-            }
+            uint32_t number = 0;
+            if (!numberAddress || !memory_.Read(*numberAddress, number))
+                return std::nullopt;
+            if (number > 0)
+                *name += "_" + std::to_string(number - 1);
         }
         return name;
     }

@@ -32,10 +32,11 @@ namespace anduefker::memory
         [[nodiscard]] bool IsReadable(uintptr_t address, size_t size) const override;
         [[nodiscard]] bool IsExecutable(uintptr_t address, size_t size) const override;
         [[nodiscard]] ReadResult ReadBytes(uintptr_t address, void *buffer, size_t size) const override;
+        [[nodiscard]] ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const override;
         [[nodiscard]] const ReadStats &Stats() const override { return stats_; }
 
         void ClearCache() const;
-        void EnableCache(bool enabled) const { cacheEnabled_ = enabled; }
+        void EnableCache(bool enabled) const;
         [[nodiscard]] KittyMemoryMgr &Manager() { return manager_; }
         [[nodiscard]] const KittyMemoryMgr &Manager() const { return manager_; }
 
@@ -52,6 +53,7 @@ namespace anduefker::memory
         void PutCached(uintptr_t address, const uint8_t *data, size_t size) const;
         void Touch(CachePage &page) const;
         void EvictIfNeeded() const;
+        [[nodiscard]] ReadResult ReadImpl(uintptr_t address, void *buffer, size_t size, bool useCache) const;
 
         KittyMemoryMgr manager_;
         mutable KittyPtrValidator validator_;

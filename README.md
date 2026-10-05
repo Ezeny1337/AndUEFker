@@ -175,11 +175,13 @@ The generated `manifest.json` reports one of the following artifact states:
 
 | State | Meaning |
 | --- | --- |
-| `Complete` | Reflection completed and all required output files were written. |
-| `Partial` | Reflection completed with recoverable limitations; the artifact is marked `.partial`. |
+| `Complete` | Reflection reading and SDK descriptions are complete; all required files were written and closed. |
+| `Partial` | Reflection reading or SDK descriptions have limitations; the artifact is marked `.partial`. |
 | `Failed` | Binding, schema resolution, reflection, or artifact writing failed. |
 
-The command-line process exits with `0` for a ready reflection result, `3` for a partial reflection result, and `1` for other failures or incomplete runtime stages.
+The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
+
+`manifest.json` records `reflection_status` and `sdk_status` separately. Opaque fields, omitted fields and description layout warnings make the SDK description partial. Capture consistency covers only observed and rechecked bytes, with at most one retry; `capture.atomic_snapshot` is always `false`.
 
 ## Issues
 

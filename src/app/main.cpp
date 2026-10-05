@@ -2,6 +2,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <exception>
 
 #include "anduefker/app/RuntimeSession.hpp"
 
@@ -21,6 +22,7 @@ namespace
 } // namespace
 
 int main(int argc, char **argv)
+try
 {
     anduefker::app::RuntimeSessionConfig config;
 
@@ -96,7 +98,18 @@ int main(int argc, char **argv)
 
     if (status == anduefker::app::RuntimeSessionStatus::ReflectionReady)
         return 0;
-    if (status == anduefker::app::RuntimeSessionStatus::ReflectionPartial)
+    if (status == anduefker::app::RuntimeSessionStatus::ReflectionPartial ||
+        status == anduefker::app::RuntimeSessionStatus::ArtifactPartial)
         return 3;
+    return 1;
+}
+catch (const std::exception &error)
+{
+    std::fprintf(stderr, "Fatal error: %s\n", error.what());
+    return 1;
+}
+catch (...)
+{
+    std::fprintf(stderr, "Fatal error: unknown exception\n");
     return 1;
 }

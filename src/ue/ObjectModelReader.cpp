@@ -1,6 +1,8 @@
 #include "anduefker/ue/ObjectModelReader.hpp"
 
 #include <unordered_set>
+#include <algorithm>
+#include <limits>
 
 namespace anduefker::ue
 {
@@ -320,38 +322,15 @@ namespace anduefker::ue
 
     FieldChainResult ObjectModelReader::FieldsWithStatus(uintptr_t first, size_t maxFields) const
     {
-        FieldChainResult result;
-        if (first == 0)
-            return result;
-
-        std::unordered_set<uintptr_t> visited;
-        uintptr_t current = first;
-        while (current != 0)
-        {
-            if (!visited.insert(current).second)
-            {
-                result.status = FieldChainStatus::CycleDetected;
-                return result;
-            }
-            if (result.fields.size() >= maxFields)
-            {
-                result.status = FieldChainStatus::LimitExceeded;
-                return result;
-            }
-            const auto field = Field(current);
-            if (!field)
-            {
-                result.status = FieldChainStatus::Unreadable;
-                return result;
-            }
-            result.fields.push_back(*field);
-            current = field->nextAddress;
-        }
-        result.status = FieldChainStatus::Complete;
-        return result;
+        return ReadFieldChain(first, maxFields, false);
     }
 
     FieldChainResult ObjectModelReader::UFieldsWithStatus(uintptr_t first, size_t maxFields) const
+    {
+        return ReadFieldChain(first, maxFields, true);
+    }
+
+    FieldChainResult ObjectModelReader::ReadFieldChain(uintptr_t first, size_t maxFields, bool ufield) const
     {
         FieldChainResult result;
         if (first == 0)
@@ -371,7 +350,7 @@ namespace anduefker::ue
                 result.status = FieldChainStatus::LimitExceeded;
                 return result;
             }
-            const auto field = UField(current);
+            const auto field = ufield ? UField(current) : Field(current);
             if (!field)
             {
                 result.status = FieldChainStatus::Unreadable;
@@ -412,16 +391,26 @@ namespace anduefker::ue
             !memory_.Read(*flagsAddress, result.flags))
             return std::nullopt;
 
-        const auto readOptionalPointer = [&](int32_t offset) -> uintptr_t
+        const auto readOptionalPointer = [&](int32_t offset, bool nullable = false) -> uintptr_t
         {
             if (offset < 0)
+            {
+                result.detailsStatus = PropertyMetadata::DetailsStatus::UnsupportedLayout;
                 return 0;
+            }
             const auto address = Add(field, offset);
             uintptr_t value = 0;
-            return address && memory_.Read(*address, value) ? value : 0;
+            if (!address || !memory_.Read(*address, value))
+            {
+                result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+                return 0;
+            }
+            if ((!nullable && value == 0) || (value != 0 && !IsReadableObject(value)))
+                result.detailsStatus = PropertyMetadata::DetailsStatus::InvalidReference;
+            return value;
         };
         const std::string &propertyClassName = base->normalizedClassName;
-        if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" ||
+        if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" || propertyClassName == "ObjectPtrProperty" ||
             propertyClassName == "SoftObjectProperty" || propertyClassName == "WeakObjectProperty" ||
             propertyClassName == "LazyObjectProperty" || propertyClassName == "InterfaceProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.objectClass);
@@ -430,7 +419,15 @@ namespace anduefker::ue
         else if (propertyClassName == "StructProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.structType);
         else if (propertyClassName == "ByteProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.byteEnum);
+            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.byteEnum, true);
+        else if (propertyClassName == "BoolProperty")
+        {
+            const auto address = Add(field, schema_.propertySubtypes.boolBase);
+            if (schema_.propertySubtypes.boolBase < 0)
+                result.detailsStatus = PropertyMetadata::DetailsStatus::UnsupportedLayout;
+            else if (!address || !memory_.ReadBytes(*address, result.boolLayout.data(), result.boolLayout.size()).Ok())
+                result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+        }
         else if (propertyClassName == "ArrayProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.arrayInner);
         else if (propertyClassName == "SetProperty")
@@ -438,7 +435,8 @@ namespace anduefker::ue
         else if (propertyClassName == "MapProperty")
         {
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.mapBase);
-            const int32_t valueOffset = schema_.propertySubtypes.mapBase >= 0
+            const int32_t valueOffset = schema_.propertySubtypes.mapBase >= 0 &&
+                                                schema_.propertySubtypes.mapBase <= INT32_MAX - static_cast<int32_t>(sizeof(uintptr_t))
                                             ? schema_.propertySubtypes.mapBase + static_cast<int32_t>(sizeof(uintptr_t))
                                             : -1;
             result.secondaryAddress = readOptionalPointer(valueOffset);
@@ -446,7 +444,8 @@ namespace anduefker::ue
         else if (propertyClassName == "EnumProperty")
         {
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.enumBase);
-            const int32_t enumOffset = schema_.propertySubtypes.enumBase >= 0
+            const int32_t enumOffset = schema_.propertySubtypes.enumBase >= 0 &&
+                                               schema_.propertySubtypes.enumBase <= INT32_MAX - static_cast<int32_t>(sizeof(uintptr_t))
                                            ? schema_.propertySubtypes.enumBase + static_cast<int32_t>(sizeof(uintptr_t))
                                            : -1;
             result.secondaryAddress = readOptionalPointer(enumOffset);
@@ -456,8 +455,35 @@ namespace anduefker::ue
         else if (propertyClassName == "DelegateProperty" || propertyClassName == "MulticastDelegateProperty" ||
                  propertyClassName == "MulticastInlineDelegateProperty" || propertyClassName == "MulticastSparseDelegateProperty")
             result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.delegateSignature);
+        else if (propertyClassName == "FieldPathProperty")
+            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.fieldPathClass);
 
         return result;
+    }
+
+    std::optional<DefinitionKind> ObjectModelReader::DefinitionKindForClass(uintptr_t classAddress) const
+    {
+        std::unordered_set<uintptr_t> visited;
+        uintptr_t current = classAddress;
+        for (size_t depth = 0; current != 0 && depth < 64; ++depth)
+        {
+            if (!visited.insert(current).second)
+                return std::nullopt;
+            const auto name = Name(current);
+            if (!name)
+                return std::nullopt;
+            if (*name == "Class")
+                return DefinitionKind::Class;
+            if (*name == "ScriptStruct")
+                return DefinitionKind::Struct;
+            if (*name == "Enum")
+                return DefinitionKind::Enum;
+            const auto super = StructSuper(current);
+            if (!super)
+                return std::nullopt;
+            current = *super;
+        }
+        return current == 0 ? std::optional<DefinitionKind>(DefinitionKind::Other) : std::nullopt;
     }
 
     std::optional<uintptr_t> ObjectModelReader::StructChildren(uintptr_t structure) const
@@ -513,8 +539,13 @@ namespace anduefker::ue
 
     std::vector<EnumValueMetadata> ObjectModelReader::EnumValues(uintptr_t enumeration, size_t maxValues) const
     {
-        std::vector<EnumValueMetadata> result;
-        if (enumeration == 0 || schema_.uenum.names < 0 || maxValues == 0)
+        return ReadEnumValues(enumeration, maxValues).values;
+    }
+
+    EnumReadResult ObjectModelReader::ReadEnumValues(uintptr_t enumeration, size_t maxValues) const
+    {
+        EnumReadResult result;
+        if (enumeration == 0 || schema_.uenum.names < 0)
             return result;
 
         const auto dataAddress = Add(enumeration, schema_.uenum.names);
@@ -529,25 +560,37 @@ namespace anduefker::ue
         if (!memory_.Read(*dataAddress, data) || !countAddress || !capacityAddress ||
             !memory_.Read(*countAddress, count) || !memory_.Read(*capacityAddress, capacity))
             return result;
-        if (count < 0 || count > 0x100000 || capacity < count || (count > 0 && !memory_.IsReadable(data, sizeof(uintptr_t))))
+        result.expectedCount = count;
+        if (count < 0 || count > 0x100000 || capacity < count || capacity > 0x100000 || (count > 0 && data == 0))
+        {
+            result.status = EnumReadStatus::InvalidHeader;
             return result;
+        }
 
-        const int32_t nameSize = schema_.fname.size > 0 ? schema_.fname.size : static_cast<int32_t>(sizeof(uintptr_t));
+        const int32_t nameSize = schema_.fname.size;
+        if (nameSize != 4 && nameSize != 8 && nameSize != 12)
+        {
+            result.status = EnumReadStatus::InvalidHeader;
+            return result;
+        }
         const int32_t valueOffset = (nameSize + static_cast<int32_t>(alignof(int64_t)) - 1) /
                                     static_cast<int32_t>(alignof(int64_t)) * static_cast<int32_t>(alignof(int64_t));
         const int32_t stride = valueOffset + static_cast<int32_t>(sizeof(int64_t));
-        for (int32_t index = 0; index < count && result.size() < maxValues; ++index)
+        const size_t readCount = std::min(static_cast<size_t>(count), maxValues);
+        for (size_t index = 0; index < readCount; ++index)
         {
-            const auto entry = Add(data, index * stride);
-            if (!entry)
-                break;
-            const auto name = names_.ReadFName(*entry);
+            const uintptr_t offset = static_cast<uintptr_t>(index) * static_cast<uintptr_t>(stride);
+            if (offset > UINTPTR_MAX - data)
+                return result;
+            const uintptr_t entry = data + offset;
+            const auto name = names_.ReadFName(entry);
             int64_t value = 0;
-            const auto valueAddress = Add(*entry, valueOffset);
+            const auto valueAddress = Add(entry, valueOffset);
             if (!name || !valueAddress || !memory_.Read(*valueAddress, value))
-                break;
-            result.push_back(EnumValueMetadata{*name, value});
+                return result;
+            result.values.push_back(EnumValueMetadata{*name, value});
         }
+        result.status = readCount == static_cast<size_t>(count) ? EnumReadStatus::Complete : EnumReadStatus::LimitExceeded;
         return result;
     }
 } // namespace anduefker::ue

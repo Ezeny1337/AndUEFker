@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <utility>
 #include <string>
@@ -22,6 +23,7 @@ namespace anduefker::ue
         0x00000400u | // RF_NeedLoad
         0x00001000u | // RF_NeedPostLoad
         0x00002000u;  // RF_NeedPostLoadSubobjects
+    inline constexpr uint32_t kRFUnavailableDefinition = kRFIncompleteLoad | 0x00004000u | 0x00008000u | 0x00010000u;
 
     struct ObjectMetadata
     {
@@ -76,12 +78,45 @@ namespace anduefker::ue
         uint64_t flags = 0;
         uintptr_t referencedAddress = 0;
         uintptr_t secondaryAddress = 0;
+        enum class DetailsStatus
+        {
+            Complete,
+            UnsupportedLayout,
+            Unreadable,
+            InvalidReference
+        };
+        DetailsStatus detailsStatus = DetailsStatus::Complete;
+        std::array<uint8_t, 4> boolLayout{};
     };
 
     struct EnumValueMetadata
     {
         std::string name;
         int64_t value = 0;
+    };
+
+    enum class DefinitionKind
+    {
+        Other,
+        Class,
+        Struct,
+        Enum
+    };
+    enum class EnumReadStatus
+    {
+        Complete,
+        Unreadable,
+        InvalidHeader,
+        LimitExceeded
+    };
+
+    struct EnumReadResult
+    {
+        EnumReadStatus status = EnumReadStatus::Unreadable;
+        int32_t expectedCount = -1;
+        std::vector<EnumValueMetadata> values;
+
+        [[nodiscard]] bool Complete() const { return status == EnumReadStatus::Complete; }
     };
 
     class ObjectModelReader
@@ -112,12 +147,14 @@ namespace anduefker::ue
         [[nodiscard]] FieldChainResult UFieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::vector<FieldMetadata> Fields(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::optional<PropertyMetadata> Property(uintptr_t field) const;
+        [[nodiscard]] std::optional<DefinitionKind> DefinitionKindForClass(uintptr_t classAddress) const;
         [[nodiscard]] std::optional<uintptr_t> StructChildren(uintptr_t structure) const;
         [[nodiscard]] std::optional<uintptr_t> StructProperties(uintptr_t structure) const;
         [[nodiscard]] std::optional<uintptr_t> StructSuper(uintptr_t structure) const;
         [[nodiscard]] std::optional<int32_t> StructSize(uintptr_t structure) const;
         [[nodiscard]] std::vector<EnumValueMetadata> EnumValues(uintptr_t enumeration,
                                                                 size_t maxValues = 65536) const;
+        [[nodiscard]] EnumReadResult ReadEnumValues(uintptr_t enumeration, size_t maxValues = 65536) const;
 
     private:
         [[nodiscard]] std::optional<uintptr_t> ReadPointer(uintptr_t address) const;
@@ -126,6 +163,7 @@ namespace anduefker::ue
         [[nodiscard]] FieldKind ResolveUFieldKind(uintptr_t classAddress, FieldKind fallback) const;
         [[nodiscard]] std::optional<std::string> NameField(uintptr_t object) const;
         [[nodiscard]] bool IsReadableObject(uintptr_t object) const;
+        [[nodiscard]] FieldChainResult ReadFieldChain(uintptr_t first, size_t maxFields, bool ufield) const;
 
         const IMemorySource &memory_;
         const RuntimeBinding &binding_;

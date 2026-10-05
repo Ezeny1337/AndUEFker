@@ -48,6 +48,9 @@ add_library(anduefker_core STATIC
     src/binding/LayoutProbes.cpp
     src/binding/RuntimeBinding.cpp
     src/generation/ArtifactWriter.cpp
+    src/generation/CppTypeResolver.cpp
+    src/generation/JsonExport.cpp
+    src/memory/CaptureMemorySource.cpp
     src/memory/RemoteMemorySource.cpp
     src/module/ModuleCatalog.cpp
     src/reflection/ReflectionReader.cpp
@@ -59,6 +62,7 @@ add_library(anduefker_core STATIC
     src/ue/ObjectStoreReader.cpp
     src/ue/SchemaCatalog.cpp
     src/ue/SchemaResolver.cpp
+    src/ue/SchemaSelection.cpp
 )
 
 target_include_directories(anduefker_core

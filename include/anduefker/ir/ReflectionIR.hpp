@@ -16,6 +16,20 @@ namespace anduefker::ir
         Failed,
     };
 
+    [[nodiscard]] inline const char *ParseStatusName(ParseStatus status)
+    {
+        switch (status)
+        {
+        case ParseStatus::Complete:
+            return "Complete";
+        case ParseStatus::Partial:
+            return "Partial";
+        case ParseStatus::Failed:
+            return "Failed";
+        }
+        return "Failed";
+    }
+
     enum class TypeKind
     {
         Class,
@@ -64,6 +78,7 @@ namespace anduefker::ir
         uintptr_t referencedObject = 0;
         uintptr_t secondaryObject = 0;
         int32_t elementSize = 0;
+        bool detailsResolved = false;
         std::shared_ptr<TypeReferenceIR> inner;
         std::shared_ptr<TypeReferenceIR> key;
         std::shared_ptr<TypeReferenceIR> value;
@@ -92,6 +107,8 @@ namespace anduefker::ir
         bool isReferenceParameter = false;
         bool isConstParameter = false;
         bool typeDetailsResolved = true;
+        ParseStatus status = ParseStatus::Complete;
+        std::vector<std::string> diagnostics;
         TypeReferenceIR type;
         BoolLayoutIR boolean;
     };
@@ -100,6 +117,7 @@ namespace anduefker::ir
     {
         uintptr_t address = 0;
         uintptr_t nativeRva = 0;
+        uintptr_t nativeAddress = 0;
         std::string name;
         std::string fullName;
         uint32_t flags = 0;
@@ -114,7 +132,9 @@ namespace anduefker::ir
         bool parameterSemanticsValid = false;
         bool parameterSemanticsConsistent = false;
         std::vector<PropertyIR> parameters;
+        std::vector<PropertyIR> locals;
         std::vector<std::string> layoutConflicts;
+        ParseStatus status = ParseStatus::Complete;
     };
 
     struct TypeIR
@@ -128,6 +148,7 @@ namespace anduefker::ir
         std::vector<PropertyIR> properties;
         std::vector<FunctionIR> functions;
         std::vector<std::string> layoutConflicts;
+        ParseStatus status = ParseStatus::Complete;
     };
 
     struct EnumValueIR
@@ -158,6 +179,9 @@ namespace anduefker::ir
         uint8_t cppForm = 0;
         uint8_t flags = 0;
         std::vector<EnumValueIR> values;
+        ParseStatus status = ParseStatus::Complete;
+        int32_t expectedValues = -1;
+        std::vector<std::string> diagnostics;
     };
 
     struct ReflectionStats
@@ -180,12 +204,28 @@ namespace anduefker::ir
         int32_t skippedIncompleteObjects = 0;
         int32_t objectDiagnosticSamplesOmitted = 0;
         int32_t failures = 0;
+        int32_t enumReadFailures = 0;
+        int32_t identityFailures = 0;
+        int32_t unvisitedObjects = 0;
+    };
+
+    struct CaptureInfo
+    {
+        bool observationsStable = false;
+        bool limitExceeded = false;
+        bool generationChanged = false;
+        size_t observedRanges = 0;
+        size_t observedBytes = 0;
+        size_t changedRanges = 0;
+        size_t unreadableRanges = 0;
+        uint32_t attempts = 0;
     };
 
     struct ReflectionIR
     {
         ParseStatus status = ParseStatus::Failed;
         ReflectionStats stats;
+        CaptureInfo capture;
         std::vector<std::string> diagnostics;
         std::vector<TypeIR> types;
         std::vector<EnumIR> enums;

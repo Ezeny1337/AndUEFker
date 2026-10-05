@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <sys/types.h>
 
 namespace anduefker::memory
@@ -46,13 +47,22 @@ namespace anduefker::memory
         [[nodiscard]] virtual bool IsReadable(uintptr_t address, size_t size) const = 0;
         [[nodiscard]] virtual bool IsExecutable(uintptr_t address, size_t size) const = 0;
         [[nodiscard]] virtual ReadResult ReadBytes(uintptr_t address, void *buffer, size_t size) const = 0;
+        [[nodiscard]] virtual ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const = 0;
         [[nodiscard]] virtual const ReadStats &Stats() const = 0;
 
         template <typename T>
         [[nodiscard]] bool Read(uintptr_t address, T &value) const
         {
+            static_assert(std::is_trivially_copyable_v<T>);
             const ReadResult result = ReadBytes(address, &value, sizeof(T));
             return result.Ok();
+        }
+
+        template <typename T>
+        [[nodiscard]] bool ReadFresh(uintptr_t address, T &value) const
+        {
+            static_assert(std::is_trivially_copyable_v<T>);
+            return ReadFreshBytes(address, &value, sizeof(T)).Ok();
         }
     };
 } // namespace anduefker::memory

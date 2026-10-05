@@ -4,9 +4,11 @@
 #include <filesystem>
 #include <iosfwd>
 #include <string>
+#include <utility>
 
 #include "anduefker/ir/ReflectionIR.hpp"
 #include "anduefker/app/RuntimeContext.hpp"
+#include "anduefker/generation/CppTypeResolver.hpp"
 
 namespace anduefker::generation
 {
@@ -30,6 +32,10 @@ namespace anduefker::generation
         std::filesystem::path outputPath;
         size_t filesWritten = 0;
         size_t opaqueFields = 0;
+        size_t omittedFields = 0;
+        size_t layoutWarnings = 0;
+        ParseStatus reflectionStatus = ParseStatus::Failed;
+        ParseStatus sdkStatus = ParseStatus::Failed;
         std::string error;
     };
 
@@ -44,25 +50,39 @@ namespace anduefker::generation
         [[nodiscard]] ArtifactResult Write() const;
 
     private:
-        struct CppSymbols;
-
+        struct GenerationReport
+        {
+            size_t opaqueFields = 0;
+            size_t omittedFields = 0;
+            size_t layoutWarnings = 0;
+            std::vector<std::string> diagnostics;
+            [[nodiscard]] ParseStatus Status() const
+            {
+                return opaqueFields == 0 && omittedFields == 0 && layoutWarnings == 0 ? ParseStatus::Complete : ParseStatus::Partial;
+            }
+            void Warn(std::string message)
+            {
+                ++layoutWarnings;
+                if (diagnostics.size() < 32)
+                    diagnostics.push_back(std::move(message));
+            }
+        };
         [[nodiscard]] static std::string Sanitize(std::string value, const char *fallback);
         [[nodiscard]] static std::string JsonEscape(const std::string &value);
-        [[nodiscard]] std::string ManifestJson(size_t opaqueFields) const;
-        [[nodiscard]] std::string DiagnosticsJson() const;
+        [[nodiscard]] std::string ManifestJson(const GenerationReport &report, ParseStatus status) const;
+        [[nodiscard]] std::string DiagnosticsJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string ReflectionJson() const;
         [[nodiscard]] std::string RuntimeJson() const;
         [[nodiscard]] std::string BasicTypes() const;
-        [[nodiscard]] CppSymbols BuildCppSymbols() const;
-        [[nodiscard]] std::string Types(const CppSymbols &symbols, size_t &opaqueFields) const;
+        [[nodiscard]] std::string Types(const CppSymbols &symbols, GenerationReport &report) const;
         [[nodiscard]] std::string Enums(const CppSymbols &symbols) const;
-        [[nodiscard]] std::string Functions(const CppSymbols &symbols, size_t &opaqueFields) const;
+        [[nodiscard]] std::string Functions(const CppSymbols &symbols, GenerationReport &report) const;
         void WriteFields(std::ostringstream &stream,
                          const std::vector<PropertyIR> &properties,
                          int32_t initialOffset,
                          int32_t size,
                          const CppSymbols &symbols,
-                         size_t &opaqueFields) const;
+                         GenerationReport &report) const;
 
         const RuntimeContext &context_;
         const ReflectionIR &reflection_;

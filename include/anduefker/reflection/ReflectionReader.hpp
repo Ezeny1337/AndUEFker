@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_set>
 
 #include "anduefker/ir/ReflectionIR.hpp"
 #include "anduefker/ue/FunctionSemantics.hpp"
 #include "anduefker/ue/ObjectModelReader.hpp"
+#include "anduefker/memory/CaptureMemorySource.hpp"
 
 namespace anduefker::reflection
 {
@@ -39,7 +41,7 @@ namespace anduefker::reflection
     class ReflectionReader
     {
     public:
-        ReflectionReader(const IMemorySource &memory,
+        ReflectionReader(IMemorySource &memory,
                          const RuntimeBinding &binding,
                          const EngineSchema &schema,
                          uintptr_t moduleBase,
@@ -49,13 +51,27 @@ namespace anduefker::reflection
 
     private:
         [[nodiscard]] PropertyKind PropertyKindFromName(const std::string &name) const;
-        [[nodiscard]] std::optional<PropertyIR> ReadProperty(uintptr_t field, size_t depth, ReflectionStats &stats) const;
+        [[nodiscard]] std::optional<PropertyIR> ReadProperty(uintptr_t field, ReflectionStats &stats) const;
+        [[nodiscard]] TypeReferenceIR ReadTypeReference(const PropertyMetadata &metadata, PropertyIR &property,
+                                                        ReflectionStats &stats, std::unordered_set<uintptr_t> &path,
+                                                        size_t depth, size_t &remaining) const;
+        struct PropertyChain
+        {
+            std::vector<PropertyIR> properties;
+            bool complete = true;
+        };
+        [[nodiscard]] PropertyChain ReadPropertyChain(uintptr_t first, uintptr_t owner, ReflectionStats &stats,
+                                                      std::vector<std::string> &diagnostics) const;
+        void ValidateLayout(const std::vector<PropertyIR> &properties, int32_t bound, ReflectionStats &stats,
+                            std::vector<std::string> &diagnostics) const;
         void ReadProperties(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
         void ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const;
         void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
         [[nodiscard]] std::optional<TypeIR> ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const;
+        [[nodiscard]] ReflectionIR ReadAttempt();
+        [[nodiscard]] EnumIR ReadEnum(uintptr_t object, ReflectionStats &stats) const;
 
-        const IMemorySource &memory_;
+        ::anduefker::memory::CaptureMemorySource memory_;
         const EngineSchema &schema_;
         uintptr_t moduleBase_ = 0;
         uintptr_t moduleEnd_ = 0;

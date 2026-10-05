@@ -34,7 +34,7 @@ namespace anduefker::ue
         [[nodiscard]] std::optional<std::string> ReadComparisonName(uintptr_t fnameAddress) const;
 
     private:
-        [[nodiscard]] std::optional<std::string> ReadEntry(uintptr_t entry) const;
+        [[nodiscard]] std::optional<std::string> ReadEntry(uintptr_t entry, size_t depth) const;
         [[nodiscard]] std::optional<std::string> ReadBytesAsUtf8(uintptr_t address, size_t length) const;
         [[nodiscard]] std::optional<std::string> ReadUtf16AsUtf8(uintptr_t address, size_t length) const;
         [[nodiscard]] std::optional<uintptr_t> ReadPointer(uintptr_t address) const;
