@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "anduefker/ir/ReflectionIR.hpp"
+#include "anduefker/ue/FunctionSemantics.hpp"
 #include "anduefker/ue/ObjectModelReader.hpp"
 
 namespace anduefker::reflection
@@ -21,9 +22,17 @@ namespace anduefker::reflection
     using ::anduefker::ir::TypeKind;
     using ::anduefker::ir::TypeReferenceIR;
     using ::anduefker::memory::IMemorySource;
+    using ::anduefker::ue::AnalyzeFunctionParameters;
     using ::anduefker::ue::EngineSchema;
     using ::anduefker::ue::EnumValueMetadata;
+    using ::anduefker::ue::FieldChainResult;
+    using ::anduefker::ue::FieldMetadata;
+    using ::anduefker::ue::FunctionParameterSummary;
+    using ::anduefker::ue::IsFunctionFieldKind;
+    using ::anduefker::ue::IsPropertyFieldKind;
+    using ::anduefker::ue::NormalizeRuntimeFieldName;
     using ::anduefker::ue::ObjectModelReader;
+    using ::anduefker::ue::PropertyMetadata;
 
     class ReflectionReader
     {

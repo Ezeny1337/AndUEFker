@@ -32,6 +32,7 @@ namespace anduefker::memory
     {
         stats_ = {};
         ClearCache();
+        ++addressSpaceGeneration_;
 
         if (!manager_.initialize(pid, EK_MEM_OP_SYSCALL, false) &&
             !manager_.initialize(pid, EK_MEM_OP_IO, false))
@@ -61,6 +62,7 @@ namespace anduefker::memory
 
         validator_.refreshRegionCache();
         ClearCache();
+        ++addressSpaceGeneration_;
         return !validator_.cachedRegions().empty();
     }
 

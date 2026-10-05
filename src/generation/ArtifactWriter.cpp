@@ -17,6 +17,8 @@ namespace anduefker::generation
     using ::anduefker::binding::ObjectContainerKind;
     using ::anduefker::binding::RuntimeBinding;
     using ::anduefker::ue::EngineSchema;
+    using ::anduefker::ue::FNameDisplayLayout;
+    using ::anduefker::ue::FNameNumberLayout;
     using ::anduefker::ue::SchemaLayoutVariantName;
 
     namespace
@@ -35,7 +37,7 @@ namespace anduefker::generation
             return "Failed";
         }
 
-        std::string Hex(uintptr_t value)
+        std::string Hex(uint64_t value)
         {
             std::ostringstream stream;
             stream << "0x" << std::hex << std::uppercase << value;
@@ -1013,6 +1015,26 @@ namespace anduefker::generation
                << ",\"internal_index\":" << schema.uobject.internalIndex
                << ",\"class\":" << schema.uobject.classPointer
                << ",\"name\":" << schema.uobject.name << ",\"outer\":" << schema.uobject.outer << "},\n";
+        stream << "    \"fname\": {\"comparison_index\":" << schema.fname.comparisonIndex
+               << ",\"number\":" << schema.fname.number
+               << ",\"display_index\":" << schema.fname.displayIndex
+               << ",\"size\":" << schema.fname.size
+               << ",\"number_layout\":\""
+               << (schema.fname.numberLayout == FNameNumberLayout::Outlined ? "outlined" : "inline")
+               << "\",\"display_layout\":\""
+               << (schema.fname.displayLayout == FNameDisplayLayout::BeforeNumber
+                       ? "before-number"
+                   : schema.fname.displayLayout == FNameDisplayLayout::AfterNumber ? "after-number"
+                                                                                   : "none")
+               << "\"},\n";
+        stream << "    \"ffield\": {\"class\":" << schema.ffield.classPointer
+               << ",\"owner\":" << schema.ffield.owner << ",\"next\":" << schema.ffield.next
+               << ",\"name\":" << schema.ffield.name << "},\n";
+        stream << "    \"ffield_class\": {\"name\":" << schema.ffieldClass.name
+               << ",\"id\":" << schema.ffieldClass.id
+               << ",\"cast_flags\":" << schema.ffieldClass.castFlags
+               << ",\"class_flags\":" << schema.ffieldClass.classFlags
+               << ",\"super_class\":" << schema.ffieldClass.superClass << "},\n";
         stream << "    \"ustruct\": {\"super\":" << schema.ustruct.superStruct
                << ",\"children\":" << schema.ustruct.children
                << ",\"child_properties\":" << schema.ustruct.childProperties
@@ -1024,6 +1046,7 @@ namespace anduefker::generation
         stream << "    \"ufunction\": {\"flags\":" << schema.ufunction.functionFlags
                << ",\"num_params\":" << schema.ufunction.numParams
                << ",\"param_size\":" << schema.ufunction.paramSize
+               << ",\"return_value_offset\":" << schema.ufunction.returnValueOffset
                << ",\"native_function\":" << schema.ufunction.nativeFunction << "},\n";
         stream << "    \"uenum\": {\"names\":" << schema.uenum.names
                << ",\"underlying_type\":" << schema.uenum.underlyingType << "}\n";
@@ -1083,7 +1106,7 @@ namespace anduefker::generation
                        << JsonEscape(property.reflectedClass) << "\",\"offset\":" << property.offset
                        << ",\"element_size\":" << property.elementSize << ",\"array_dim\":"
                        << property.arrayDim << ",\"flags\":\""
-                       << Hex(static_cast<uintptr_t>(property.flags)) << "\",\"kind\":\""
+                       << Hex(property.flags) << "\",\"kind\":\""
                        << PropertyKindName(property.type.kind) << "\",\"referenced_object\":\""
                        << Hex(property.type.referencedObject) << "\",\"type_details_resolved\":";
                 WriteJsonBool(stream, property.typeDetailsResolved);
@@ -1116,7 +1139,17 @@ namespace anduefker::generation
                        << Hex(function.nativeRva) << "\",\"flags\":\""
                        << Hex(static_cast<uintptr_t>(function.flags)) << "\",\"num_params\":"
                        << static_cast<unsigned int>(function.numParams) << ",\"param_size\":"
-                       << function.paramSize << ",\"parameters\":[";
+                       << function.paramSize << ",\"return_value_offset\":"
+                       << function.returnValueOffset << ",\"header_num_params\":"
+                       << static_cast<unsigned int>(function.headerNumParams) << ",\"header_param_size\":"
+                       << function.headerParamSize << ",\"derived_num_params\":"
+                       << function.derivedNumParams << ",\"derived_param_size\":"
+                       << function.derivedParamSize << ",\"default_initializer_count\":"
+                       << function.defaultInitializerCount << ",\"parameter_semantics_valid\":";
+                WriteJsonBool(stream, function.parameterSemanticsValid);
+                stream << ",\"parameter_semantics_consistent\":";
+                WriteJsonBool(stream, function.parameterSemanticsConsistent);
+                stream << ",\"parameters\":[";
                 for (size_t parameterIndex = 0; parameterIndex < function.parameters.size(); ++parameterIndex)
                 {
                     const PropertyIR &parameter = function.parameters[parameterIndex];

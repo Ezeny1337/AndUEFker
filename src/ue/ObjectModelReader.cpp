@@ -6,13 +6,7 @@ namespace anduefker::ue
 {
     namespace
     {
-        std::string NormalizePropertyClassName(const std::string &name)
-        {
-            if (name.size() > 1 && (name[0] == 'U' || name[0] == 'F') &&
-                name[1] >= 'A' && name[1] <= 'Z')
-                return name.substr(1);
-            return name;
-        }
+        constexpr uint64_t kFPropertyCastFlag = 0x0000000000008000ull;
 
         std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
         {
@@ -48,6 +42,100 @@ namespace anduefker::ue
         if (!memory_.Read(address, value) || value == 0)
             return std::nullopt;
         return value;
+    }
+
+    std::optional<std::pair<uintptr_t, bool>> ObjectModelReader::DecodeFieldOwner(uintptr_t field) const
+    {
+        const auto ownerAddress = Add(field, schema_.ffield.owner);
+        if (!ownerAddress)
+            return std::nullopt;
+        uintptr_t rawOwner = 0;
+        if (!memory_.Read(*ownerAddress, rawOwner))
+            return std::nullopt;
+
+        uintptr_t owner = rawOwner;
+        bool ownerIsUObject = false;
+        if (schema_.features.fFieldOwnerEncoding == FFieldOwnerEncoding::TaggedPointer)
+        {
+            ownerIsUObject = (rawOwner & static_cast<uintptr_t>(1)) != 0;
+            owner = rawOwner & ~static_cast<uintptr_t>(1);
+        }
+        else
+        {
+            const auto discriminatorAddress = Add(*ownerAddress, static_cast<int32_t>(sizeof(uintptr_t)));
+            uint8_t discriminator = 0;
+            if (!discriminatorAddress || !memory_.Read(*discriminatorAddress, discriminator) || discriminator > 1)
+                return std::nullopt;
+            ownerIsUObject = discriminator == 1;
+        }
+        if (owner == 0 || !IsReadableObject(owner))
+            return std::nullopt;
+        return std::pair{owner, ownerIsUObject};
+    }
+
+    FieldKind ObjectModelReader::ResolveFFieldKind(uintptr_t classAddress, FieldKind fallback) const
+    {
+        if (fallback != FieldKind::FField || schema_.ffieldClass.superClass < 0)
+            return fallback;
+
+        uintptr_t current = classAddress;
+        std::unordered_set<uintptr_t> visited;
+        bool sawClassTail = false;
+        FieldKind nameFallback = fallback;
+        for (size_t depth = 0; current != 0 && depth < 32 && visited.insert(current).second; ++depth)
+        {
+            const auto nameAddress = Add(current, schema_.ffieldClass.name);
+            const auto superAddress = Add(current, schema_.ffieldClass.superClass);
+            if (!nameAddress || !superAddress)
+                break;
+            const auto name = names_.ReadFName(*nameAddress);
+            uintptr_t superClass = 0;
+            if (schema_.ffieldClass.castFlags >= 0)
+            {
+                const auto castFlagsAddress = Add(current, schema_.ffieldClass.castFlags);
+                uint64_t castFlags = 0;
+                if (castFlagsAddress && memory_.Read(*castFlagsAddress, castFlags))
+                {
+                    sawClassTail = true;
+                    if ((castFlags & kFPropertyCastFlag) != 0)
+                        return FieldKind::FProperty;
+                }
+            }
+            if (name && NormalizeRuntimeFieldName(*name) == "Property")
+                nameFallback = FieldKind::FProperty;
+            if (!memory_.Read(*superAddress, superClass))
+                break;
+            current = superClass;
+        }
+        return sawClassTail ? fallback : nameFallback;
+    }
+
+    FieldKind ObjectModelReader::ResolveUFieldKind(uintptr_t classAddress, FieldKind fallback) const
+    {
+        if (schema_.ustruct.superStruct < 0)
+            return fallback;
+
+        uintptr_t current = classAddress;
+        std::unordered_set<uintptr_t> visited;
+        FieldKind nameFallback = fallback;
+        for (size_t depth = 0; current != 0 && depth < 32 && visited.insert(current).second; ++depth)
+        {
+            const auto className = NameField(current);
+            if (className)
+            {
+                const std::string normalized = NormalizeRuntimeFieldName(*className);
+                if (normalized == "Property")
+                    nameFallback = FieldKind::UProperty;
+                else if (normalized == "Function" || normalized == "DelegateFunction" ||
+                         normalized == "SparseDelegateFunction" || normalized == "VerseFunction")
+                    return FieldKind::UFunction;
+            }
+            const auto super = StructSuper(current);
+            if (!super || *super == 0)
+                break;
+            current = *super;
+        }
+        return nameFallback;
     }
 
     bool ObjectModelReader::IsReadableObject(uintptr_t object) const
@@ -96,10 +184,10 @@ namespace anduefker::ue
         const auto address = Add(object, schema_.uobject.flags);
         if (!address)
             return std::nullopt;
-        uint32_t raw = 0;
+        int32_t raw = 0;
         if (!memory_.Read(*address, raw))
             return std::nullopt;
-        return raw;
+        return static_cast<uint32_t>(binding_.decode.objectFlags(raw, *address));
     }
 
     std::optional<std::string> ObjectModelReader::NameField(uintptr_t object) const
@@ -188,20 +276,21 @@ namespace anduefker::ue
             return std::nullopt;
 
         const auto classValue = ReadPointer(*classAddress);
-        auto ownerValue = ReadPointer(*ownerAddress);
+        const auto ownerValue = DecodeFieldOwner(field);
         const auto name = names_.ReadFName(*nameAddress);
         uintptr_t nextValue = 0;
         if (!classValue || !ownerValue || !memory_.Read(*nextAddress, nextValue) || !name)
             return std::nullopt;
-        if (schema_.features.fFieldOwnerMask)
-            *ownerValue &= ~static_cast<uintptr_t>(1);
         const auto classNameAddress = Add(*classValue, schema_.ffieldClass.name);
         if (!classNameAddress)
             return std::nullopt;
         const auto className = names_.ReadFName(*classNameAddress);
         if (!className)
             return std::nullopt;
-        return FieldMetadata{field, *classValue, *ownerValue, nextValue, *name, *className};
+        const std::string normalizedClassName = NormalizeRuntimeFieldName(*className);
+        const FieldKind kind = ResolveFFieldKind(*classValue, FieldKindFromRuntimeName(*className, true));
+        return FieldMetadata{field, *classValue, ownerValue->first, ownerValue->second, nextValue, *name, *className,
+                             normalizedClassName, kind};
     }
 
     std::optional<FieldMetadata> ObjectModelReader::UField(uintptr_t field) const
@@ -224,29 +313,88 @@ namespace anduefker::ue
         const auto className = NameField(*classAddress);
         if (!className)
             return std::nullopt;
-        return FieldMetadata{field, *classAddress, 0, nextValue, *name, *className};
+        const std::string normalizedClassName = NormalizeRuntimeFieldName(*className);
+        return FieldMetadata{field, *classAddress, 0, false, nextValue, *name, *className,
+                             normalizedClassName, ResolveUFieldKind(*classAddress, FieldKindFromRuntimeName(*className, false))};
+    }
+
+    FieldChainResult ObjectModelReader::FieldsWithStatus(uintptr_t first, size_t maxFields) const
+    {
+        FieldChainResult result;
+        if (first == 0)
+            return result;
+
+        std::unordered_set<uintptr_t> visited;
+        uintptr_t current = first;
+        while (current != 0)
+        {
+            if (!visited.insert(current).second)
+            {
+                result.status = FieldChainStatus::CycleDetected;
+                return result;
+            }
+            if (result.fields.size() >= maxFields)
+            {
+                result.status = FieldChainStatus::LimitExceeded;
+                return result;
+            }
+            const auto field = Field(current);
+            if (!field)
+            {
+                result.status = FieldChainStatus::Unreadable;
+                return result;
+            }
+            result.fields.push_back(*field);
+            current = field->nextAddress;
+        }
+        result.status = FieldChainStatus::Complete;
+        return result;
+    }
+
+    FieldChainResult ObjectModelReader::UFieldsWithStatus(uintptr_t first, size_t maxFields) const
+    {
+        FieldChainResult result;
+        if (first == 0)
+            return result;
+
+        std::unordered_set<uintptr_t> visited;
+        uintptr_t current = first;
+        while (current != 0)
+        {
+            if (!visited.insert(current).second)
+            {
+                result.status = FieldChainStatus::CycleDetected;
+                return result;
+            }
+            if (result.fields.size() >= maxFields)
+            {
+                result.status = FieldChainStatus::LimitExceeded;
+                return result;
+            }
+            const auto field = UField(current);
+            if (!field)
+            {
+                result.status = FieldChainStatus::Unreadable;
+                return result;
+            }
+            result.fields.push_back(*field);
+            current = field->nextAddress;
+        }
+        result.status = FieldChainStatus::Complete;
+        return result;
     }
 
     std::vector<FieldMetadata> ObjectModelReader::Fields(uintptr_t first, size_t maxFields) const
     {
-        std::vector<FieldMetadata> result;
-        std::unordered_set<uintptr_t> visited;
-        uintptr_t current = first;
-        while (current != 0 && result.size() < maxFields && visited.insert(current).second)
-        {
-            const auto field = Field(current);
-            if (!field)
-                break;
-            result.push_back(*field);
-            current = field->nextAddress;
-        }
-        return result;
+        return FieldsWithStatus(first, maxFields).fields;
     }
 
     std::optional<PropertyMetadata> ObjectModelReader::Property(uintptr_t field) const
     {
         const auto base = Field(field);
         if (!base)
+            return std::nullopt;
+        if (!IsPropertyFieldKind(base->kind))
             return std::nullopt;
 
         const auto arrayDimAddress = Add(field, schema_.property.arrayDim);
@@ -272,7 +420,7 @@ namespace anduefker::ue
             uintptr_t value = 0;
             return address && memory_.Read(*address, value) ? value : 0;
         };
-        const std::string propertyClassName = NormalizePropertyClassName(base->className);
+        const std::string &propertyClassName = base->normalizedClassName;
         if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" ||
             propertyClassName == "SoftObjectProperty" || propertyClassName == "WeakObjectProperty" ||
             propertyClassName == "LazyObjectProperty" || propertyClassName == "InterfaceProperty")

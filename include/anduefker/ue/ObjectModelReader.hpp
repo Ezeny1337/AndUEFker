@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,13 @@ namespace anduefker::ue
 {
     using ::anduefker::binding::RuntimeBinding;
     using ::anduefker::memory::IMemorySource;
+
+    inline constexpr uint32_t kRFClassDefaultObject = 0x00000010u;
+    inline constexpr uint32_t kRFIncompleteLoad =
+        0x00000200u | // RF_NeedInitialization
+        0x00000400u | // RF_NeedLoad
+        0x00001000u | // RF_NeedPostLoad
+        0x00002000u;  // RF_NeedPostLoadSubobjects
 
     struct ObjectMetadata
     {
@@ -32,9 +40,32 @@ namespace anduefker::ue
         uintptr_t address = 0;
         uintptr_t classAddress = 0;
         uintptr_t ownerAddress = 0;
+        bool ownerIsUObject = false;
         uintptr_t nextAddress = 0;
         std::string name;
         std::string className;
+        std::string normalizedClassName;
+        FieldKind kind = FieldKind::Unknown;
+    };
+
+    enum class FieldChainStatus
+    {
+        Empty,
+        Complete,
+        Unreadable,
+        CycleDetected,
+        LimitExceeded,
+    };
+
+    struct FieldChainResult
+    {
+        std::vector<FieldMetadata> fields;
+        FieldChainStatus status = FieldChainStatus::Empty;
+
+        [[nodiscard]] bool Complete() const
+        {
+            return status == FieldChainStatus::Empty || status == FieldChainStatus::Complete;
+        }
     };
 
     struct PropertyMetadata : FieldMetadata
@@ -77,6 +108,8 @@ namespace anduefker::ue
 
         [[nodiscard]] std::optional<FieldMetadata> Field(uintptr_t field) const;
         [[nodiscard]] std::optional<FieldMetadata> UField(uintptr_t field) const;
+        [[nodiscard]] FieldChainResult FieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
+        [[nodiscard]] FieldChainResult UFieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::vector<FieldMetadata> Fields(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::optional<PropertyMetadata> Property(uintptr_t field) const;
         [[nodiscard]] std::optional<uintptr_t> StructChildren(uintptr_t structure) const;
@@ -88,6 +121,9 @@ namespace anduefker::ue
 
     private:
         [[nodiscard]] std::optional<uintptr_t> ReadPointer(uintptr_t address) const;
+        [[nodiscard]] std::optional<std::pair<uintptr_t, bool>> DecodeFieldOwner(uintptr_t field) const;
+        [[nodiscard]] FieldKind ResolveFFieldKind(uintptr_t classAddress, FieldKind fallback) const;
+        [[nodiscard]] FieldKind ResolveUFieldKind(uintptr_t classAddress, FieldKind fallback) const;
         [[nodiscard]] std::optional<std::string> NameField(uintptr_t object) const;
         [[nodiscard]] bool IsReadableObject(uintptr_t object) const;
 

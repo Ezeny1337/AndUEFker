@@ -31,6 +31,7 @@ namespace anduefker::ue
         [[nodiscard]] std::optional<uintptr_t> EntryAt(int32_t index) const;
         [[nodiscard]] std::optional<std::string> ReadName(int32_t index) const;
         [[nodiscard]] std::optional<std::string> ReadFName(uintptr_t fnameAddress) const;
+        [[nodiscard]] std::optional<std::string> ReadComparisonName(uintptr_t fnameAddress) const;
 
     private:
         [[nodiscard]] std::optional<std::string> ReadEntry(uintptr_t entry) const;

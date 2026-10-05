@@ -27,6 +27,7 @@ namespace anduefker::memory
         bool Initialize(pid_t pid);
         [[nodiscard]] bool IsInitialized() const override;
         [[nodiscard]] pid_t ProcessId() const override;
+        [[nodiscard]] uint64_t AddressSpaceGeneration() const override { return addressSpaceGeneration_; }
         [[nodiscard]] bool RefreshAddressSpace() override;
         [[nodiscard]] bool IsReadable(uintptr_t address, size_t size) const override;
         [[nodiscard]] bool IsExecutable(uintptr_t address, size_t size) const override;
@@ -60,5 +61,6 @@ namespace anduefker::memory
         mutable size_t cacheSize_ = 0;
         size_t maxCacheSize_ = kDefaultCacheSize;
         mutable bool cacheEnabled_ = true;
+        uint64_t addressSpaceGeneration_ = 0;
     };
 } // namespace anduefker::memory

@@ -221,20 +221,24 @@ namespace anduefker::ue
 
     std::optional<std::string> NameStoreReader::ReadFName(uintptr_t fnameAddress) const
     {
-        if (fnameAddress == 0 || fname_.comparisonIndex < 0)
-            return std::nullopt;
-        const auto indexAddress = AddOffset(fnameAddress, static_cast<uintptr_t>(fname_.comparisonIndex));
-        if (!indexAddress)
-            return std::nullopt;
-        int32_t rawIndex = 0;
-        if (!memory_.Read(*indexAddress, rawIndex))
-            return std::nullopt;
-        const int32_t index = decode_.nameIndex(rawIndex, *indexAddress);
-        auto name = ReadName(index);
+        auto name = ReadComparisonName(fnameAddress);
         if (!name)
             return std::nullopt;
 
-        if (!features_.outlineNumberName && fname_.number >= 0)
+        if (fname_.displayIndex >= 0)
+        {
+            const auto displayAddress = AddOffset(fnameAddress, static_cast<uintptr_t>(fname_.displayIndex));
+            int32_t rawDisplayIndex = 0;
+            if (displayAddress && memory_.Read(*displayAddress, rawDisplayIndex))
+            {
+                const int32_t displayIndex = decode_.nameIndex(rawDisplayIndex, *displayAddress);
+                const auto displayName = ReadName(displayIndex);
+                if (displayName && !displayName->empty() && *displayName != "None")
+                    *name = *displayName;
+            }
+        }
+
+        if (fname_.numberLayout == FNameNumberLayout::Inline && fname_.number >= 0)
         {
             const auto numberAddress = AddOffset(fnameAddress, static_cast<uintptr_t>(fname_.number));
             if (numberAddress)
@@ -245,5 +249,19 @@ namespace anduefker::ue
             }
         }
         return name;
+    }
+
+    std::optional<std::string> NameStoreReader::ReadComparisonName(uintptr_t fnameAddress) const
+    {
+        if (fnameAddress == 0 || fname_.comparisonIndex < 0)
+            return std::nullopt;
+        const auto indexAddress = AddOffset(fnameAddress, static_cast<uintptr_t>(fname_.comparisonIndex));
+        if (!indexAddress)
+            return std::nullopt;
+        int32_t rawIndex = 0;
+        if (!memory_.Read(*indexAddress, rawIndex))
+            return std::nullopt;
+        const int32_t index = decode_.nameIndex(rawIndex, *indexAddress);
+        return ReadName(index);
     }
 } // namespace anduefker::ue

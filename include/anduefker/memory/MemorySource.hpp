@@ -41,6 +41,7 @@ namespace anduefker::memory
 
         [[nodiscard]] virtual bool IsInitialized() const = 0;
         [[nodiscard]] virtual pid_t ProcessId() const = 0;
+        [[nodiscard]] virtual uint64_t AddressSpaceGeneration() const = 0;
         [[nodiscard]] virtual bool RefreshAddressSpace() = 0;
         [[nodiscard]] virtual bool IsReadable(uintptr_t address, size_t size) const = 0;
         [[nodiscard]] virtual bool IsExecutable(uintptr_t address, size_t size) const = 0;

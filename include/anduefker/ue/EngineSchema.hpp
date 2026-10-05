@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace anduefker::ue
 {
@@ -12,6 +13,40 @@ namespace anduefker::ue
         FlagsDisplayNamePackage,
         FlagsPackageDisplayName,
     };
+
+    enum class FNameNumberLayout
+    {
+        Inline,
+        Outlined,
+    };
+
+    enum class FNameDisplayLayout
+    {
+        None,
+        BeforeNumber,
+        AfterNumber,
+    };
+
+    enum class FFieldOwnerEncoding
+    {
+        ExplicitBoolean,
+        TaggedPointer,
+    };
+
+    enum class FieldKind
+    {
+        Unknown,
+        UField,
+        UFunction,
+        UProperty,
+        FField,
+        FProperty,
+    };
+
+    [[nodiscard]] std::string NormalizeRuntimeFieldName(std::string_view name);
+    [[nodiscard]] FieldKind FieldKindFromRuntimeName(std::string_view name, bool useFProperty);
+    [[nodiscard]] bool IsFunctionFieldKind(FieldKind kind);
+    [[nodiscard]] bool IsPropertyFieldKind(FieldKind kind);
 
     enum class SchemaLayoutVariant
     {
@@ -41,7 +76,9 @@ namespace anduefker::ue
         bool useNamePool = false;
         bool casePreservingName = false;
         bool outlineNumberName = false;
-        bool fFieldOwnerMask = false;
+        FNameDisplayLayout fnameDisplayLayout = FNameDisplayLayout::None;
+        FFieldOwnerEncoding fFieldOwnerEncoding = FFieldOwnerEncoding::ExplicitBoolean;
+        bool functionDefaultsContinueAfterInitializer = false;
         bool enumHasUnderlyingType = false;
         bool enumHasFlags = false;
         bool enumCppFormIsByte = false;
@@ -54,14 +91,38 @@ namespace anduefker::ue
         bool arrayDimIsByte = false;
         bool largeWorldCoordinates = false;
         bool objectArrayMayPackItem = false;
+
+        [[nodiscard]] bool operator==(const EngineFeatures &other) const = default;
     };
 
     struct FNameSchema
     {
         int32_t comparisonIndex = -1;
         int32_t number = -1;
+        int32_t displayIndex = -1;
         int32_t size = -1;
+        FNameNumberLayout numberLayout = FNameNumberLayout::Inline;
+        FNameDisplayLayout displayLayout = FNameDisplayLayout::None;
+
+        [[nodiscard]] bool operator==(const FNameSchema &other) const = default;
     };
+
+    struct FNamePhysicalLayout
+    {
+        int32_t size = -1;
+        int32_t comparisonIndex = -1;
+        int32_t number = -1;
+        int32_t displayIndex = -1;
+        FNameNumberLayout numberLayout = FNameNumberLayout::Inline;
+
+        [[nodiscard]] bool operator==(const FNamePhysicalLayout &other) const
+        {
+            return size == other.size && comparisonIndex == other.comparisonIndex && number == other.number &&
+                   displayIndex == other.displayIndex && numberLayout == other.numberLayout;
+        }
+    };
+
+    [[nodiscard]] FNamePhysicalLayout GetFNamePhysicalLayout(const FNameSchema &schema);
 
     struct UObjectSchema
     {
@@ -71,11 +132,15 @@ namespace anduefker::ue
         int32_t classPointer = -1;
         int32_t name = -1;
         int32_t outer = -1;
+
+        [[nodiscard]] bool operator==(const UObjectSchema &other) const = default;
     };
 
     struct UFieldSchema
     {
         int32_t next = -1;
+
+        [[nodiscard]] bool operator==(const UFieldSchema &other) const = default;
     };
 
     struct FFieldSchema
@@ -86,12 +151,19 @@ namespace anduefker::ue
         int32_t next = -1;
         int32_t name = -1;
         int32_t editorOnlyMetadata = -1;
+
+        [[nodiscard]] bool operator==(const FFieldSchema &other) const = default;
     };
 
     struct FFieldClassSchema
     {
         int32_t name = -1;
+        int32_t id = -1;
         int32_t castFlags = -1;
+        int32_t classFlags = -1;
+        int32_t superClass = -1;
+
+        [[nodiscard]] bool operator==(const FFieldClassSchema &other) const = default;
     };
 
     struct UStructSchema
@@ -103,6 +175,8 @@ namespace anduefker::ue
         int32_t minAlignment = -1;
         int32_t structBaseChain = -1;
         int32_t tail = -1;
+
+        [[nodiscard]] bool operator==(const UStructSchema &other) const = default;
     };
 
     struct UClassSchema
@@ -110,6 +184,8 @@ namespace anduefker::ue
         int32_t castFlags = -1;
         int32_t classDefaultObject = -1;
         int32_t implementedInterfaces = -1;
+
+        [[nodiscard]] bool operator==(const UClassSchema &other) const = default;
     };
 
     struct UFunctionSchema
@@ -117,7 +193,10 @@ namespace anduefker::ue
         int32_t functionFlags = -1;
         int32_t numParams = -1;
         int32_t paramSize = -1;
+        int32_t returnValueOffset = -1;
         int32_t nativeFunction = -1;
+
+        [[nodiscard]] bool operator==(const UFunctionSchema &other) const = default;
     };
 
     struct UEnumSchema
@@ -127,6 +206,8 @@ namespace anduefker::ue
         int32_t flags = -1;
         int32_t underlyingType = -1;
         int32_t enumPackage = -1;
+
+        [[nodiscard]] bool operator==(const UEnumSchema &other) const = default;
     };
 
     struct PropertySchema
@@ -136,6 +217,8 @@ namespace anduefker::ue
         int32_t propertyFlags = -1;
         int32_t offsetInternal = -1;
         int32_t baseSize = -1;
+
+        [[nodiscard]] bool operator==(const PropertySchema &other) const = default;
     };
 
     struct PropertySubtypesSchema
@@ -152,6 +235,8 @@ namespace anduefker::ue
         int32_t enumBase = -1;
         int32_t fieldPathClass = -1;
         int32_t optionalValue = -1;
+
+        [[nodiscard]] bool operator==(const PropertySubtypesSchema &other) const = default;
     };
 
     struct SchemaValidation
@@ -189,5 +274,6 @@ namespace anduefker::ue
         SchemaValidation validation;
 
         [[nodiscard]] bool IsReadyForReflection() const;
+        [[nodiscard]] bool HasSameReflectionLayout(const EngineSchema &other) const;
     };
 } // namespace anduefker::ue

@@ -18,6 +18,7 @@ namespace anduefker::app
     using ::anduefker::binding::LocatedAddress;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::memory::ReadStats;
+    using ::anduefker::ue::CreateSchemaProbeBootstrap;
     using ::anduefker::ue::EngineProfile;
     using ::anduefker::ue::SchemaCatalog;
     using ::anduefker::ue::SchemaLayoutVariantName;
@@ -219,69 +220,162 @@ namespace anduefker::app
         EngineSchema schema;
         EngineProfile selectedProfile;
         SchemaResolutionReport schemaReport;
-        bool schemaAccepted = false;
-        bool schemaAmbiguous = false;
-        int32_t bestProfileScore = std::numeric_limits<int32_t>::min();
-        std::vector<std::string> acceptedProfiles;
-        std::vector<std::string> profileFailures;
+        SchemaSelectionResult schemaSelection;
+        const std::vector<EngineProfile> profiles = SchemaCatalog::Profiles();
         Note(RuntimeLogLevel::Info, "Detecting Unreal Engine schema profile...");
-        for (const EngineProfile &profile : SchemaCatalog::Profiles())
+        auto schemaBootstrap = CreateSchemaProbeBootstrap(*memory_, context_.Binding());
+        if (!schemaBootstrap->IsValid())
         {
-            EngineSchema candidateSchema;
-            SchemaResolver resolver(*memory_, context_.Binding(), profile);
-            const SchemaResolutionReport candidateReport = resolver.Resolve(candidateSchema);
-            Note(RuntimeLogLevel::Debug, "schema_candidate id=" + profile.id +
-                                             " range=" + profile.versionRange +
-                                             " layout=" + SchemaLayoutVariantName(profile.layout) +
-                                             " accepted=" + std::to_string(candidateReport.accepted) +
-                                             " score=" + std::to_string(candidateReport.score));
-            if (candidateReport.accepted)
+            const std::string failure = schemaBootstrap->failure.empty()
+                                            ? "schema bootstrap is unavailable"
+                                            : schemaBootstrap->failure;
+            failures_.push_back(failure);
+            Note(RuntimeLogLevel::Error, failure);
+            FlushDiagnostics();
+            return RuntimeSessionStatus::BindingReady;
+        }
+        std::vector<EngineSchema> candidateSchemas;
+        auto resolveProfiles = [&]()
+        {
+            schemaSelection = {};
+            candidateSchemas.clear();
+            candidateSchemas.reserve(profiles.size());
+            schemaSelection.candidates.reserve(profiles.size());
+            for (const EngineProfile &profile : profiles)
             {
-                if (!schemaAccepted || candidateReport.score > bestProfileScore)
+                EngineSchema candidateSchema;
+                SchemaResolver resolver(*memory_, context_.Binding(), profile, {},
+                                        context_.Module().base, context_.Module().end, schemaBootstrap);
+                SchemaCandidateSummary candidateReport = resolver.Resolve(candidateSchema);
+                const std::string reason = candidateReport.failures.empty()
+                                               ? (candidateReport.evidence.empty() ? "none" : candidateReport.evidence.front())
+                                               : candidateReport.failures.front();
+                Note(RuntimeLogLevel::Debug, "schema_candidate id=" + profile.id +
+                                                 " range=" + profile.versionRange +
+                                                 " layout=" + SchemaLayoutVariantName(profile.layout) +
+                                                 " stage=" + candidateReport.failureStage +
+                                                 " accepted=" + std::to_string(candidateReport.accepted) +
+                                                 " score=" + std::to_string(candidateReport.score) +
+                                                 " reason=" + reason);
+                for (const std::string &evidence : candidateReport.evidence)
                 {
-                    schema = std::move(candidateSchema);
-                    schemaReport = candidateReport;
-                    selectedProfile = profile;
-                    bestProfileScore = candidateReport.score;
-                    schemaAccepted = true;
-                    schemaAmbiguous = false;
-                    acceptedProfiles = {profile.id};
+                    const bool important = evidence.find("resolved ") != std::string::npos ||
+                                           evidence.find("failed") != std::string::npos ||
+                                           evidence.find("rejected") != std::string::npos ||
+                                           evidence.find("candidate") != std::string::npos ||
+                                           evidence.find("sample eligibility") != std::string::npos ||
+                                           evidence.find("parameter chain") != std::string::npos ||
+                                           evidence.find("case-preserving") != std::string::npos;
+                    if (important)
+                        Note(RuntimeLogLevel::Debug, "schema_evidence id=" + profile.id + " " + evidence);
                 }
-                else if (candidateReport.score == bestProfileScore)
-                {
-                    schemaAmbiguous = true;
-                    acceptedProfiles.push_back(profile.id);
-                }
-                continue;
+                schemaSelection.candidates.push_back(std::move(candidateReport));
+                candidateSchemas.push_back(std::move(candidateSchema));
             }
 
-            profileFailures.push_back(profile.id + ": " +
-                                      (candidateReport.failures.empty() ? "schema probes rejected the profile"
-                                                                        : candidateReport.failures.front()));
-        }
-
-        if (schemaAccepted && schemaAmbiguous)
-        {
-            std::string ambiguousProfiles;
-            for (size_t index = 0; index < acceptedProfiles.size(); ++index)
+            int32_t bestScore = std::numeric_limits<int32_t>::min();
+            for (size_t index = 0; index < schemaSelection.candidates.size(); ++index)
             {
-                if (index != 0)
-                    ambiguousProfiles += ",";
-                ambiguousProfiles += acceptedProfiles[index];
+                const SchemaCandidateSummary &candidate = schemaSelection.candidates[index];
+                if (!candidate.accepted)
+                    continue;
+                if (!schemaSelection.accepted || candidate.score > bestScore)
+                {
+                    schemaSelection.accepted = true;
+                    schemaSelection.ambiguous = false;
+                    schemaSelection.layoutAmbiguous = false;
+                    schemaSelection.selectedIndex = index;
+                    bestScore = candidate.score;
+                    continue;
+                }
+                if (candidate.score == bestScore)
+                {
+                    schemaSelection.ambiguous = true;
+                    if (!candidateSchemas[index].HasSameReflectionLayout(candidateSchemas[schemaSelection.selectedIndex]))
+                        schemaSelection.layoutAmbiguous = true;
+                }
             }
-            schemaReport.evidence.push_back("equivalent structure profiles passed with equal score: " + ambiguousProfiles +
-                                            "; selected=" + selectedProfile.id);
+
+            if (schemaSelection.accepted && schemaSelection.layoutAmbiguous)
+            {
+                schemaSelection.accepted = false;
+                schemaSelection.candidates[schemaSelection.selectedIndex].accepted = false;
+                schemaSelection.candidates[schemaSelection.selectedIndex].failures.push_back(
+                    "schema selection is ambiguous across distinct layout variants");
+            }
+        };
+
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            resolveProfiles();
+            bool addressSpaceChanged = false;
+            for (const SchemaCandidateSummary &candidate : schemaSelection.candidates)
+                addressSpaceChanged = addressSpaceChanged || candidate.addressSpaceChanged;
+            if (!addressSpaceChanged || attempt != 0)
+                break;
+            Note(RuntimeLogLevel::Warning, "Remote address space changed during schema resolution; refreshing and retrying");
+            if (!memory_->RefreshAddressSpace())
+            {
+                Note(RuntimeLogLevel::Error, "remote address-space refresh failed after schema probe invalidation");
+                break;
+            }
+            schemaBootstrap = CreateSchemaProbeBootstrap(*memory_, context_.Binding());
+            if (!schemaBootstrap->IsValid())
+            {
+                Note(RuntimeLogLevel::Error, schemaBootstrap->failure.empty()
+                                                 ? "schema bootstrap could not be recreated after address-space refresh"
+                                                 : schemaBootstrap->failure);
+                break;
+            }
         }
 
+        const bool schemaAccepted = schemaSelection.accepted;
+        if (schemaAccepted)
+        {
+            schema = std::move(candidateSchemas[schemaSelection.selectedIndex]);
+            schemaReport = schemaSelection.candidates[schemaSelection.selectedIndex];
+            selectedProfile = profiles[schemaSelection.selectedIndex];
+            if (schemaSelection.ambiguous)
+            {
+                std::string equivalentProfiles;
+                for (const SchemaCandidateSummary &candidate : schemaSelection.candidates)
+                {
+                    if (candidate.accepted && candidate.score == schemaReport.score)
+                        equivalentProfiles += " " + candidate.profileId;
+                }
+                const std::string evidence = "equivalent resolved layouts; selected=" + selectedProfile.id +
+                                             " compatible_profiles=" + equivalentProfiles +
+                                             "; exact engine version is not identified by layout alone";
+                schemaReport.evidence.push_back(evidence);
+                Note(RuntimeLogLevel::Debug, evidence);
+            }
+        }
+        else
+        {
+            schemaReport.profileId = "none";
+            schemaReport.failureStage = "selection";
+            schemaReport.failures.push_back(schemaSelection.layoutAmbiguous
+                                                ? "schema selection is ambiguous across distinct layout variants"
+                                                : "schema selection failed: no profile satisfied semantic validation");
+            for (const SchemaCandidateSummary &candidate : schemaSelection.candidates)
+            {
+                const std::string attribution = "profile=" + candidate.profileId +
+                                                " stage=" + candidate.failureStage + " ";
+                for (const std::string &evidence : candidate.evidence)
+                    schemaReport.evidence.push_back(attribution + evidence);
+                for (const std::string &failure : candidate.failures)
+                    schemaReport.failures.push_back(attribution + failure);
+            }
+        }
         if (!schemaAccepted)
         {
-            schemaReport.failures = std::move(profileFailures);
-            schemaReport.accepted = false;
+            const std::string failure = schemaReport.failures.empty()
+                                            ? "schema resolution failed without a diagnostic"
+                                            : schemaReport.failures.front();
+            Note(RuntimeLogLevel::Error, failure);
+            for (size_t index = 1; index < schemaReport.failures.size(); ++index)
+                Note(RuntimeLogLevel::Error, schemaReport.failures[index]);
         }
-        for (const std::string &evidence : schemaReport.evidence)
-            Note(RuntimeLogLevel::Debug, "schema: " + evidence);
-        for (const std::string &failure : schemaReport.failures)
-            Note(RuntimeLogLevel::Warning, "schema failure: " + failure);
         const ReadStats &memoryStats = memory_->Stats();
         Note(RuntimeLogLevel::Debug, "memory stats operations=" + std::to_string(memoryStats.operations) +
                                          " requested_bytes=" + std::to_string(memoryStats.requestedBytes) +
@@ -290,8 +384,6 @@ namespace anduefker::app
         if (!schemaAccepted)
         {
             failures_.insert(failures_.end(), schemaReport.failures.begin(), schemaReport.failures.end());
-            for (const std::string &failure : schemaReport.failures)
-                Note(RuntimeLogLevel::Error, failure);
             FlushDiagnostics();
             return RuntimeSessionStatus::BindingReady;
         }

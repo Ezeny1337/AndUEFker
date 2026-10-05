@@ -75,22 +75,27 @@ namespace anduefker::ue
         // 仅提供初始探测顺序，切勿将其视作已 Cook 或已修改二进制文件的证据
         result.casePreservingName = false;
         result.outlineNumberName = false;
+        result.fnameDisplayLayout = FNameDisplayLayout::None;
 
         switch (layout)
         {
         case SchemaLayoutVariant::UProperty:
+            result.fnameDisplayLayout = FNameDisplayLayout::BeforeNumber;
             break;
         case SchemaLayoutVariant::FProperty:
             result.useFProperty = true;
+            result.fnameDisplayLayout = FNameDisplayLayout::BeforeNumber;
             break;
         case SchemaLayoutVariant::FPropertyEnumFlags:
             result.useFProperty = true;
+            result.fnameDisplayLayout = FNameDisplayLayout::BeforeNumber;
             result.enumHasFlags = true;
             result.enumFlagsRequired = true;
             result.enumTailLayout = EnumTailLayout::Flags;
             break;
         case SchemaLayoutVariant::FFieldExplicit:
             result.useFProperty = true;
+            result.fnameDisplayLayout = FNameDisplayLayout::BeforeNumber;
             result.largeWorldCoordinates = true;
             result.enumHasFlags = true;
             result.enumFlagsRequired = true;
@@ -103,6 +108,7 @@ namespace anduefker::ue
             result.enumFlagsRequired = true;
             result.enumHasPackage = true;
             result.enumTailLayout = EnumTailLayout::FlagsDisplayNamePackage;
+            result.fnameDisplayLayout = FNameDisplayLayout::AfterNumber;
             break;
         case SchemaLayoutVariant::FFieldTagged:
             result.useFProperty = true;
@@ -112,7 +118,9 @@ namespace anduefker::ue
             result.enumFlagsIsByte = true;
             result.enumHasPackage = true;
             result.enumTailLayout = EnumTailLayout::FlagsDisplayNamePackage;
-            result.fFieldOwnerMask = true;
+            result.fFieldOwnerEncoding = FFieldOwnerEncoding::TaggedPointer;
+            result.functionDefaultsContinueAfterInitializer = true;
+            result.fnameDisplayLayout = FNameDisplayLayout::AfterNumber;
             break;
         case SchemaLayoutVariant::FFieldTaggedModern:
             result.useFProperty = true;
@@ -123,8 +131,10 @@ namespace anduefker::ue
             result.enumFlagsIsByte = true;
             result.enumHasPackage = true;
             result.enumTailLayout = EnumTailLayout::FlagsPackageDisplayName;
-            result.fFieldOwnerMask = true;
+            result.fFieldOwnerEncoding = FFieldOwnerEncoding::TaggedPointer;
+            result.functionDefaultsContinueAfterInitializer = true;
             result.objectArrayMayPackItem = true;
+            result.fnameDisplayLayout = FNameDisplayLayout::AfterNumber;
             break;
         case SchemaLayoutVariant::Unknown:
             result = EngineFeatures{};

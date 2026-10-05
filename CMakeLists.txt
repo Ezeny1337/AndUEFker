@@ -53,6 +53,7 @@ add_library(anduefker_core STATIC
     src/reflection/ReflectionReader.cpp
     src/ue/EngineSchema.cpp
     src/ue/EngineVersion.cpp
+    src/ue/FunctionSemantics.cpp
     src/ue/NameStoreReader.cpp
     src/ue/ObjectModelReader.cpp
     src/ue/ObjectStoreReader.cpp

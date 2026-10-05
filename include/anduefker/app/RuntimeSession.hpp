@@ -26,8 +26,10 @@ namespace anduefker::app
     using ::anduefker::module::ModuleCatalog;
     using ::anduefker::reflection::ReflectionReader;
     using ::anduefker::ue::EngineSchema;
+    using ::anduefker::ue::SchemaCandidateSummary;
     using ::anduefker::ue::SchemaResolutionReport;
     using ::anduefker::ue::SchemaResolver;
+    using ::anduefker::ue::SchemaSelectionResult;
 
     enum class RuntimeLogLevel
     {

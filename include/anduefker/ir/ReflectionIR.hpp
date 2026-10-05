@@ -105,6 +105,14 @@ namespace anduefker::ir
         uint32_t flags = 0;
         uint8_t numParams = 0;
         uint16_t paramSize = 0;
+        uint16_t returnValueOffset = 0xFFFFu;
+        uint8_t headerNumParams = 0;
+        uint16_t headerParamSize = 0;
+        uint32_t derivedNumParams = 0;
+        int32_t derivedParamSize = 0;
+        uint32_t defaultInitializerCount = 0;
+        bool parameterSemanticsValid = false;
+        bool parameterSemanticsConsistent = false;
         std::vector<PropertyIR> parameters;
         std::vector<std::string> layoutConflicts;
     };

@@ -1,6 +1,7 @@
 #include "anduefker/reflection/ReflectionReader.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -8,30 +9,6 @@ namespace anduefker::reflection
 {
     namespace
     {
-        std::string NormalizeFieldClassName(const std::string &name)
-        {
-            if (name.size() > 1 && (name[0] == 'U' || name[0] == 'F') &&
-                name[1] >= 'A' && name[1] <= 'Z')
-                return name.substr(1);
-            return name;
-        }
-
-        bool IsFunctionClassName(const std::string &name)
-        {
-            const std::string normalized = NormalizeFieldClassName(name);
-            return normalized == "Function" || normalized == "DelegateFunction" ||
-                   normalized == "SparseDelegateFunction" || normalized == "VerseFunction";
-        }
-
-        bool IsPropertyClassName(const std::string &name)
-        {
-            const std::string normalized = NormalizeFieldClassName(name);
-            if (normalized == "ObjectPropertyBase")
-                return true;
-            return normalized == "Property" ||
-                   (normalized.size() >= 8 && normalized.compare(normalized.size() - 8, 8, "Property") == 0);
-        }
-
         std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
         {
             if (offset < 0 || base > UINTPTR_MAX - static_cast<uintptr_t>(offset))
@@ -55,7 +32,7 @@ namespace anduefker::reflection
 
     PropertyKind ReflectionReader::PropertyKindFromName(const std::string &name) const
     {
-        const std::string normalized = NormalizeFieldClassName(name);
+        const std::string normalized = NormalizeRuntimeFieldName(name);
         if (normalized == "BoolProperty")
             return PropertyKind::Bool;
         if (normalized == "ByteProperty")
@@ -291,25 +268,30 @@ namespace anduefker::reflection
 
     void ReflectionReader::ReadProperties(uintptr_t first, TypeIR &type, ReflectionStats &stats) const
     {
-        std::unordered_set<uintptr_t> visited;
+        const FieldChainResult chain = objects_.FieldsWithStatus(first, 65536);
+        if (!chain.Complete())
+        {
+            ++stats.failures;
+            type.layoutConflicts.push_back("property field chain status=" + std::to_string(static_cast<int>(chain.status)));
+            return;
+        }
         std::unordered_map<int32_t, uint8_t> boolMasks;
         std::unordered_map<int32_t, int32_t> boolStorageEnds;
-        uintptr_t current = first;
         int64_t cursor = 0;
-        while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
+        for (const FieldMetadata &field : chain.fields)
         {
-            const auto field = objects_.Field(current);
-            if (!field)
+            if (!IsPropertyFieldKind(field.kind))
             {
-                ++stats.failures;
-                break;
-            }
-            if (!IsPropertyClassName(field->className))
-            {
-                current = field->nextAddress;
                 continue;
             }
-            const auto property = ReadProperty(current, 0, stats);
+            if (schema_.features.useFProperty &&
+                (!field.ownerIsUObject || field.ownerAddress != type.address))
+            {
+                ++stats.failures;
+                type.layoutConflicts.push_back("property owner mismatch: property=" + field.name);
+                continue;
+            }
+            const auto property = ReadProperty(field.address, 0, stats);
             if (property)
                 type.properties.push_back(*property);
             else
@@ -371,56 +353,53 @@ namespace anduefker::reflection
                     cursor = static_cast<int64_t>(property->offset) + total;
                 }
             }
-            current = field->nextAddress;
         }
     }
 
     void ReflectionReader::ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const
     {
-        std::unordered_set<uintptr_t> visited;
+        std::vector<PropertyMetadata> properties;
+        std::vector<PropertyIR> parsedProperties;
+        const FieldChainResult chain = objects_.FieldsWithStatus(first, 65536);
+        if (!chain.Complete())
+        {
+            ++stats.failures;
+            function.parameterSemanticsValid = false;
+            function.layoutConflicts.push_back("parameter field chain status=" + std::to_string(static_cast<int>(chain.status)));
+            return;
+        }
+
         std::unordered_map<int32_t, uint8_t> boolMasks;
         std::unordered_map<int32_t, int32_t> boolStorageEnds;
-        uintptr_t current = first;
         int64_t cursor = 0;
-        uint32_t derivedParameterCount = 0;
-        int64_t derivedParameterEnd = 0;
-        bool sawProperty = false;
-        while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
+        for (const FieldMetadata &field : chain.fields)
         {
-            const auto field = objects_.Field(current);
-            if (!field)
+            if (!IsPropertyFieldKind(field.kind))
             {
-                ++stats.failures;
-                break;
-            }
-            if (!IsPropertyClassName(field->className))
-            {
-                current = field->nextAddress;
                 continue;
             }
-            const auto property = ReadProperty(current, 0, stats);
-            if (!property)
+            if (schema_.features.useFProperty &&
+                (!field.ownerIsUObject || field.ownerAddress != function.address))
+            {
+                ++stats.failures;
+                function.layoutConflicts.push_back("parameter owner mismatch: property=" + field.name);
+                continue;
+            }
+            const auto metadata = objects_.Property(field.address);
+            const auto property = ReadProperty(field.address, 0, stats);
+            if (!metadata || !property)
             {
                 ++stats.failures;
                 break;
             }
-            sawProperty = true;
+            properties.push_back(*metadata);
+            parsedProperties.push_back(*property);
             const bool isParameter = (property->flags & 0x00000080ull) != 0;
-            if (isParameter)
-            {
-                function.parameters.push_back(*property);
-                ++derivedParameterCount;
-            }
             if (!isParameter)
-            {
-                current = field->nextAddress;
                 continue;
-            }
             const int64_t total = static_cast<int64_t>(property->elementSize) * property->arrayDim;
             bool conflict = property->offset < 0 || total <= 0 ||
                             static_cast<int64_t>(property->offset) + total < property->offset;
-            if (isParameter && !conflict)
-                derivedParameterEnd = std::max(derivedParameterEnd, static_cast<int64_t>(property->offset) + total);
             if (!conflict && property->type.kind == PropertyKind::Bool &&
                 property->boolean.fieldSize > 0 && property->boolean.fieldSize <= 8 &&
                 property->boolean.byteOffset < property->boolean.fieldSize &&
@@ -472,72 +451,93 @@ namespace anduefker::reflection
             {
                 cursor = static_cast<int64_t>(property->offset) + total;
             }
-            current = field->nextAddress;
         }
 
-        // 即使运行时 Schema 探测流程必须隐匿 UFunction::NumParms 与 ParmsSize 的原始偏移量
-        // 但它们仍可从同一个 CPF_Parm 链中推导得出
-        // 这能在无需为 runtime.json 伪造/硬编码偏移量的前提下，确保生成的参数布局依然可用
-        if (sawProperty && derivedParameterCount <= 0xFFu && derivedParameterEnd <= 0xFFFF)
+        const FunctionParameterSummary summary = AnalyzeFunctionParameters(
+            properties, function.flags, schema_.features.functionDefaultsContinueAfterInitializer);
+        function.parameters.clear();
+        const size_t scannedPropertyCount = std::min(summary.scannedPropertyCount, parsedProperties.size());
+        for (size_t index = 0; index < scannedPropertyCount; ++index)
         {
-            function.numParams = static_cast<uint8_t>(derivedParameterCount);
-            function.paramSize = static_cast<uint16_t>(derivedParameterEnd);
+            if ((parsedProperties[index].flags & ::anduefker::ue::kCPFParm) != 0)
+                function.parameters.push_back(parsedProperties[index]);
+        }
+        function.derivedNumParams = summary.count;
+        function.derivedParamSize = summary.paramEnd;
+        function.defaultInitializerCount = summary.defaultInitializerCount;
+        function.parameterSemanticsValid = summary.valid;
+        const uint16_t expectedReturnOffset = summary.returnOffset >= 0
+                                                  ? static_cast<uint16_t>(summary.returnOffset)
+                                                  : std::numeric_limits<uint16_t>::max();
+        function.parameterSemanticsConsistent = summary.valid &&
+                                                function.headerNumParams == summary.count &&
+                                                function.headerParamSize == summary.paramEnd &&
+                                                function.returnValueOffset == expectedReturnOffset;
+        if (!function.parameterSemanticsConsistent)
+        {
+            function.layoutConflicts.push_back("function header parameters do not match derived semantics: header_count=" +
+                                               std::to_string(function.headerNumParams) +
+                                               " derived_count=" + std::to_string(summary.count) +
+                                               " header_size=" + std::to_string(function.headerParamSize) +
+                                               " derived_size=" + std::to_string(summary.paramEnd) +
+                                               " header_return=" + std::to_string(function.returnValueOffset) +
+                                               " derived_return=" + std::to_string(expectedReturnOffset));
+            ++stats.layoutConflicts;
         }
     }
 
     void ReflectionReader::ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const
     {
-        std::unordered_set<uintptr_t> visited;
-        uintptr_t current = first;
-        while (current != 0 && visited.insert(current).second && visited.size() <= 65536)
+        const FieldChainResult chain = objects_.UFieldsWithStatus(first, 65536);
+        if (!chain.Complete())
         {
-            const auto field = objects_.UField(current);
-            if (!field)
-            {
-                ++stats.failures;
-                break;
-            }
-            if (IsFunctionClassName(field->className))
+            ++stats.failures;
+            type.layoutConflicts.push_back("function field chain status=" + std::to_string(static_cast<int>(chain.status)));
+            return;
+        }
+        for (const FieldMetadata &field : chain.fields)
+        {
+            if (IsFunctionFieldKind(field.kind))
             {
                 FunctionIR function;
-                function.address = current;
-                function.name = field->name;
-                function.fullName = field->className + " " + field->name;
-                if (schema_.ufunction.functionFlags >= 0)
+                function.address = field.address;
+                function.name = field.name;
+                function.fullName = field.className + " " + field.name;
+                const auto readMember = [&](int32_t offset, auto &value)
                 {
-                    const auto address = Add(current, schema_.ufunction.functionFlags);
-                    uint32_t flags = 0;
-                    if (address && memory_.Read(*address, flags))
-                        function.flags = flags;
-                }
-                if (schema_.ufunction.numParams >= 0)
+                    const auto address = Add(field.address, offset);
+                    return address && memory_.Read(*address, value);
+                };
+                if (!readMember(schema_.ufunction.functionFlags, function.flags) ||
+                    !readMember(schema_.ufunction.numParams, function.headerNumParams) ||
+                    !readMember(schema_.ufunction.paramSize, function.headerParamSize) ||
+                    !readMember(schema_.ufunction.returnValueOffset, function.returnValueOffset))
                 {
-                    const auto address = Add(current, schema_.ufunction.numParams);
-                    uint8_t numParams = 0;
-                    if (address && memory_.Read(*address, numParams))
-                        function.numParams = numParams;
+                    ++stats.failures;
+                    type.layoutConflicts.push_back("function header unreadable: function=" + field.name);
+                    continue;
                 }
-                if (schema_.ufunction.paramSize >= 0)
+                function.numParams = function.headerNumParams;
+                function.paramSize = function.headerParamSize;
+                uintptr_t native = 0;
+                if (!readMember(schema_.ufunction.nativeFunction, native))
                 {
-                    const auto address = Add(current, schema_.ufunction.paramSize);
-                    uint16_t paramSize = 0;
-                    if (address && memory_.Read(*address, paramSize))
-                        function.paramSize = paramSize;
+                    ++stats.failures;
+                    function.layoutConflicts.push_back("function native pointer unreadable");
                 }
-                if (schema_.ufunction.nativeFunction >= 0)
-                {
-                    uintptr_t native = 0;
-                    const auto address = Add(current, schema_.ufunction.nativeFunction);
-                    if (address && memory_.Read(*address, native) && native >= moduleBase_ && native < moduleEnd_)
-                        function.nativeRva = native - moduleBase_;
-                }
-                const auto parameters = objects_.StructProperties(current);
+                else if (native >= moduleBase_ && native < moduleEnd_ && memory_.IsExecutable(native, sizeof(uintptr_t)))
+                    function.nativeRva = native - moduleBase_;
+                const auto parameters = objects_.StructProperties(field.address);
                 if (parameters)
                     ReadFunctionParameters(*parameters, function, stats);
+                else
+                {
+                    ++stats.failures;
+                    function.layoutConflicts.push_back("function parameter chain root unreadable");
+                }
                 type.functions.push_back(std::move(function));
                 ++stats.parsedFunctions;
             }
-            current = field->nextAddress;
         }
     }
 
@@ -549,12 +549,12 @@ namespace anduefker::reflection
             return std::nullopt;
         const auto size = objects_.StructSize(object);
         const auto super = objects_.StructSuper(object);
-        if (!size || *size < 0)
+        if (!size || *size < 0 || !super)
             return std::nullopt;
 
         TypeIR type;
         type.address = object;
-        type.superAddress = super.value_or(0);
+        type.superAddress = *super;
         type.kind = kind;
         type.name = *name;
         const auto fullName = objects_.FullName(object);
@@ -563,9 +563,19 @@ namespace anduefker::reflection
         const auto properties = objects_.StructProperties(object);
         if (properties)
             ReadProperties(*properties, type, ir.stats);
+        else
+        {
+            ++ir.stats.failures;
+            type.layoutConflicts.push_back("property chain root unreadable");
+        }
         const auto children = objects_.StructChildren(object);
         if (children)
             ReadFunctions(*children, type, ir.stats);
+        else
+        {
+            ++ir.stats.failures;
+            type.layoutConflicts.push_back("function chain root unreadable");
+        }
         return type;
     }
 
@@ -593,6 +603,27 @@ namespace anduefker::reflection
             const auto className = objects_.ClassName(*object);
             if (!className)
                 continue;
+            if (*className != "Enum" && *className != "Class" && *className != "ScriptStruct")
+                continue;
+            const auto objectFlags = objects_.Flags(*object);
+            if (!objectFlags)
+            {
+                ++result.stats.failures;
+                continue;
+            }
+            if ((*objectFlags & ::anduefker::ue::kRFClassDefaultObject) != 0)
+            {
+                ++result.stats.skippedObjects;
+                continue;
+            }
+            if ((*objectFlags & ::anduefker::ue::kRFIncompleteLoad) != 0)
+            {
+                ++result.stats.skippedObjects;
+                ++result.stats.failures;
+                result.diagnostics.push_back("reflection definition is not fully loaded: address=" +
+                                             std::to_string(*object));
+                continue;
+            }
             if (*className == "Enum")
             {
                 const auto name = objects_.Name(*object);
@@ -608,17 +639,41 @@ namespace anduefker::reflection
                 enumeration.fullName = fullName ? *fullName : ("Enum " + *name);
                 if (schema_.uenum.cppForm >= 0)
                 {
-                    uint8_t value = 0;
                     const auto address = Add(*object, schema_.uenum.cppForm);
-                    if (address && memory_.Read(*address, value))
-                        enumeration.cppForm = value;
+                    if (address)
+                    {
+                        if (schema_.features.enumCppFormIsByte)
+                        {
+                            uint8_t value = 0;
+                            if (memory_.Read(*address, value))
+                                enumeration.cppForm = value;
+                        }
+                        else
+                        {
+                            uint32_t value = 0;
+                            if (memory_.Read(*address, value))
+                                enumeration.cppForm = static_cast<uint8_t>(value);
+                        }
+                    }
                 }
                 if (schema_.uenum.flags >= 0)
                 {
-                    uint8_t value = 0;
                     const auto address = Add(*object, schema_.uenum.flags);
-                    if (address && memory_.Read(*address, value))
-                        enumeration.flags = value;
+                    if (address)
+                    {
+                        if (schema_.features.enumFlagsIsByte)
+                        {
+                            uint8_t value = 0;
+                            if (memory_.Read(*address, value))
+                                enumeration.flags = value;
+                        }
+                        else
+                        {
+                            uint32_t value = 0;
+                            if (memory_.Read(*address, value))
+                                enumeration.flags = static_cast<uint8_t>(value);
+                        }
+                    }
                 }
                 for (const EnumValueMetadata &value : objects_.EnumValues(*object))
                     enumeration.values.push_back(EnumValueIR{value.name, value.value});
@@ -678,7 +733,8 @@ namespace anduefker::reflection
 
         if (result.stats.parsedTypes == 0)
             result.status = ParseStatus::Failed;
-        else if (result.stats.failures != 0 || result.stats.unknownProperties != 0 || result.stats.unresolvedTypeDetails != 0)
+        else if (result.stats.failures != 0 || result.stats.unknownProperties != 0 ||
+                 result.stats.unresolvedTypeDetails != 0 || result.stats.layoutConflicts != 0)
             result.status = ParseStatus::Partial;
         else
             result.status = ParseStatus::Complete;
