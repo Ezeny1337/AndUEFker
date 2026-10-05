@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 
 #include "anduefker/ir/ReflectionIR.hpp"
@@ -43,6 +44,8 @@ namespace anduefker::generation
         [[nodiscard]] ArtifactResult Write() const;
 
     private:
+        struct CppSymbols;
+
         [[nodiscard]] static std::string Sanitize(std::string value, const char *fallback);
         [[nodiscard]] static std::string JsonEscape(const std::string &value);
         [[nodiscard]] std::string ManifestJson(size_t opaqueFields) const;
@@ -50,9 +53,16 @@ namespace anduefker::generation
         [[nodiscard]] std::string ReflectionJson() const;
         [[nodiscard]] std::string RuntimeJson() const;
         [[nodiscard]] std::string BasicTypes() const;
-        [[nodiscard]] std::string Types(size_t &opaqueFields) const;
-        [[nodiscard]] std::string Enums() const;
-        [[nodiscard]] std::string Functions(size_t &opaqueFields) const;
+        [[nodiscard]] CppSymbols BuildCppSymbols() const;
+        [[nodiscard]] std::string Types(const CppSymbols &symbols, size_t &opaqueFields) const;
+        [[nodiscard]] std::string Enums(const CppSymbols &symbols) const;
+        [[nodiscard]] std::string Functions(const CppSymbols &symbols, size_t &opaqueFields) const;
+        void WriteFields(std::ostringstream &stream,
+                         const std::vector<PropertyIR> &properties,
+                         int32_t initialOffset,
+                         int32_t size,
+                         const CppSymbols &symbols,
+                         size_t &opaqueFields) const;
 
         const RuntimeContext &context_;
         const ReflectionIR &reflection_;

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <fstream>
-#include <functional>
 #include <limits>
 #include <sstream>
 #include <unordered_map>
@@ -58,332 +57,100 @@ namespace anduefker::generation
             return "unknown";
         }
 
-        std::string PropertyType(const PropertyIR &property,
-                                 const std::unordered_map<uintptr_t, std::string> &types,
-                                 const std::unordered_map<uintptr_t, std::string> &enums,
-                                 bool &resolved)
+        struct CppTypeInfo
         {
-            resolved = false;
-            const std::function<std::string(const TypeReferenceIR &, bool &)> nestedType =
-                [&](const TypeReferenceIR &reference, bool &nestedResolved) -> std::string
-            {
-                nestedResolved = false;
-                switch (reference.kind)
-                {
-                case PropertyKind::Int8:
-                    if (reference.elementSize == 1)
-                    {
-                        nestedResolved = true;
-                        return "std::int8_t";
-                    }
-                    break;
-                case PropertyKind::Int16:
-                    if (reference.elementSize == 2)
-                    {
-                        nestedResolved = true;
-                        return "std::int16_t";
-                    }
-                    break;
-                case PropertyKind::Int32:
-                    if (reference.elementSize == 4)
-                    {
-                        nestedResolved = true;
-                        return "std::int32_t";
-                    }
-                    break;
-                case PropertyKind::Int64:
-                    if (reference.elementSize == 8)
-                    {
-                        nestedResolved = true;
-                        return "std::int64_t";
-                    }
-                    break;
-                case PropertyKind::UInt16:
-                    if (reference.elementSize == 2)
-                    {
-                        nestedResolved = true;
-                        return "std::uint16_t";
-                    }
-                    break;
-                case PropertyKind::UInt32:
-                    if (reference.elementSize == 4)
-                    {
-                        nestedResolved = true;
-                        return "std::uint32_t";
-                    }
-                    break;
-                case PropertyKind::UInt64:
-                    if (reference.elementSize == 8)
-                    {
-                        nestedResolved = true;
-                        return "std::uint64_t";
-                    }
-                    break;
-                case PropertyKind::Byte:
-                    if (reference.elementSize == 1)
-                    {
-                        nestedResolved = true;
-                        return "std::uint8_t";
-                    }
-                    break;
-                case PropertyKind::Float:
-                    if (reference.elementSize == 4)
-                    {
-                        nestedResolved = true;
-                        return "float";
-                    }
-                    break;
-                case PropertyKind::Double:
-                    if (reference.elementSize == 8)
-                    {
-                        nestedResolved = true;
-                        return "double";
-                    }
-                    break;
-                case PropertyKind::Name:
-                    if (reference.elementSize == 4 || reference.elementSize == 8 || reference.elementSize == 0xC)
-                    {
-                        nestedResolved = true;
-                        return "FName";
-                    }
-                    break;
-                case PropertyKind::String:
-                    if (reference.elementSize == 0x10)
-                    {
-                        nestedResolved = true;
-                        return "FString";
-                    }
-                    break;
-                case PropertyKind::Struct:
-                    if (const auto found = types.find(reference.referencedObject); found != types.end())
-                    {
-                        nestedResolved = true;
-                        return found->second;
-                    }
-                    break;
-                case PropertyKind::Object:
-                case PropertyKind::Class:
-                case PropertyKind::SoftObject:
-                case PropertyKind::SoftClass:
-                case PropertyKind::WeakObject:
-                case PropertyKind::LazyObject:
-                case PropertyKind::Interface:
-                    if (const auto found = types.find(reference.referencedObject); found != types.end())
-                    {
-                        nestedResolved = true;
-                        return found->second + "*";
-                    }
-                    break;
-                case PropertyKind::Enum:
-                    if (const auto found = enums.find(reference.secondaryObject); found != enums.end())
-                    {
-                        nestedResolved = true;
-                        return found->second;
-                    }
-                    break;
-                case PropertyKind::Array:
-                    if (reference.inner)
-                    {
-                        bool innerResolved = false;
-                        const std::string inner = nestedType(*reference.inner, innerResolved);
-                        if (innerResolved)
-                        {
-                            nestedResolved = true;
-                            return "TArray<" + inner + ">";
-                        }
-                    }
-                    break;
-                case PropertyKind::Set:
-                    if (reference.inner)
-                    {
-                        bool innerResolved = false;
-                        const std::string inner = nestedType(*reference.inner, innerResolved);
-                        if (innerResolved)
-                        {
-                            nestedResolved = true;
-                            return "TSet<" + inner + ">";
-                        }
-                    }
-                    break;
-                case PropertyKind::Map:
-                    if (reference.key && reference.value)
-                    {
-                        bool keyResolved = false;
-                        bool valueResolved = false;
-                        const std::string key = nestedType(*reference.key, keyResolved);
-                        const std::string value = nestedType(*reference.value, valueResolved);
-                        if (keyResolved && valueResolved)
-                        {
-                            nestedResolved = true;
-                            return "TMap<" + key + ", " + value + ">";
-                        }
-                    }
-                    break;
-                default:
-                    break;
-                }
+            std::string name;
+            int32_t size = 0;
+        };
+
+        struct CppEnumInfo
+        {
+            std::string name;
+            EnumUnderlyingType underlyingType = EnumUnderlyingType::Unknown;
+            int32_t size = 0;
+        };
+
+        std::string PropertyType(const TypeReferenceIR &reference,
+                                 const std::unordered_map<uintptr_t, CppTypeInfo> &types,
+                                 const std::unordered_map<uintptr_t, CppEnumInfo> &enums,
+                                 int32_t pointerWidth,
+                                 int32_t nameSize,
+                                 size_t depth = 0)
+        {
+            if (reference.elementSize <= 0 || depth > 32)
                 return {};
-            };
-            switch (property.type.kind)
+            const auto sized = [&](const std::string &name, int32_t size) -> std::string
+            { return reference.elementSize == size ? name : std::string{}; };
+
+            switch (reference.kind)
             {
             case PropertyKind::Int8:
-                if (property.elementSize == 1)
-                {
-                    resolved = true;
-                    return "std::int8_t";
-                }
-                break;
+                return sized("std::int8_t", 1);
             case PropertyKind::Int16:
-                if (property.elementSize == 2)
-                {
-                    resolved = true;
-                    return "std::int16_t";
-                }
-                break;
+                return sized("std::int16_t", 2);
             case PropertyKind::Int32:
-                if (property.elementSize == 4)
-                {
-                    resolved = true;
-                    return "std::int32_t";
-                }
-                break;
+                return sized("std::int32_t", 4);
             case PropertyKind::Int64:
-                if (property.elementSize == 8)
-                {
-                    resolved = true;
-                    return "std::int64_t";
-                }
-                break;
+                return sized("std::int64_t", 8);
             case PropertyKind::UInt16:
-                if (property.elementSize == 2)
-                {
-                    resolved = true;
-                    return "std::uint16_t";
-                }
-                break;
+                return sized("std::uint16_t", 2);
             case PropertyKind::UInt32:
-                if (property.elementSize == 4)
-                {
-                    resolved = true;
-                    return "std::uint32_t";
-                }
-                break;
+                return sized("std::uint32_t", 4);
             case PropertyKind::UInt64:
-                if (property.elementSize == 8)
-                {
-                    resolved = true;
-                    return "std::uint64_t";
-                }
-                break;
+                return sized("std::uint64_t", 8);
             case PropertyKind::Byte:
-                if (property.elementSize == 1)
-                {
-                    resolved = true;
-                    return "std::uint8_t";
-                }
-                break;
-            case PropertyKind::Float:
-                if (property.elementSize == 4)
-                {
-                    resolved = true;
-                    return "float";
-                }
-                break;
-            case PropertyKind::Double:
-                if (property.elementSize == 8)
-                {
-                    resolved = true;
-                    return "double";
-                }
-                break;
             case PropertyKind::Bool:
-                if (property.elementSize == 1)
-                {
-                    resolved = true;
-                    return "std::uint8_t";
-                }
-                break;
+                return sized("std::uint8_t", 1);
+            case PropertyKind::Float:
+                return sized("float", 4);
+            case PropertyKind::Double:
+                return sized("double", 8);
             case PropertyKind::Name:
-                if (property.elementSize == 4 || property.elementSize == 8 || property.elementSize == 0xC)
-                {
-                    resolved = true;
-                    return "FName";
-                }
-                break;
+                return sized("FName", nameSize);
             case PropertyKind::String:
-                if (property.elementSize == 0x10)
-                {
-                    resolved = true;
-                    return "FString";
-                }
-                break;
+                return sized("FString", pointerWidth + 8);
             case PropertyKind::Object:
             case PropertyKind::Class:
-            case PropertyKind::SoftObject:
-            case PropertyKind::SoftClass:
-            case PropertyKind::WeakObject:
-            case PropertyKind::LazyObject:
-                if (property.elementSize == static_cast<int32_t>(sizeof(uintptr_t)) && property.type.referencedObject != 0)
-                {
-                    const auto found = types.find(property.type.referencedObject);
-                    if (found != types.end())
-                    {
-                        resolved = true;
-                        return found->second + "*";
-                    }
-                }
+                if (const auto found = types.find(reference.referencedObject); found != types.end())
+                    return sized(found->second.name + "*", pointerWidth);
                 break;
             case PropertyKind::Struct:
-                if (property.type.referencedObject != 0)
-                {
-                    const auto found = types.find(property.type.referencedObject);
-                    if (found != types.end())
-                    {
-                        resolved = true;
-                        return found->second;
-                    }
-                }
+                if (const auto found = types.find(reference.referencedObject);
+                    found != types.end() && found->second.size > 0)
+                    return sized(found->second.name, found->second.size);
                 break;
             case PropertyKind::Enum:
-                if (const auto found = enums.find(property.type.secondaryObject); found != enums.end())
-                {
-                    resolved = true;
-                    return found->second;
-                }
+                if (const auto found = enums.find(reference.secondaryObject); found != enums.end())
+                    return sized(found->second.name, found->second.size);
                 break;
             case PropertyKind::Array:
             case PropertyKind::Set:
-                if (property.type.inner)
+                if (reference.inner)
                 {
-                    bool innerResolved = false;
-                    const std::string inner = nestedType(*property.type.inner, innerResolved);
-                    if (innerResolved)
+                    const std::string inner = PropertyType(*reference.inner, types, enums,
+                                                           pointerWidth, nameSize, depth + 1);
+                    if (!inner.empty())
                     {
-                        resolved = true;
-                        return property.type.kind == PropertyKind::Array ? "TArray<" + inner + ">" : "TSet<" + inner + ">";
+                        if (reference.kind == PropertyKind::Array)
+                            return sized("TArray<" + inner + ">", pointerWidth + 8);
+                        return "TSet<" + inner + ", " + Hex(static_cast<uint32_t>(reference.elementSize)) + ">";
                     }
                 }
                 break;
             case PropertyKind::Map:
-                if (property.type.key && property.type.value)
+                if (reference.key && reference.value)
                 {
-                    bool keyResolved = false;
-                    bool valueResolved = false;
-                    const std::string key = nestedType(*property.type.key, keyResolved);
-                    const std::string value = nestedType(*property.type.value, valueResolved);
-                    if (keyResolved && valueResolved)
-                    {
-                        resolved = true;
-                        return "TMap<" + key + ", " + value + ">";
-                    }
+                    const std::string key = PropertyType(*reference.key, types, enums,
+                                                         pointerWidth, nameSize, depth + 1);
+                    const std::string value = PropertyType(*reference.value, types, enums,
+                                                           pointerWidth, nameSize, depth + 1);
+                    if (!key.empty() && !value.empty())
+                        return "TMap<" + key + ", " + value + ", " + Hex(static_cast<uint32_t>(reference.elementSize)) + ">";
                 }
                 break;
             case PropertyKind::Interface:
-                if (const auto found = types.find(property.type.referencedObject); found != types.end())
-                {
-                    resolved = true;
-                    return found->second + "*";
-                }
+                if (types.contains(reference.referencedObject))
+                    return sized("FScriptInterface", pointerWidth * 2);
                 break;
             default:
                 break;
@@ -573,11 +340,38 @@ namespace anduefker::generation
             return "std::int64_t";
         }
 
+        int32_t EnumUnderlyingSize(EnumUnderlyingType type)
+        {
+            switch (type)
+            {
+            case EnumUnderlyingType::Int8:
+            case EnumUnderlyingType::UInt8:
+                return 1;
+            case EnumUnderlyingType::Int16:
+            case EnumUnderlyingType::UInt16:
+                return 2;
+            case EnumUnderlyingType::Int32:
+            case EnumUnderlyingType::UInt32:
+                return 4;
+            case EnumUnderlyingType::Int64:
+            case EnumUnderlyingType::UInt64:
+            case EnumUnderlyingType::Unknown:
+                return 8;
+            }
+            return 8;
+        }
+
         void WriteJsonBool(std::ostringstream &stream, bool value)
         {
             stream << (value ? "true" : "false");
         }
     } // namespace
+
+    struct ArtifactWriter::CppSymbols
+    {
+        std::unordered_map<uintptr_t, CppTypeInfo> types;
+        std::unordered_map<uintptr_t, CppEnumInfo> enums;
+    };
 
     ArtifactWriter::ArtifactWriter(const RuntimeContext &context,
                                    const ReflectionIR &reflection,
@@ -599,6 +393,36 @@ namespace anduefker::generation
         if (value.empty() || (value.front() >= '0' && value.front() <= '9'))
             value = std::string(fallback) + value;
         return value;
+    }
+
+    ArtifactWriter::CppSymbols ArtifactWriter::BuildCppSymbols() const
+    {
+        CppSymbols result;
+        std::unordered_set<std::string> usedNames = {"FName", "FString", "FScriptInterface", "TArray", "TSet", "TMap"};
+        const auto uniqueName = [&](const std::string &name, const char *fallback, uintptr_t address)
+        {
+            std::string candidate = Sanitize(name, fallback);
+            if (!usedNames.insert(candidate).second)
+            {
+                candidate += "_" + Hex(address).substr(2);
+                const std::string stem = candidate;
+                size_t suffix = 0;
+                while (!usedNames.insert(candidate).second)
+                    candidate = stem + "_" + std::to_string(++suffix);
+            }
+            return candidate;
+        };
+        // 类型、枚举及其引用共用命名表，避免不同头文件各自处理重名。
+        for (const TypeIR &type : reflection_.types)
+            result.types.emplace(type.address, CppTypeInfo{uniqueName(type.name, "Type_", type.address), type.size});
+        for (const EnumIR &enumeration : reflection_.enums)
+        {
+            const EnumUnderlyingType underlying = WidenEnumUnderlying(enumeration.underlyingType, enumeration);
+            result.enums.emplace(enumeration.address,
+                                 CppEnumInfo{uniqueName(enumeration.name, "Enum_", enumeration.address),
+                                             underlying, EnumUnderlyingSize(underlying)});
+        }
+        return result;
     }
 
     std::string ArtifactWriter::JsonEscape(const std::string &value)
@@ -635,12 +459,17 @@ namespace anduefker::generation
     std::string ArtifactWriter::BasicTypes() const
     {
         std::ostringstream stream;
-        stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n\nnamespace AndUE\n{\n";
+        stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n\n";
+        stream << "// For inspection and analysis; reflected offsets and sizes are authoritative.\n";
+        stream << "// Target pointer width: " << static_cast<unsigned int>(context_.Module().pointerWidth) << " bytes.\n";
+        stream << "namespace AndUE\n{\n";
         stream << "struct FName { std::uint8_t Data[" << context_.Schema().fname.size << "]; };\n";
         stream << "struct FString { std::uintptr_t Data; std::int32_t Num; std::int32_t Max; };\n";
         stream << "template <typename ElementType> struct TArray { std::uintptr_t Data; std::int32_t Num; std::int32_t Max; };\n";
-        stream << "template <typename ElementType> struct TSet { std::uint8_t Data[0x48]; };\n";
-        stream << "template <typename KeyType, typename ValueType> struct TMap { std::uint8_t Data[0x50]; };\n";
+        stream << "struct FScriptInterface { std::uintptr_t ObjectPointer; std::uintptr_t InterfacePointer; };\n";
+        stream << "// Opaque container storage; StorageSize comes from the reflected field.\n";
+        stream << "template <typename ElementType, std::size_t StorageSize> struct TSet { std::uint8_t Data[StorageSize]; };\n";
+        stream << "template <typename KeyType, typename ValueType, std::size_t StorageSize> struct TMap { std::uint8_t Data[StorageSize]; };\n";
         stream << "}\n";
         return stream.str();
     }
@@ -739,25 +568,124 @@ namespace anduefker::generation
         return stream.str();
     }
 
-    std::string ArtifactWriter::Types(size_t &opaqueFields) const
+    void ArtifactWriter::WriteFields(std::ostringstream &stream,
+                                     const std::vector<PropertyIR> &properties,
+                                     int32_t initialOffset,
+                                     int32_t size,
+                                     const CppSymbols &symbols,
+                                     size_t &opaqueFields) const
     {
-        std::unordered_map<uintptr_t, std::string> types;
-        std::unordered_set<std::string> usedNames;
-        std::unordered_map<uintptr_t, std::string> enums;
-        for (const TypeIR &type : reflection_.types)
+        struct BoolStorage
         {
-            std::string name = Sanitize(type.name, "Type_");
-            if (!usedNames.insert(name).second)
-                name += "_" + Hex(type.address).substr(2);
-            types.emplace(type.address, std::move(name));
+            int32_t end = 0;
+            uint64_t masks = 0;
+        };
+        std::unordered_map<int32_t, BoolStorage> boolStorage;
+        std::vector<const PropertyIR *> ordered;
+        ordered.reserve(properties.size());
+        for (const PropertyIR &property : properties)
+            ordered.push_back(&property);
+        std::stable_sort(ordered.begin(), ordered.end(), [](const PropertyIR *left, const PropertyIR *right)
+                         { return left->offset < right->offset; });
+
+        int32_t cursor = initialOffset;
+        size_t ordinal = 0;
+        for (const PropertyIR *entry : ordered)
+        {
+            const PropertyIR &property = *entry;
+            const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
+            const int64_t end = static_cast<int64_t>(property.offset) + total;
+            const std::string member = Sanitize(property.name, "Member_") + "_" + std::to_string(ordinal++);
+            if (property.elementSize <= 0 || property.arrayDim <= 0 || property.offset < 0 || end > size)
+            {
+                stream << "    // Field has invalid dimensions or exceeds the reflected size: " << member << "\n";
+                continue;
+            }
+
+            const bool boolLayout = property.type.kind == PropertyKind::Bool &&
+                                    property.boolean.fieldSize == property.elementSize &&
+                                    property.boolean.fieldSize > 0 && property.boolean.fieldSize <= 8 &&
+                                    property.boolean.byteOffset < property.boolean.fieldSize &&
+                                    property.boolean.byteMask != 0 && property.boolean.fieldMask != 0;
+            if (boolLayout)
+            {
+                // ByteOffset 是存储内部的字节位置，不能加到存储起点后再占用整个 FieldSize。
+                const uint64_t mask = static_cast<uint64_t>(property.boolean.fieldMask) << (property.boolean.byteOffset * 8);
+                auto existing = boolStorage.find(property.offset);
+                if (existing != boolStorage.end())
+                {
+                    if (existing->second.end != end || (existing->second.masks & mask) != 0)
+                    {
+                        stream << "    // Conflicting bool storage size or mask: " << member
+                               << ", offset=" << Hex(property.offset) << ", size=" << Hex(static_cast<uint64_t>(total)) << "\n";
+                    }
+                    existing->second.masks |= mask;
+                }
+                else
+                {
+                    if (property.offset < cursor)
+                        stream << "    // Bool storage overlaps the base or an existing field: " << member << "\n";
+                    if (property.offset > cursor)
+                        stream << "    std::uint8_t Pad_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
+                    const std::string storageName = "BoolStorage_" + std::to_string(ordinal++);
+                    stream << "    std::uint8_t " << storageName << "[" << Hex(static_cast<uint64_t>(total)) << "]; // "
+                           << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
+                    boolStorage.emplace(property.offset, BoolStorage{static_cast<int32_t>(end), mask});
+                    cursor = std::max(cursor, static_cast<int32_t>(end));
+                }
+                stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
+                stream << "    static constexpr std::size_t " << member << "_ElementSize = " << property.elementSize << ";\n";
+                stream << "    static constexpr std::uint8_t " << member << "_ByteOffset = "
+                       << static_cast<unsigned int>(property.boolean.byteOffset) << ";\n";
+                stream << "    static constexpr std::uint8_t " << member << "_ByteMask = "
+                       << Hex(property.boolean.byteMask) << ";\n";
+                stream << "    static constexpr std::uint8_t " << member << "_Mask = "
+                       << Hex(property.boolean.fieldMask) << ";\n";
+                continue;
+            }
+
+            if (property.offset < cursor)
+                stream << "    // Overlapping reflected field; use its explicit offset: " << member << "\n";
+            if (property.offset > cursor)
+                stream << "    std::uint8_t Pad_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
+            const bool hasTypeDetails = property.type.kind != PropertyKind::Bool && property.typeDetailsResolved &&
+                                        property.type.elementSize == property.elementSize;
+            const std::string cppType = hasTypeDetails
+                                            ? PropertyType(property.type, symbols.types, symbols.enums,
+                                                           context_.Module().pointerWidth, context_.Schema().fname.size)
+                                            : std::string{};
+            if (cppType.empty())
+            {
+                stream << "    std::uint8_t " << member << "[" << Hex(static_cast<uint64_t>(total))
+                       << "]; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ") opaque\n";
+                ++opaqueFields;
+            }
+            else
+            {
+                stream << "    " << cppType << " " << member;
+                if (property.arrayDim > 1)
+                    stream << "[" << property.arrayDim << "]";
+                stream << "; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
+            }
+            stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
+            cursor = std::max(cursor, static_cast<int32_t>(end));
         }
-        for (const EnumIR &enumeration : reflection_.enums)
-            enums.emplace(enumeration.address, Sanitize(enumeration.name, "Enum_"));
+        if (cursor < size)
+            stream << "    std::uint8_t TailData[" << Hex(size - cursor) << "];\n";
+        stream << "};\n";
+        stream << '\n';
+    }
+
+    std::string ArtifactWriter::Types(const CppSymbols &symbols, size_t &opaqueFields) const
+    {
+        const auto &types = symbols.types;
 
         std::ostringstream stream;
-        stream << "#pragma once\n#include <cstdint>\n#include \"BasicTypes.hpp\"\n#include \"Enums.hpp\"\n\nnamespace AndUE\n{\n";
+        stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include \"BasicTypes.hpp\"\n#include \"Enums.hpp\"\n\n";
+        stream << "// Sizes and offsets describe target memory, not native C++ layout.\n";
+        stream << "namespace AndUE\n{\n";
         for (const TypeIR &type : reflection_.types)
-            stream << "struct " << types[type.address] << ";\n";
+            stream << "struct " << types.at(type.address).name << ";\n";
         if (!reflection_.types.empty())
             stream << "\n";
         std::vector<size_t> order;
@@ -807,166 +735,60 @@ namespace anduefker::generation
         for (size_t typeIndex : order)
         {
             const TypeIR &type = reflection_.types[typeIndex];
-            const std::string typeName = types[type.address];
+            const std::string typeName = types.at(type.address).name;
+            int32_t initialOffset = 0;
+            const auto base = types.find(type.superAddress);
+            const bool baseSizeValid = base != types.end() && base->second.size >= 0 && base->second.size <= type.size;
+            if (type.superAddress != 0 && !baseSizeValid)
+                stream << "// Base size is unavailable or inconsistent; padding uses the full reflected range.\n";
+            stream << "// Reflected size: " << Hex(static_cast<uint32_t>(type.size)) << "\n";
             stream << "struct " << typeName;
-            if (const auto base = types.find(type.superAddress); base != types.end())
-                stream << " : public " << base->second;
+            if (base != types.end())
+                stream << " : public " << base->second.name;
+            if (baseSizeValid)
+                initialOffset = base->second.size;
             stream << "\n{\n";
-            int32_t cursor = 0;
-            size_t ordinal = 0;
-            std::unordered_map<int32_t, std::string> boolStorageNames;
-            std::unordered_map<int32_t, int32_t> boolStorageEnds;
-            for (const PropertyIR &property : type.properties)
-            {
-                const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
-                if (total <= 0 || property.offset < 0)
-                    continue;
-
-                const bool boolLayout = property.type.kind == PropertyKind::Bool &&
-                                        property.boolean.fieldSize > 0 && property.boolean.fieldSize <= 8 &&
-                                        property.boolean.byteOffset < property.boolean.fieldSize &&
-                                        property.boolean.byteMask != 0 && property.boolean.fieldMask != 0;
-                if (boolLayout)
-                {
-                    const int32_t storageOffset = property.offset + property.boolean.byteOffset;
-                    const int32_t storageSize = property.boolean.fieldSize;
-                    const int32_t storageEnd = storageOffset + storageSize;
-                    if (storageEnd < storageOffset || storageEnd > type.size)
-                        continue;
-
-                    const auto existing = boolStorageNames.find(storageOffset);
-                    if (storageOffset < cursor && existing == boolStorageNames.end())
-                        continue;
-                    if (storageOffset > cursor)
-                        stream << "    std::uint8_t Pad_" << ordinal++ << "[0x" << std::hex
-                               << (storageOffset - cursor) << std::dec << "];\n";
-                    if (existing == boolStorageNames.end())
-                    {
-                        const std::string storageName = "BoolStorage_" + std::to_string(ordinal++);
-                        boolStorageNames.emplace(storageOffset, storageName);
-                        boolStorageEnds.emplace(storageOffset, storageEnd);
-                        stream << "    std::uint8_t " << storageName;
-                        if (storageSize > 1)
-                            stream << "[" << storageSize << "]";
-                        stream << ";\n";
-                    }
-
-                    const std::string member = Sanitize(property.name, "Member_") + "_" + std::to_string(ordinal++);
-                    stream << "    static constexpr std::uint8_t " << member << "_Mask = 0x"
-                           << std::hex << static_cast<unsigned int>(property.boolean.fieldMask) << std::dec << ";\n";
-                    cursor = std::max(cursor, storageEnd);
-                    continue;
-                }
-
-                if (property.offset < cursor || static_cast<int64_t>(property.offset) + total > type.size)
-                    continue;
-                if (property.offset > cursor)
-                    stream << "    std::uint8_t Pad_" << ordinal++ << "[0x" << std::hex << (property.offset - cursor) << std::dec << "];\n";
-                bool resolved = false;
-                const std::string cppType = PropertyType(property, types, enums, resolved);
-                const std::string member = Sanitize(property.name, "Member_") + "_" + std::to_string(ordinal++);
-                if (!resolved)
-                {
-                    stream << "    std::uint8_t " << member << "[0x" << std::hex << total << std::dec << "]; // opaque\n";
-                    ++opaqueFields;
-                }
-                else
-                {
-                    stream << "    " << cppType << " " << member;
-                    if (property.arrayDim > 1)
-                        stream << "[" << property.arrayDim << "]";
-                    stream << ";\n";
-                }
-                cursor = property.offset + static_cast<int32_t>(total);
-            }
-            if (cursor < type.size)
-                stream << "    std::uint8_t TailData[0x" << std::hex << (type.size - cursor) << std::dec << "];\n";
-            stream << "};\n\n";
+            WriteFields(stream, type.properties, initialOffset, type.size, symbols, opaqueFields);
         }
         stream << "}\n";
         return stream.str();
     }
 
-    std::string ArtifactWriter::Functions(size_t &opaqueFields) const
+    std::string ArtifactWriter::Functions(const CppSymbols &symbols, size_t &opaqueFields) const
     {
-        std::unordered_map<uintptr_t, std::string> types;
-        std::unordered_set<std::string> usedTypeNames;
-        std::unordered_map<uintptr_t, std::string> enums;
-        for (const TypeIR &type : reflection_.types)
-        {
-            std::string name = Sanitize(type.name, "Type_");
-            if (!usedTypeNames.insert(name).second)
-                name += "_" + Hex(type.address).substr(2);
-            types.emplace(type.address, std::move(name));
-        }
-        for (const EnumIR &enumeration : reflection_.enums)
-            enums.emplace(enumeration.address, Sanitize(enumeration.name, "Enum_"));
-
         std::ostringstream stream;
-        stream << "#pragma once\n#include <cstdint>\n#include \"Types.hpp\"\n\nnamespace AndUE\n{\n";
+        stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include \"Types.hpp\"\n\n";
+        stream << "namespace AndUE\n{\n";
         if (reflection_.stats.parsedFunctions == 0)
             stream << "// No UFunction metadata was resolved in this dump.\n";
         for (const TypeIR &type : reflection_.types)
         {
             for (const FunctionIR &function : type.functions)
             {
-                const std::string functionName = Sanitize(types[type.address] + "_" + function.name, "Function_");
+                const std::string functionName = Sanitize(symbols.types.at(type.address).name + "_" + function.name, "Function_");
                 stream << "// " << function.fullName << "\n";
                 stream << "inline constexpr std::uintptr_t " << functionName
                        << "_NativeRva = " << Hex(function.nativeRva) << ";\n";
+                stream << "inline constexpr std::size_t " << functionName << "_ParamsSize = " << function.paramSize << ";\n";
                 stream << "struct " << functionName << "_Params\n{\n";
-                int32_t cursor = 0;
-                size_t ordinal = 0;
-                for (const PropertyIR &parameter : function.parameters)
-                {
-                    const int64_t total = static_cast<int64_t>(parameter.elementSize) * parameter.arrayDim;
-                    if (total <= 0 || parameter.offset < cursor ||
-                        static_cast<int64_t>(parameter.offset) + total > function.paramSize)
-                        continue;
-                    if (parameter.offset > cursor)
-                        stream << "    std::uint8_t Pad_" << ordinal++ << "[0x" << std::hex
-                               << (parameter.offset - cursor) << std::dec << "];\n";
-                    bool resolved = false;
-                    const std::string cppType = PropertyType(parameter, types, enums, resolved);
-                    const std::string member = Sanitize(parameter.name, "Param_") + "_" + std::to_string(ordinal++);
-                    if (!resolved)
-                    {
-                        stream << "    std::uint8_t " << member << "[0x" << std::hex << total << std::dec << "];\n";
-                        ++opaqueFields;
-                    }
-                    else
-                    {
-                        stream << "    " << cppType << " " << member;
-                        if (parameter.arrayDim > 1)
-                            stream << "[" << parameter.arrayDim << "]";
-                        stream << ";\n";
-                    }
-                    cursor = parameter.offset + static_cast<int32_t>(total);
-                }
-                if (cursor < function.paramSize)
-                    stream << "    std::uint8_t TailData[0x" << std::hex << (function.paramSize - cursor)
-                           << std::dec << "];\n";
-                stream << "};\n\n";
+                WriteFields(stream, function.parameters, 0, function.paramSize, symbols, opaqueFields);
             }
         }
         stream << "}\n";
         return stream.str();
     }
 
-    std::string ArtifactWriter::Enums() const
+    std::string ArtifactWriter::Enums(const CppSymbols &symbols) const
     {
         std::ostringstream stream;
         stream << "#pragma once\n#include <cstdint>\n\nnamespace AndUE\n{\n";
         if (reflection_.enums.empty())
             stream << "// No UEnum metadata was resolved in this dump.\n";
-        std::unordered_set<std::string> usedNames;
         for (const EnumIR &enumeration : reflection_.enums)
         {
-            std::string enumName = Sanitize(enumeration.name, "Enum_");
-            if (!usedNames.insert(enumName).second)
-                enumName += "_" + Hex(enumeration.address).substr(2);
-            stream << "enum class " << enumName << " : "
-                   << EnumUnderlyingName(WidenEnumUnderlying(enumeration.underlyingType, enumeration)) << "\n{\n";
+            const CppEnumInfo &info = symbols.enums.at(enumeration.address);
+            stream << "enum class " << info.name << " : "
+                   << EnumUnderlyingName(info.underlyingType) << "\n{\n";
             for (const EnumValueIR &value : enumeration.values)
                 stream << "    " << Sanitize(value.name, "Value_") << " = " << value.value << ",\n";
             stream << "};\n\n";
@@ -1237,6 +1059,18 @@ namespace anduefker::generation
             result.error = "output root and package name are required";
             return result;
         }
+        if ((context_.Module().pointerWidth != 4 && context_.Module().pointerWidth != 8) ||
+            (context_.Schema().fname.size != 4 && context_.Schema().fname.size != 8 && context_.Schema().fname.size != 12))
+        {
+            result.error = "target pointer width or FName size is invalid for SDK description generation";
+            return result;
+        }
+        if (std::any_of(reflection_.types.begin(), reflection_.types.end(), [](const TypeIR &type)
+                        { return type.size < 0; }))
+        {
+            result.error = "negative reflected type size is invalid for SDK description generation";
+            return result;
+        }
 
         std::error_code error;
         std::filesystem::create_directories(outputRoot_, error);
@@ -1263,10 +1097,11 @@ namespace anduefker::generation
         }
 
         size_t opaque = 0;
+        CppSymbols symbols = BuildCppSymbols();
         const std::string basicTypes = BasicTypes();
-        const std::string types = Types(opaque);
-        const std::string enums = Enums();
-        const std::string functions = Functions(opaque);
+        const std::string types = Types(symbols, opaque);
+        const std::string enums = Enums(symbols);
+        const std::string functions = Functions(symbols, opaque);
         const std::string reflectionJson = ReflectionJson();
         const std::string manifestJson = ManifestJson(opaque);
         const std::string diagnosticsJson = DiagnosticsJson();
