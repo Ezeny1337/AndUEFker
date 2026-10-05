@@ -168,13 +168,6 @@ namespace anduefker::memory
         return ReadImpl(address, buffer, size, false);
     }
 
-    void RemoteMemorySource::EnableCache(bool enabled) const
-    {
-        if (cacheEnabled_ != enabled)
-            ClearCache();
-        cacheEnabled_ = enabled;
-    }
-
     ReadResult RemoteMemorySource::ReadImpl(uintptr_t address, void *buffer, size_t size, bool useCache) const
     {
         ReadResult result{ReadError::None, address, size, 0};

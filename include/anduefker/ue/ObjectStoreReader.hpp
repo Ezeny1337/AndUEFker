@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 
 #include "anduefker/ue/EngineSchema.hpp"
 #include "anduefker/memory/MemorySource.hpp"
@@ -51,7 +50,6 @@ namespace anduefker::ue
         [[nodiscard]] bool Initialize();
         [[nodiscard]] bool IsInitialized() const { return initialized_; }
         [[nodiscard]] int32_t Count() const { return count_; }
-        [[nodiscard]] std::optional<uintptr_t> ObjectAt(int32_t index) const;
         [[nodiscard]] ObjectReadResult ReadObject(int32_t index) const;
 
     private:

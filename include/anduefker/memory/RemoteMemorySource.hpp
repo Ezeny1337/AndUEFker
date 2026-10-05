@@ -35,12 +35,11 @@ namespace anduefker::memory
         [[nodiscard]] ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const override;
         [[nodiscard]] const ReadStats &Stats() const override { return stats_; }
 
-        void ClearCache() const;
-        void EnableCache(bool enabled) const;
         [[nodiscard]] KittyMemoryMgr &Manager() { return manager_; }
         [[nodiscard]] const KittyMemoryMgr &Manager() const { return manager_; }
 
     private:
+        void ClearCache() const;
         struct CachePage
         {
             uintptr_t address = 0;

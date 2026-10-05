@@ -64,9 +64,9 @@ namespace anduefker::ue
         result->objectSamples.reserve(std::min<size_t>(maxSamples, static_cast<size_t>(objects->Count())));
         for (int32_t index = 0; index < objects->Count() && result->objectSamples.size() < maxSamples; ++index)
         {
-            const auto object = objects->ObjectAt(index);
-            if (object)
-                result->objectSamples.emplace_back(index, *object);
+            const auto object = objects->ReadObject(index);
+            if (object.IsValid())
+                result->objectSamples.emplace_back(index, object.address);
         }
         if (result->objectSamples.size() < 2)
         {
@@ -106,10 +106,10 @@ namespace anduefker::ue
                               schema.fname, schema.features);
         for (int32_t index = 0; index < bootstrap_->objects->Count(); ++index)
         {
-            const auto object = bootstrap_->objects->ObjectAt(index);
-            if (!object)
+            const auto object = bootstrap_->objects->ReadObject(index);
+            if (!object.IsValid())
                 continue;
-            const auto nameAddress = Add(*object, schema.uobject.name);
+            const auto nameAddress = Add(object.address, schema.uobject.name);
             if (!nameAddress)
                 continue;
             int32_t rawIndex = 0;
@@ -118,7 +118,7 @@ namespace anduefker::ue
             rawIndex = binding_.decode.nameIndex(rawIndex, *nameAddress);
             const auto objectName = names.ReadName(rawIndex);
             if (objectName && *objectName == name)
-                return object;
+                return object.address;
         }
         return std::nullopt;
     }
@@ -752,9 +752,9 @@ namespace anduefker::ue
             std::vector<uintptr_t> flagObjects;
             for (int32_t index = 0; index < bootstrap_->objects->Count() && flagObjects.size() < 256; ++index)
             {
-                const auto object = bootstrap_->objects->ObjectAt(index);
-                if (object)
-                    flagObjects.push_back(*object);
+                const auto object = bootstrap_->objects->ReadObject(index);
+                if (object.IsValid())
+                    flagObjects.push_back(object.address);
             }
             for (int32_t offset = static_cast<int32_t>(sizeof(uintptr_t)); offset <= 0x40; offset += 4)
             {
@@ -1307,9 +1307,9 @@ namespace anduefker::ue
         std::vector<PropertyTailCandidate> tailCandidates;
         PropertyTailCandidate bestNearCandidate;
         bool haveNearCandidate = false;
-        // EPropertyFlags 位于 ArrayDim 和 ElementSize 之后，类型为 uint64_t。
-        // 构建配置或字段扩展可能在 flags 与 Offset_Internal 之间插入成员；
-        // 遍历完整的有界尾部候选，而不是把 Offset_Internal 固定在某一个 delta 上。
+        // EPropertyFlags 位于 ArrayDim 和 ElementSize 之后，类型为 uint64_t
+        // 构建配置或字段扩展可能在 flags 与 Offset_Internal 之间插入成员
+        // 遍历完整的有界尾部候选，而不是把 Offset_Internal 固定在某一个 delta 上
         for (const PropertyHeaderCandidate &header : headerCandidates)
         {
             const int32_t flagsAlignment = static_cast<int32_t>(alignof(uint64_t));
@@ -1462,16 +1462,23 @@ namespace anduefker::ue
         const ObjectStoreReader &objects = model.Objects();
         for (int32_t index = 0; index < objects.Count() && samples.size() < wanted.size(); ++index)
         {
-            const auto object = objects.ObjectAt(index);
-            if (!object)
+            const auto object = objects.ReadObject(index);
+            if (!object.IsValid())
                 continue;
-            const auto className = model.ClassName(*object);
+            const auto className = model.ClassName(object.address);
             if (!className || (*className != "Class" && *className != "ScriptStruct"))
                 continue;
-            const auto first = model.StructProperties(*object);
+            const auto first = model.StructProperties(object.address);
             if (!first)
                 continue;
-            for (const FieldMetadata &field : model.Fields(*first, 2048))
+            const FieldChainResult fields = model.FieldsWithStatus(*first, 2048);
+            if (!fields.Complete())
+            {
+                report.evidence.push_back("property subtype probe field chain was incomplete; status=" +
+                                          std::to_string(static_cast<int>(fields.status)));
+                continue;
+            }
+            for (const FieldMetadata &field : fields.fields)
             {
                 const std::string &propertyClassName = field.normalizedClassName;
                 if (isDelegatePropertyName(field.kind, field.className) && delegateSamples.size() < 128)
@@ -1686,18 +1693,18 @@ namespace anduefker::ue
         };
         for (int32_t index = 0; index < bootstrap_->objects->Count() && functions.size() < 96; ++index)
         {
-            const auto object = bootstrap_->objects->ObjectAt(index);
-            if (!object)
+            const auto object = bootstrap_->objects->ReadObject(index);
+            if (!object.IsValid())
                 continue;
-            const auto className = model.ClassName(*object);
+            const auto className = model.ClassName(object.address);
             if (!className)
                 continue;
             const FieldKind kind = FieldKindFromRuntimeName(*className, false);
             if (!IsFunctionFieldKind(kind))
                 continue;
-            // CDOs are UFunction instances, but are not linked function definitions.
-            // Sample eligibility must not depend on the candidate FunctionFlags offset.
-            const auto objectFlags = model.Flags(*object);
+            // CDO 属于 UFunction 的实例，但它们并不是已被链接的函数定义
+            // 采样资格不可依赖于候选的 FunctionFlags 偏移量
+            const auto objectFlags = model.Flags(object.address);
             if (!objectFlags)
             {
                 ++unreadableSampleFlags;
@@ -1707,7 +1714,7 @@ namespace anduefker::ue
             {
                 ++excludedDefaultObjects;
                 if (excludedDefaultObjects <= 8)
-                    report.evidence.push_back("excluded UFunction CDO address=" + std::to_string(*object) +
+                    report.evidence.push_back("excluded UFunction CDO address=" + std::to_string(object.address) +
                                               " class=" + *className + " object_flags=" + std::to_string(*objectFlags));
                 continue;
             }
@@ -1716,14 +1723,14 @@ namespace anduefker::ue
                 ++excludedLoadingObjects;
                 continue;
             }
-            const auto objectName = model.Name(*object);
+            const auto objectName = model.Name(object.address);
             if (!objectName)
                 continue;
             const size_t limit = sampleLimitFor(*className);
             if (classSampleCounts[*className] >= limit)
                 continue;
             ++classSampleCounts[*className];
-            functions.push_back(FunctionSample{*object,
+            functions.push_back(FunctionSample{object.address,
                                                kind,
                                                *className,
                                                *objectName,
@@ -1976,7 +1983,6 @@ namespace anduefker::ue
 
                 FunctionObservation &observation = candidate.observations[index];
                 const auto flagsAddress = Add(sample.address, offset);
-                // Read the fixed header once; scoring and diagnostics share these bytes.
                 std::array<uint8_t, 10> header{};
                 if (!flagsAddress || !memory_.ReadBytes(*flagsAddress, header.data(), header.size()).Ok())
                     continue;
@@ -2428,10 +2434,10 @@ namespace anduefker::ue
         }
         for (int32_t index = 0; index < bootstrap_->objects->Count(); ++index)
         {
-            const auto object = bootstrap_->objects->ObjectAt(index);
-            if (!object)
+            const auto object = bootstrap_->objects->ReadObject(index);
+            if (!object.IsValid())
                 continue;
-            const auto classAddress = Add(*object, schema.uobject.classPointer);
+            const auto classAddress = Add(object.address, schema.uobject.classPointer);
             if (!classAddress)
                 continue;
             uintptr_t classObject = 0;
@@ -2447,10 +2453,10 @@ namespace anduefker::ue
             const auto className = names.ReadName(raw);
             if (className && *className == "Enum")
             {
-                const auto flags = model.Flags(*object);
+                const auto flags = model.Flags(object.address);
                 if (!flags || (*flags & (kRFClassDefaultObject | kRFIncompleteLoad)) != 0)
                     continue;
-                enumObjects.push_back(*object);
+                enumObjects.push_back(object.address);
                 if (enumObjects.size() >= 32)
                     break;
             }

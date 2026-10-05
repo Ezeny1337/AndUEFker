@@ -128,7 +128,6 @@ namespace anduefker::ue
 
         [[nodiscard]] bool Initialize();
         [[nodiscard]] int32_t Count() const { return objects_.Count(); }
-        [[nodiscard]] std::optional<uintptr_t> ObjectAt(int32_t index) const { return objects_.ObjectAt(index); }
         [[nodiscard]] const ObjectStoreReader &Objects() const { return objects_; }
         [[nodiscard]] const NameStoreReader &Names() const { return names_; }
 
@@ -145,15 +144,12 @@ namespace anduefker::ue
         [[nodiscard]] std::optional<FieldMetadata> UField(uintptr_t field) const;
         [[nodiscard]] FieldChainResult FieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] FieldChainResult UFieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
-        [[nodiscard]] std::vector<FieldMetadata> Fields(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::optional<PropertyMetadata> Property(uintptr_t field) const;
         [[nodiscard]] std::optional<DefinitionKind> DefinitionKindForClass(uintptr_t classAddress) const;
         [[nodiscard]] std::optional<uintptr_t> StructChildren(uintptr_t structure) const;
         [[nodiscard]] std::optional<uintptr_t> StructProperties(uintptr_t structure) const;
         [[nodiscard]] std::optional<uintptr_t> StructSuper(uintptr_t structure) const;
         [[nodiscard]] std::optional<int32_t> StructSize(uintptr_t structure) const;
-        [[nodiscard]] std::vector<EnumValueMetadata> EnumValues(uintptr_t enumeration,
-                                                                size_t maxValues = 65536) const;
         [[nodiscard]] EnumReadResult ReadEnumValues(uintptr_t enumeration, size_t maxValues = 65536) const;
 
     private:

@@ -15,7 +15,6 @@ namespace anduefker::generation
     using ::anduefker::app::RuntimeContext;
     using ::anduefker::ir::EnumIR;
     using ::anduefker::ir::EnumUnderlyingType;
-    using ::anduefker::ir::EnumValueIR;
     using ::anduefker::ir::FunctionIR;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::ir::PropertyIR;
@@ -23,8 +22,6 @@ namespace anduefker::generation
     using ::anduefker::ir::ReflectionIR;
     using ::anduefker::ir::ReflectionStats;
     using ::anduefker::ir::TypeIR;
-    using ::anduefker::ir::TypeKind;
-    using ::anduefker::ir::TypeReferenceIR;
 
     struct ArtifactResult
     {
@@ -68,8 +65,6 @@ namespace anduefker::generation
                     diagnostics.push_back(std::move(message));
             }
         };
-        [[nodiscard]] static std::string Sanitize(std::string value, const char *fallback);
-        [[nodiscard]] static std::string JsonEscape(const std::string &value);
         [[nodiscard]] std::string ManifestJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string DiagnosticsJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string ReflectionJson() const;

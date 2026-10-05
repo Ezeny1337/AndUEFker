@@ -1,6 +1,7 @@
 #include "anduefker/ue/ObjectStoreReader.hpp"
 
 #include <limits>
+#include <optional>
 
 namespace anduefker::ue
 {
@@ -88,12 +89,6 @@ namespace anduefker::ue
 
         initialized_ = true;
         return true;
-    }
-
-    std::optional<uintptr_t> ObjectStoreReader::ObjectAt(int32_t index) const
-    {
-        const ObjectReadResult result = ReadObject(index);
-        return result.IsValid() ? std::optional<uintptr_t>(result.address) : std::nullopt;
     }
 
     ObjectReadResult ObjectStoreReader::ReadObject(int32_t index) const

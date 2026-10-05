@@ -99,7 +99,6 @@ namespace anduefker::app
     void RuntimeSession::Note(RuntimeLogLevel level, std::string message)
     {
         logEntries_.push_back({level, message});
-        diagnostics_.push_back(message);
 
         // 非 debug 消息立即输出到控制台。
         if (level != RuntimeLogLevel::Debug)
@@ -182,7 +181,6 @@ namespace anduefker::app
     RuntimeSessionStatus RuntimeSession::RunImpl()
     {
         failures_.clear();
-        diagnostics_.clear();
         logEntries_.clear();
         reflection_ = {};
         artifacts_ = {};

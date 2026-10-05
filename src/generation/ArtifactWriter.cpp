@@ -80,16 +80,6 @@ namespace anduefker::generation
     {
     }
 
-    std::string ArtifactWriter::Sanitize(std::string value, const char *fallback)
-    {
-        return SanitizeIdentifier(std::move(value), fallback);
-    }
-
-    std::string ArtifactWriter::JsonEscape(const std::string &value)
-    {
-        return EscapeJson(value);
-    }
-
     std::string ArtifactWriter::BasicTypes() const
     {
         std::ostringstream stream;
@@ -114,17 +104,17 @@ namespace anduefker::generation
         std::ostringstream stream;
         stream << "{\n";
         stream << "  \"schema_version\": 1,\n";
-        stream << "  \"package\": \"" << JsonEscape(packageName_) << "\",\n";
-        stream << "  \"engine\": \"" << JsonEscape(context_.Schema().validation.familyEvidence) << "\",\n";
+        stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
+        stream << "  \"engine\": \"" << EscapeJson(context_.Schema().validation.familyEvidence) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
-               << JsonEscape(context_.Schema().validation.profileId) << "\",\"label\":\""
-               << JsonEscape(context_.Schema().validation.profileLabel) << "\",\"version_range\":\""
-               << JsonEscape(context_.Schema().validation.profileVersionRange) << "\"},\n";
+               << EscapeJson(context_.Schema().validation.profileId) << "\",\"label\":\""
+               << EscapeJson(context_.Schema().validation.profileLabel) << "\",\"version_range\":\""
+               << EscapeJson(context_.Schema().validation.profileVersionRange) << "\"},\n";
         stream << "  \"status\": \"" << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\": \"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\": \"" << ParseStatusName(report.Status()) << "\",\n";
         stream << "  \"artifact_kind\": \"" << (status == ParseStatus::Partial ? "partial" : "complete") << "\",\n";
-        stream << "  \"module\": \"" << JsonEscape(context_.Module().name) << "\",\n";
+        stream << "  \"module\": \"" << EscapeJson(context_.Module().name) << "\",\n";
         stream << "  \"stats\": {\n";
         stream << "    \"object_slots\": " << stats.objectSlots << ",\n";
         stream << "    \"valid_objects\": " << stats.validObjects << ",\n";
@@ -186,7 +176,7 @@ namespace anduefker::generation
         {
             if (index != 0)
                 stream << ',';
-            stream << '"' << JsonEscape(report.diagnostics[index]) << '"';
+            stream << '"' << EscapeJson(report.diagnostics[index]) << '"';
         }
         stream << "],\n";
         stream << "  \"diagnostics\": [";
@@ -194,7 +184,7 @@ namespace anduefker::generation
         {
             if (index != 0)
                 stream << ',';
-            stream << "\"" << JsonEscape(reflection_.diagnostics[index]) << "\"";
+            stream << "\"" << EscapeJson(reflection_.diagnostics[index]) << "\"";
         }
         stream << "],\n";
         stream << "  \"type_conflicts\": [\n";
@@ -205,8 +195,8 @@ namespace anduefker::generation
             {
                 if (conflictCount++ != 0)
                     stream << ",\n";
-                stream << "    {\"type\":\"" << JsonEscape(type.fullName) << "\",\"message\":\""
-                       << JsonEscape(conflict) << "\"}";
+                stream << "    {\"type\":\"" << EscapeJson(type.fullName) << "\",\"message\":\""
+                       << EscapeJson(conflict) << "\"}";
             }
         }
         stream << "\n  ],\n  \"function_conflicts\": [\n";
@@ -219,8 +209,8 @@ namespace anduefker::generation
                 {
                     if (conflictCount++ != 0)
                         stream << ",\n";
-                    stream << "    {\"function\":\"" << JsonEscape(function.fullName) << "\",\"message\":\""
-                           << JsonEscape(conflict) << "\"}";
+                    stream << "    {\"function\":\"" << EscapeJson(function.fullName) << "\",\"message\":\""
+                           << EscapeJson(conflict) << "\"}";
                 }
             }
         }
@@ -256,7 +246,7 @@ namespace anduefker::generation
             const PropertyIR &property = *entry;
             const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
             const int64_t end = static_cast<int64_t>(property.offset) + total;
-            const std::string member = Sanitize(property.name, "Member_") + "_" + std::to_string(ordinal++);
+            const std::string member = SanitizeIdentifier(property.name, "Member_") + "_" + std::to_string(ordinal++);
             if (property.elementSize <= 0 || property.arrayDim <= 0 || property.offset < 0 || end > size)
             {
                 ++report.omittedFields;
@@ -442,7 +432,7 @@ namespace anduefker::generation
             for (const FunctionIR &function : type.functions)
             {
                 const std::string &functionName = symbols.functions.at({type.address, function.address});
-                stream << "// " << JsonEscape(function.fullName) << " \n";
+                stream << "// " << function.fullName << "\n";
                 stream << "inline constexpr std::uintptr_t " << functionName
                        << "_NativeRva = " << Hex(function.nativeRva) << ";\n";
                 stream << "inline constexpr std::size_t " << functionName << "_ParamsSize = " << function.paramSize << ";\n";
@@ -486,12 +476,12 @@ namespace anduefker::generation
         const EngineSchema &schema = context_.Schema();
         std::ostringstream stream;
         stream << "{\n  \"schema_version\": 1,\n";
-        stream << "  \"engine\": \"" << JsonEscape(schema.validation.familyEvidence) << "\",\n";
-        stream << "  \"profile\": {\"id\":\"" << JsonEscape(schema.validation.profileId)
-               << "\",\"label\":\"" << JsonEscape(schema.validation.profileLabel)
-               << "\",\"version_range\":\"" << JsonEscape(schema.validation.profileVersionRange)
+        stream << "  \"engine\": \"" << EscapeJson(schema.validation.familyEvidence) << "\",\n";
+        stream << "  \"profile\": {\"id\":\"" << EscapeJson(schema.validation.profileId)
+               << "\",\"label\":\"" << EscapeJson(schema.validation.profileLabel)
+               << "\",\"version_range\":\"" << EscapeJson(schema.validation.profileVersionRange)
                << "\",\"layout\":\"" << SchemaLayoutVariantName(schema.layout) << "\"},\n";
-        stream << "  \"module\": {\"name\":\"" << JsonEscape(context_.Module().name)
+        stream << "  \"module\": {\"name\":\"" << EscapeJson(context_.Module().name)
                << "\",\"base\":\"" << Hex(context_.Module().base) << "\",\"end\":\""
                << Hex(context_.Module().end) << "\",\"architecture\":\""
                << ArchitectureName(context_.Module().architecture) << "\",\"pointer_width\":"
@@ -576,7 +566,7 @@ namespace anduefker::generation
             for (size_t i = 0; i < binding.commonObjects.size(); ++i)
             {
                 const auto &obj = binding.commonObjects[i];
-                stream << "    {\"name\":\"" << JsonEscape(obj.name)
+                stream << "    {\"name\":\"" << EscapeJson(obj.name)
                        << "\",\"address\":\"" << Hex(obj.address)
                        << "\",\"index\":" << obj.index << "}";
                 if (i + 1 != binding.commonObjects.size())
@@ -631,7 +621,7 @@ namespace anduefker::generation
             result.error = "output root creation failed";
             return result;
         }
-        const std::string packageStem = Sanitize(packageName_, "Package");
+        const std::string packageStem = SanitizeIdentifier(packageName_, "Package");
         GenerationReport report;
         const CppSymbols symbols = BuildCppSymbols(reflection_);
         const std::string basicTypes = BasicTypes();

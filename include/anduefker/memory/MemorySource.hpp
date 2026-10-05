@@ -57,12 +57,5 @@ namespace anduefker::memory
             const ReadResult result = ReadBytes(address, &value, sizeof(T));
             return result.Ok();
         }
-
-        template <typename T>
-        [[nodiscard]] bool ReadFresh(uintptr_t address, T &value) const
-        {
-            static_assert(std::is_trivially_copyable_v<T>);
-            return ReadFreshBytes(address, &value, sizeof(T)).Ok();
-        }
     };
 } // namespace anduefker::memory

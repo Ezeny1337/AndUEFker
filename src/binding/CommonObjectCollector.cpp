@@ -49,17 +49,17 @@ namespace anduefker::binding
         const int32_t count = objects_.Count();
         for (int32_t index = 0; index < count; ++index)
         {
-            const auto object = objects_.ObjectAt(index);
-            if (!object)
+            const auto object = objects_.Objects().ReadObject(index);
+            if (!object.IsValid())
                 continue;
 
             for (const std::string &targetName : commonClasses)
             {
-                if (IsClassObject(*object, targetName))
+                if (IsClassObject(object.address, targetName))
                 {
                     CommonObjectInfo info;
                     info.name = targetName;
-                    info.address = *object;
+                    info.address = object.address;
                     info.index = index;
                     result.push_back(info);
                     break;

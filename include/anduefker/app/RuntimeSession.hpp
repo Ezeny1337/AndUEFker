@@ -87,7 +87,6 @@ namespace anduefker::app
         ReflectionIR reflection_;
         ArtifactResult artifacts_;
         std::vector<std::string> failures_;
-        std::vector<std::string> diagnostics_;
         std::vector<RuntimeLogEntry> logEntries_;
     };
 } // namespace anduefker::app

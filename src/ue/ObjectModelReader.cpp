@@ -363,11 +363,6 @@ namespace anduefker::ue
         return result;
     }
 
-    std::vector<FieldMetadata> ObjectModelReader::Fields(uintptr_t first, size_t maxFields) const
-    {
-        return FieldsWithStatus(first, maxFields).fields;
-    }
-
     std::optional<PropertyMetadata> ObjectModelReader::Property(uintptr_t field) const
     {
         const auto base = Field(field);
@@ -535,11 +530,6 @@ namespace anduefker::ue
             return std::nullopt;
         int32_t value = 0;
         return memory_.Read(*address, value) ? std::optional<int32_t>(value) : std::nullopt;
-    }
-
-    std::vector<EnumValueMetadata> ObjectModelReader::EnumValues(uintptr_t enumeration, size_t maxValues) const
-    {
-        return ReadEnumValues(enumeration, maxValues).values;
     }
 
     EnumReadResult ObjectModelReader::ReadEnumValues(uintptr_t enumeration, size_t maxValues) const
