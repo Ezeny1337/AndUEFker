@@ -36,7 +36,7 @@ namespace anduefker::ue::schema_probe
         [[nodiscard]] bool ResolveStructSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
         // Field 依赖 Struct，写入 UField/FField/FFieldClass 和属性链
         [[nodiscard]] bool ResolveFieldSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
-        // Property 依赖 Field；subtype 探测保留原有可选探测与降级语义
+        // Property 依赖 Field；subtype 按源码结构候选验证，缺样本或歧义保留未解析
         [[nodiscard]] bool ResolvePropertySchema(EngineSchema &schema, SchemaResolutionReport &report) const;
         [[nodiscard]] bool ResolvePropertySubtypes(EngineSchema &schema, SchemaResolutionReport &report) const;
         // Function 依赖 Property，补全 UField::Next/UStruct::Children 并写入 UFunction

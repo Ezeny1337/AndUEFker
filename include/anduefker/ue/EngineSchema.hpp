@@ -33,6 +33,14 @@ namespace anduefker::ue
         TaggedPointer,
     };
 
+    enum class PropertyTailLayout
+    {
+        UProperty,
+        RepNotifyBeforeLinks,
+        LinksBeforeRepNotify,
+        Unknown,
+    };
+
     enum class FieldKind
     {
         Unknown,
@@ -91,6 +99,7 @@ namespace anduefker::ue
         bool arrayDimIsByte = false;
         bool largeWorldCoordinates = false;
         bool objectArrayMayPackItem = false;
+        PropertyTailLayout propertyTailLayout = PropertyTailLayout::Unknown;
 
         [[nodiscard]] bool operator==(const EngineFeatures &other) const = default;
     };
@@ -217,6 +226,10 @@ namespace anduefker::ue
         int32_t propertyFlags = -1;
         int32_t offsetInternal = -1;
         int32_t baseSize = -1;
+        int32_t repNotify = -1;
+        int32_t propertyLinks = -1;
+        int32_t propertyLinksEnd = -1;
+        int32_t subtypeStart = -1;
 
         [[nodiscard]] bool operator==(const PropertySchema &other) const = default;
     };
@@ -226,6 +239,7 @@ namespace anduefker::ue
         int32_t byteEnum = -1;
         int32_t boolBase = -1;
         int32_t objectClass = -1;
+        int32_t interfaceClass = -1;
         int32_t classMetaClass = -1;
         int32_t structType = -1;
         int32_t arrayInner = -1;

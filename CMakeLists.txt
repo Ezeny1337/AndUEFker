@@ -75,6 +75,7 @@ add_library(anduefker_core STATIC
     src/ue/SchemaFunction.cpp
     src/ue/SchemaObject.cpp
     src/ue/SchemaProperty.cpp
+    src/ue/SchemaSubtypes.cpp
     src/ue/SchemaResolver.cpp
     src/ue/SchemaStruct.cpp
     src/ue/SchemaSelection.cpp

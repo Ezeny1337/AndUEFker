@@ -81,10 +81,12 @@ namespace anduefker::ue
         {
         case SchemaLayoutVariant::UProperty:
             result.fnameDisplayLayout = FNameDisplayLayout::BeforeNumber;
+            result.propertyTailLayout = PropertyTailLayout::UProperty;
             break;
         case SchemaLayoutVariant::FProperty:
             result.useFProperty = true;
             result.fnameDisplayLayout = FNameDisplayLayout::BeforeNumber;
+            result.propertyTailLayout = PropertyTailLayout::RepNotifyBeforeLinks;
             break;
         case SchemaLayoutVariant::FPropertyEnumFlags:
             result.useFProperty = true;
@@ -92,6 +94,7 @@ namespace anduefker::ue
             result.enumHasFlags = true;
             result.enumFlagsRequired = true;
             result.enumTailLayout = EnumTailLayout::Flags;
+            result.propertyTailLayout = PropertyTailLayout::RepNotifyBeforeLinks;
             break;
         case SchemaLayoutVariant::FFieldExplicit:
             result.useFProperty = true;
@@ -100,6 +103,7 @@ namespace anduefker::ue
             result.enumHasFlags = true;
             result.enumFlagsRequired = true;
             result.enumTailLayout = EnumTailLayout::Flags;
+            result.propertyTailLayout = PropertyTailLayout::RepNotifyBeforeLinks;
             break;
         case SchemaLayoutVariant::FFieldExplicitPackage:
             result.useFProperty = true;
@@ -109,6 +113,7 @@ namespace anduefker::ue
             result.enumHasPackage = true;
             result.enumTailLayout = EnumTailLayout::FlagsDisplayNamePackage;
             result.fnameDisplayLayout = FNameDisplayLayout::AfterNumber;
+            result.propertyTailLayout = PropertyTailLayout::RepNotifyBeforeLinks;
             break;
         case SchemaLayoutVariant::FFieldTagged:
             result.useFProperty = true;
@@ -121,6 +126,7 @@ namespace anduefker::ue
             result.fFieldOwnerEncoding = FFieldOwnerEncoding::TaggedPointer;
             result.functionDefaultsContinueAfterInitializer = true;
             result.fnameDisplayLayout = FNameDisplayLayout::AfterNumber;
+            result.propertyTailLayout = PropertyTailLayout::LinksBeforeRepNotify;
             break;
         case SchemaLayoutVariant::FFieldTaggedModern:
             result.useFProperty = true;
@@ -135,6 +141,7 @@ namespace anduefker::ue
             result.functionDefaultsContinueAfterInitializer = true;
             result.objectArrayMayPackItem = true;
             result.fnameDisplayLayout = FNameDisplayLayout::AfterNumber;
+            result.propertyTailLayout = PropertyTailLayout::LinksBeforeRepNotify;
             break;
         case SchemaLayoutVariant::Unknown:
             result = EngineFeatures{};

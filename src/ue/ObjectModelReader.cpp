@@ -430,9 +430,11 @@ namespace anduefker::ue
         const std::string &propertyClassName = base->normalizedClassName;
         if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" || propertyClassName == "ObjectPtrProperty" ||
             propertyClassName == "SoftObjectProperty" || propertyClassName == "WeakObjectProperty" ||
-            propertyClassName == "LazyObjectProperty" || propertyClassName == "InterfaceProperty")
+            propertyClassName == "LazyObjectProperty")
             result.referencedAddress = readOptionalPointer("object_class", schema_.propertySubtypes.objectClass);
-        else if (propertyClassName == "ClassProperty" || propertyClassName == "SoftClassProperty")
+        else if (propertyClassName == "InterfaceProperty")
+            result.referencedAddress = readOptionalPointer("interface_class", schema_.propertySubtypes.interfaceClass);
+        else if (propertyClassName == "ClassProperty" || propertyClassName == "ClassPtrProperty" || propertyClassName == "SoftClassProperty")
             result.referencedAddress = readOptionalPointer("class_meta_class", schema_.propertySubtypes.classMetaClass);
         else if (propertyClassName == "StructProperty")
             result.referencedAddress = readOptionalPointer("struct_type", schema_.propertySubtypes.structType);

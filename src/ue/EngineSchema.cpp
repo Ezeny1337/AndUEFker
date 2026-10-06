@@ -28,7 +28,7 @@ namespace anduefker::ue
             "FloatProperty", "DoubleProperty", "NameProperty", "StrProperty", "Utf8StrProperty",
             "AnsiStrProperty", "TextProperty", "ObjectProperty", "ObjectPropertyBase", "ObjectPtrProperty",
             "SoftObjectProperty", "WeakObjectProperty", "LazyObjectProperty", "ClassProperty",
-            "SoftClassProperty", "StructProperty", "EnumProperty", "ArrayProperty", "SetProperty",
+            "SoftClassProperty", "ClassPtrProperty", "StructProperty", "EnumProperty", "ArrayProperty", "SetProperty",
             "MapProperty", "InterfaceProperty", "DelegateProperty", "MulticastDelegateProperty",
             "MulticastInlineDelegateProperty", "MulticastSparseDelegateProperty", "FieldPathProperty",
             "OptionalProperty"};

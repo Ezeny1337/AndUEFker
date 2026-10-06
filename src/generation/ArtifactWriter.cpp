@@ -683,9 +683,18 @@ namespace anduefker::generation
                << ",\"element_size\":" << schema.property.elementSize
                << ",\"flags\":" << schema.property.propertyFlags
                << ",\"offset_internal\":" << schema.property.offsetInternal << "},\n";
+        stream << "    \"property_tail\": {\"layout\":\""
+               << (schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::UProperty ? "uproperty" : schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::RepNotifyBeforeLinks ? "repnotify-before-links"
+                                                                                                                    : schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::LinksBeforeRepNotify   ? "links-before-repnotify"
+                                                                                                                                                                                                                        : "unknown")
+               << "\",\"rep_notify\":" << schema.property.repNotify
+               << ",\"property_links\":" << schema.property.propertyLinks
+               << ",\"property_links_end\":" << schema.property.propertyLinksEnd
+               << ",\"subtype_start\":" << schema.property.subtypeStart << "},\n";
         stream << "    \"property_subtypes\": {\"bool_base\":" << schema.propertySubtypes.boolBase
                << ",\"byte_enum\":" << schema.propertySubtypes.byteEnum
                << ",\"object_class\":" << schema.propertySubtypes.objectClass
+               << ",\"interface_class\":" << schema.propertySubtypes.interfaceClass
                << ",\"class_meta_class\":" << schema.propertySubtypes.classMetaClass
                << ",\"struct_type\":" << schema.propertySubtypes.structType
                << ",\"array_inner\":" << schema.propertySubtypes.arrayInner

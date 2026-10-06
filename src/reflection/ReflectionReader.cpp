@@ -1,4 +1,5 @@
 #include "anduefker/reflection/ReflectionReader.hpp"
+#include "anduefker/ue/BoolLayout.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -69,7 +70,7 @@ namespace anduefker::reflection
             return PropertyKind::WeakObject;
         if (normalized == "LazyObjectProperty")
             return PropertyKind::LazyObject;
-        if (normalized == "ClassProperty")
+        if (normalized == "ClassProperty" || normalized == "ClassPtrProperty")
             return PropertyKind::Class;
         if (normalized == "SoftClassProperty")
             return PropertyKind::SoftClass;
@@ -267,9 +268,7 @@ namespace anduefker::reflection
             break;
         }
         case PropertyKind::Bool:
-            semanticMatch = metadata.boolLayout[0] == metadata.elementSize && metadata.boolLayout[0] > 0 &&
-                            metadata.boolLayout[0] <= 8 && metadata.boolLayout[1] < metadata.boolLayout[0] &&
-                            metadata.boolLayout[2] != 0 && metadata.boolLayout[3] != 0;
+            semanticMatch = ::anduefker::ue::IsValidBoolLayout(metadata.boolLayout, metadata.elementSize);
             break;
         case PropertyKind::FieldPath:
             semanticMatch = metadata.detailsStatus == PropertyMetadata::DetailsStatus::Complete &&
