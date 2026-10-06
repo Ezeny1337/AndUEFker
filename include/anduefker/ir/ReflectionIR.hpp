@@ -30,6 +30,66 @@ namespace anduefker::ir
         return "Failed";
     }
 
+    enum class LayoutIssueKind
+    {
+        InvalidBounds,
+        SameOwnerConflict,
+        BoolMaskConflict,
+        InheritedExtentIntersection,
+        KnownInheritedFieldConflict,
+        MissingTypeInformation,
+    };
+
+    [[nodiscard]] inline const char *LayoutIssueKindName(LayoutIssueKind kind)
+    {
+        switch (kind)
+        {
+        case LayoutIssueKind::InvalidBounds:
+            return "invalid-bounds";
+        case LayoutIssueKind::SameOwnerConflict:
+            return "same-owner-conflict";
+        case LayoutIssueKind::BoolMaskConflict:
+            return "bool-mask-conflict";
+        case LayoutIssueKind::InheritedExtentIntersection:
+            return "inherited-extent-intersection";
+        case LayoutIssueKind::KnownInheritedFieldConflict:
+            return "known-inherited-field-conflict";
+        case LayoutIssueKind::MissingTypeInformation:
+            return "missing-type-information";
+        }
+        return "unknown-layout-issue";
+    }
+
+    enum class LayoutRepresentation
+    {
+        SequentialMembers,
+        OffsetDescription,
+    };
+
+    [[nodiscard]] inline const char *LayoutRepresentationName(LayoutRepresentation representation)
+    {
+        return representation == LayoutRepresentation::OffsetDescription ? "offset-description" : "sequential-members";
+    }
+
+    struct LayoutIssueIR
+    {
+        LayoutIssueKind kind = LayoutIssueKind::InvalidBounds;
+        uintptr_t propertyAddress = 0;
+        uintptr_t conflictingAddress = 0;
+        bool affectsCompleteness = true;
+        std::string message;
+    };
+
+    struct LayoutAnalysisIR
+    {
+        bool analyzed = false;
+        bool typeGraphComplete = false;
+        bool baseExtentKnown = false;
+        int32_t baseExtent = -1;
+        LayoutRepresentation representation = LayoutRepresentation::SequentialMembers;
+        std::vector<LayoutIssueIR> issues;
+    };
+
     enum class TypeKind
     {
         Class,
@@ -172,6 +232,7 @@ namespace anduefker::ir
         std::vector<PropertyIR> parameters;
         std::vector<PropertyIR> locals;
         std::vector<std::string> layoutConflicts;
+        LayoutAnalysisIR layout;
         ParseStatus status = ParseStatus::Complete;
     };
 
@@ -186,6 +247,7 @@ namespace anduefker::ir
         std::vector<PropertyIR> properties;
         std::vector<FunctionIR> functions;
         std::vector<std::string> layoutConflicts;
+        LayoutAnalysisIR layout;
         ParseStatus status = ParseStatus::Complete;
     };
 

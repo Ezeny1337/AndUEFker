@@ -63,6 +63,7 @@ add_library(anduefker_core STATIC
     src/memory/RemoteMemorySource.cpp
     src/module/ModuleCatalog.cpp
     src/reflection/ReflectionReader.cpp
+    src/reflection/ReflectionLayout.cpp
     src/ue/EngineSchema.cpp
     src/ue/EngineVersion.cpp
     src/ue/FunctionSemantics.cpp

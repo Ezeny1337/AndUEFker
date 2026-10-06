@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "anduefker/ir/ReflectionIR.hpp"
+#include "anduefker/ir/ReflectionLayout.hpp"
 #include "anduefker/app/RuntimeContext.hpp"
 #include "anduefker/generation/CppTypeResolver.hpp"
 
@@ -17,6 +18,8 @@ namespace anduefker::generation
     using ::anduefker::ir::EnumIR;
     using ::anduefker::ir::EnumUnderlyingType;
     using ::anduefker::ir::FunctionIR;
+    using ::anduefker::ir::LayoutIssueKind;
+    using ::anduefker::ir::LayoutRepresentation;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::ir::PropertyIR;
     using ::anduefker::ir::PropertyKind;
@@ -51,6 +54,7 @@ namespace anduefker::generation
     private:
         struct LayoutEvent
         {
+            std::string severity;
             std::string category;
             std::string message;
             std::string owner;
@@ -79,6 +83,7 @@ namespace anduefker::generation
             size_t opaqueFields = 0;
             size_t omittedFields = 0;
             size_t layoutWarnings = 0;
+            size_t layoutEvents = 0;
             std::vector<std::string> diagnostics;
             std::map<std::string, size_t> counts;
             std::vector<LayoutEvent> events;
@@ -89,6 +94,8 @@ namespace anduefker::generation
             }
             void Warn(LayoutEvent event)
             {
+                event.severity = "error";
+                ++layoutEvents;
                 ++layoutWarnings;
                 if (diagnostics.size() < 32)
                     diagnostics.push_back(event.message);
@@ -103,6 +110,37 @@ namespace anduefker::generation
                 event.strategy = "unchanged-description";
                 Warn(std::move(event));
             }
+            void Info(LayoutEvent event)
+            {
+                event.severity = "info";
+                ++layoutEvents;
+                if (diagnostics.size() < 32)
+                    diagnostics.push_back(event.message);
+                if (++counts[event.category] <= 8)
+                    events.push_back(std::move(event));
+            }
+            void Info(std::string category, std::string message)
+            {
+                LayoutEvent event;
+                event.category = std::move(category);
+                event.message = std::move(message);
+                event.strategy = "offset-description";
+                Info(std::move(event));
+            }
+        };
+        struct FieldGenerationEntry
+        {
+            const PropertyIR *property = nullptr;
+            std::string cppType;
+            bool validBounds = false;
+            bool boolLayout = false;
+        };
+        struct FieldGenerationPlan
+        {
+            LayoutRepresentation representation = LayoutRepresentation::SequentialMembers;
+            int32_t initialOffset = 0;
+            int32_t size = 0;
+            std::vector<FieldGenerationEntry> fields;
         };
         [[nodiscard]] std::string ManifestJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string DiagnosticsJson(const GenerationReport &report, ParseStatus status) const;
@@ -112,12 +150,15 @@ namespace anduefker::generation
         [[nodiscard]] std::string Types(const CppSymbols &symbols, GenerationReport &report) const;
         [[nodiscard]] std::string Enums(const CppSymbols &symbols) const;
         [[nodiscard]] std::string Functions(const CppSymbols &symbols, GenerationReport &report) const;
+        [[nodiscard]] FieldGenerationPlan BuildFieldGenerationPlan(const TypeIR &owner,
+                                                                   const FunctionIR *function,
+                                                                   const std::vector<PropertyIR> &properties,
+                                                                   int32_t size,
+                                                                   const CppSymbols &symbols) const;
         void WriteFields(std::ostringstream &stream,
                          const TypeIR &owner,
                          const FunctionIR *function,
-                         const std::vector<PropertyIR> &properties,
-                         int32_t initialOffset,
-                         int32_t size,
+                         const FieldGenerationPlan &plan,
                          const CppSymbols &symbols,
                          GenerationReport &report) const;
 

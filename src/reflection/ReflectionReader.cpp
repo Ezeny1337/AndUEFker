@@ -1,4 +1,5 @@
 #include "anduefker/reflection/ReflectionReader.hpp"
+#include "anduefker/ir/ReflectionLayout.hpp"
 #include "anduefker/ue/BoolLayout.hpp"
 
 #include <algorithm>
@@ -331,8 +332,7 @@ namespace anduefker::reflection
     {
         PropertyChain chain = ReadPropertyChain(first, type.address, stats, type.layoutConflicts);
         type.properties = std::move(chain.properties);
-        ValidateLayout(type.properties, type.size, stats, type.layoutConflicts);
-        if (!chain.complete || !type.layoutConflicts.empty() ||
+        if (!chain.complete ||
             std::any_of(type.properties.begin(), type.properties.end(), [](const PropertyIR &property)
                         { return property.status != ParseStatus::Complete; }))
             type.status = ParseStatus::Partial;
@@ -389,58 +389,6 @@ namespace anduefker::reflection
         return result;
     }
 
-    void ReflectionReader::ValidateLayout(const std::vector<PropertyIR> &properties, int32_t bound,
-                                          ReflectionStats &stats, std::vector<std::string> &diagnostics) const
-    {
-        struct BoolStorage
-        {
-            int64_t end = 0;
-            uint64_t mask = 0;
-        };
-        std::unordered_map<int32_t, BoolStorage> boolStorage;
-        std::vector<const PropertyIR *> ordered;
-        for (const PropertyIR &property : properties)
-            ordered.push_back(&property);
-        std::stable_sort(ordered.begin(), ordered.end(), [](const PropertyIR *left, const PropertyIR *right)
-                         { return left->offset < right->offset; });
-        int64_t cursor = 0;
-        for (const PropertyIR *property : ordered)
-        {
-            const int64_t total = static_cast<int64_t>(property->elementSize) * property->arrayDim;
-            const int64_t end = static_cast<int64_t>(property->offset) + total;
-            bool conflict = property->offset < 0 || property->elementSize <= 0 || property->arrayDim <= 0 || end > bound;
-            if (!conflict)
-            {
-                const bool isBoolStorage = property->type.kind == PropertyKind::Bool &&
-                                           property->boolean.fieldSize == property->elementSize && property->boolean.fieldSize > 0 && property->boolean.fieldSize <= 8 &&
-                                           property->boolean.byteOffset < property->boolean.fieldSize &&
-                                           property->boolean.byteMask != 0 && property->boolean.fieldMask != 0;
-                if (isBoolStorage)
-                {
-                    const uint64_t mask = static_cast<uint64_t>(property->boolean.fieldMask) << (property->boolean.byteOffset * 8);
-                    const auto existing = boolStorage.find(property->offset);
-                    if (existing != boolStorage.end())
-                        conflict = existing->second.end != end || (existing->second.mask & mask) != 0;
-                    else
-                        conflict = property->offset < cursor;
-                    if (!conflict)
-                        boolStorage[property->offset] = {end, existing == boolStorage.end() ? mask : existing->second.mask | mask};
-                }
-                else
-                    conflict = property->offset < cursor;
-            }
-            if (conflict)
-            {
-                diagnostics.push_back("property=" + property->name + " offset=" + std::to_string(property->offset) +
-                                      " element_size=" + std::to_string(property->elementSize) +
-                                      " array_dim=" + std::to_string(property->arrayDim) + " bound=" + std::to_string(bound));
-                ++stats.layoutConflicts;
-            }
-            else
-                cursor = std::max(cursor, end);
-        }
-    }
-
     void ReflectionReader::ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const
     {
         std::vector<PropertyMetadata> properties;
@@ -491,7 +439,6 @@ namespace anduefker::reflection
                                                " derived_return=" + std::to_string(expectedReturnOffset));
             ++stats.layoutConflicts;
         }
-        ValidateLayout(function.parameters, function.paramSize, stats, function.layoutConflicts);
         if (!function.layoutConflicts.empty() ||
             std::any_of(function.parameters.begin(), function.parameters.end(), [](const PropertyIR &property)
                         { return property.status != ParseStatus::Complete; }))
@@ -1037,6 +984,7 @@ namespace anduefker::reflection
             result.diagnostics.push_back("property detail summary: reason_and_class=" + reason + " total=" + std::to_string(count) +
                                          " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
 
+        ::anduefker::ir::AnalyzeReflectionLayouts(result);
         if (result.stats.parsedTypes == 0)
             result.status = ParseStatus::Failed;
         else if (result.stats.failures != 0 || result.stats.unknownProperties != 0 ||

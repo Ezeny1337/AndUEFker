@@ -101,7 +101,54 @@ namespace anduefker::generation
             stream << '}';
         }
 
-        void Property(std::ostream &stream, const ir::PropertyIR &property)
+        void LayoutIssues(std::ostream &stream, const ir::LayoutAnalysisIR *analysis,
+                          uintptr_t propertyAddress)
+        {
+            stream << '[';
+            if (analysis)
+            {
+                bool first = true;
+                for (const auto &issue : analysis->issues)
+                {
+                    if (issue.propertyAddress != propertyAddress)
+                        continue;
+                    if (!first)
+                        stream << ',';
+                    first = false;
+                    stream << "{\"kind\":\"" << ir::LayoutIssueKindName(issue.kind)
+                           << "\",\"severity\":\"" << (issue.affectsCompleteness ? "error" : "info")
+                           << "\",\"affects_completeness\":" << (issue.affectsCompleteness ? "true" : "false")
+                           << ",\"conflicting_address\":\"" << Hex(issue.conflictingAddress)
+                           << "\",\"message\":\"" << EscapeJson(issue.message) << "\"}";
+                }
+            }
+            stream << ']';
+        }
+
+        void LayoutAnalysis(std::ostream &stream, const ir::LayoutAnalysisIR &analysis)
+        {
+            stream << "{\"analyzed\":" << (analysis.analyzed ? "true" : "false")
+                   << ",\"representation\":\"" << ir::LayoutRepresentationName(analysis.representation)
+                   << "\",\"type_graph_complete\":" << (analysis.typeGraphComplete ? "true" : "false")
+                   << ",\"base_extent_known\":" << (analysis.baseExtentKnown ? "true" : "false")
+                   << ",\"base_extent\":" << analysis.baseExtent << ",\"issues\":[";
+            for (size_t index = 0; index < analysis.issues.size(); ++index)
+            {
+                if (index != 0)
+                    stream << ',';
+                const auto &issue = analysis.issues[index];
+                stream << "{\"kind\":\"" << ir::LayoutIssueKindName(issue.kind)
+                       << "\",\"severity\":\"" << (issue.affectsCompleteness ? "error" : "info")
+                       << "\",\"property_address\":\"" << Hex(issue.propertyAddress)
+                       << "\",\"conflicting_address\":\"" << Hex(issue.conflictingAddress)
+                       << "\",\"affects_completeness\":" << (issue.affectsCompleteness ? "true" : "false")
+                       << ",\"message\":\"" << EscapeJson(issue.message) << "\"}";
+            }
+            stream << "]}";
+        }
+
+        void Property(std::ostream &stream, const ir::PropertyIR &property,
+                      const ir::LayoutAnalysisIR *analysis = nullptr)
         {
             stream << "{\"address\":\"" << Hex(property.address) << "\",\"name\":\"" << EscapeJson(property.name)
                    << "\",\"class\":\"" << EscapeJson(property.reflectedClass) << "\",\"offset\":" << property.offset
@@ -110,7 +157,9 @@ namespace anduefker::generation
                    << "\",\"referenced_object\":\"" << Hex(property.type.referencedObject)
                    << "\",\"secondary_object\":\"" << Hex(property.type.secondaryObject)
                    << "\",\"status\":\"" << ir::ParseStatusName(property.status) << "\",\"type_details_resolved\":"
-                   << (property.typeDetailsResolved ? "true" : "false") << ",\"type\":";
+                   << (property.typeDetailsResolved ? "true" : "false") << ",\"layout_issues\":";
+            LayoutIssues(stream, analysis, property.address);
+            stream << ",\"type\":";
             size_t remaining = 256;
             TypeReference(stream, property.type, 0, remaining);
             if (property.type.kind == ir::PropertyKind::Bool)
@@ -266,7 +315,7 @@ namespace anduefker::generation
 
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
     {
-        stream << "{\n\"schema_version\":1,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":2,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"},\n\"stats\":";
@@ -289,9 +338,11 @@ namespace anduefker::generation
             {
                 if (item != 0)
                     stream << ',';
-                Property(stream, type.properties[item]);
+                Property(stream, type.properties[item], &type.layout);
             }
-            stream << "],\"layout_conflicts\":";
+            stream << "],\"layout_analysis\":";
+            LayoutAnalysis(stream, type.layout);
+            stream << ",\"layout_conflicts\":";
             Strings(stream, type.layoutConflicts);
             stream << ",\"functions\":[";
             for (size_t item = 0; item < type.functions.size(); ++item)
@@ -314,16 +365,18 @@ namespace anduefker::generation
                 {
                     if (parameter != 0)
                         stream << ',';
-                    Property(stream, function.parameters[parameter]);
+                    Property(stream, function.parameters[parameter], &function.layout);
                 }
                 stream << "],\"locals\":[";
                 for (size_t local = 0; local < function.locals.size(); ++local)
                 {
                     if (local != 0)
                         stream << ',';
-                    Property(stream, function.locals[local]);
+                    Property(stream, function.locals[local], &function.layout);
                 }
-                stream << "],\"layout_conflicts\":";
+                stream << "],\"layout_analysis\":";
+                LayoutAnalysis(stream, function.layout);
+                stream << ",\"layout_conflicts\":";
                 Strings(stream, function.layoutConflicts);
                 stream << '}';
             }

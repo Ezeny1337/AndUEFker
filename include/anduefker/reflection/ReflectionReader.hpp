@@ -64,8 +64,6 @@ namespace anduefker::reflection
         };
         [[nodiscard]] PropertyChain ReadPropertyChain(uintptr_t first, uintptr_t owner, ReflectionStats &stats,
                                                       std::vector<std::string> &diagnostics) const;
-        void ValidateLayout(const std::vector<PropertyIR> &properties, int32_t bound, ReflectionStats &stats,
-                            std::vector<std::string> &diagnostics) const;
         void ReadProperties(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
         void ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const;
         void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;

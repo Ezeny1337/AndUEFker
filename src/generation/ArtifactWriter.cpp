@@ -138,7 +138,8 @@ namespace anduefker::generation
         stream << "    \"unvisited_objects\": " << stats.unvisitedObjects << ",\n";
         stream << "    \"opaque_fields\": " << report.opaqueFields << ",\n";
         stream << "    \"omitted_fields\": " << report.omittedFields << ",\n";
-        stream << "    \"sdk_layout_warnings\": " << report.layoutWarnings << "\n";
+        stream << "    \"sdk_layout_warnings\": " << report.layoutWarnings << ",\n";
+        stream << "    \"sdk_layout_events\": " << report.layoutEvents << "\n";
         stream << "  },\n  \"capture\":";
         WriteCaptureJson(stream, reflection_.capture);
         stream << '\n';
@@ -168,14 +169,16 @@ namespace anduefker::generation
                << ", \"unvisited_objects\": " << reflection_.stats.unvisitedObjects
                << ", \"opaque_fields\": " << report.opaqueFields << ", \"omitted_fields\": " << report.omittedFields
                << ", \"sdk_layout_warnings\": " << report.layoutWarnings
+               << ", \"sdk_layout_events\": " << report.layoutEvents
                << ", \"failures\": " << reflection_.stats.failures << "},\n";
         stream << "  \"capture\":";
         WriteCaptureJson(stream, reflection_.capture);
         stream << ",\n  \"property_diagnostics\":";
         WritePropertyDiagnosticsJson(stream, reflection_);
-        stream << ",\n  \"generation_report\":{\"total\":" << report.layoutWarnings
-               << ",\"sample_limit_per_category\":8,\"samples_omitted\":" << (report.layoutWarnings - report.events.size())
-               << ",\"legacy_messages_omitted\":" << (report.layoutWarnings - report.diagnostics.size())
+        stream << ",\n  \"generation_report\":{\"total\":" << report.layoutEvents
+               << ",\"warnings\":" << report.layoutWarnings
+               << ",\"sample_limit_per_category\":8,\"samples_omitted\":" << (report.layoutEvents > report.events.size() ? report.layoutEvents - report.events.size() : 0)
+               << ",\"legacy_messages_omitted\":" << (report.layoutWarnings > report.diagnostics.size() ? report.layoutWarnings - report.diagnostics.size() : 0)
                << ",\"counts_by_category\":{";
         bool firstCategory = true;
         for (const auto &[category, count] : report.counts)
@@ -191,7 +194,8 @@ namespace anduefker::generation
             if (index != 0)
                 stream << ',';
             const auto &event = report.events[index];
-            stream << "{\"category\":\"" << EscapeJson(event.category)
+            stream << "{\"severity\":\"" << EscapeJson(event.severity)
+                   << "\",\"category\":\"" << EscapeJson(event.category)
                    << "\",\"message\":\"" << EscapeJson(event.message)
                    << "\",\"owner_full_name\":\"" << EscapeJson(event.owner)
                    << "\",\"owner_address\":\"" << Hex(event.ownerAddress)
@@ -275,16 +279,138 @@ namespace anduefker::generation
         return stream.str();
     }
 
+    ArtifactWriter::FieldGenerationPlan ArtifactWriter::BuildFieldGenerationPlan(
+        const TypeIR &owner, const FunctionIR *function, const std::vector<PropertyIR> &properties,
+        int32_t size, const CppSymbols &symbols) const
+    {
+        const auto &analysis = function ? function->layout : owner.layout;
+        FieldGenerationPlan plan;
+        plan.representation = analysis.representation;
+        plan.initialOffset = analysis.baseExtentKnown ? analysis.baseExtent : 0;
+        plan.size = size;
+        plan.fields.reserve(properties.size());
+        for (const PropertyIR &property : properties)
+        {
+            const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
+            int64_t end = static_cast<int64_t>(property.offset) + total;
+            FieldGenerationEntry entry;
+            entry.property = &property;
+            entry.validBounds = ::anduefker::ir::IsValidPropertyBounds(property, size, end);
+            entry.boolLayout = ::anduefker::ir::IsValidPropertyBoolLayout(property);
+            if (property.type.kind != PropertyKind::Bool && property.typeDetailsResolved &&
+                property.type.elementSize == property.elementSize)
+                entry.cppType = PropertyType(property.type, symbols, context_.Module().pointerWidth,
+                                             context_.Schema().fname.size);
+            plan.fields.push_back(std::move(entry));
+        }
+        return plan;
+    }
+
     void ArtifactWriter::WriteFields(std::ostringstream &stream,
                                      const TypeIR &owner,
                                      const FunctionIR *function,
-                                     const std::vector<PropertyIR> &properties,
-                                     int32_t initialOffset,
-                                     int32_t size,
+                                     const FieldGenerationPlan &plan,
                                      const CppSymbols &symbols,
                                      GenerationReport &report) const
     {
         size_t &opaqueFields = report.opaqueFields;
+        const int32_t size = plan.size;
+        const int32_t initialOffset = plan.initialOffset;
+        const auto &analysis = function ? function->layout : owner.layout;
+        const std::string scope = function ? "function-parameters" : "type-fields";
+        for (const auto &issue : analysis.issues)
+        {
+            LayoutEvent event;
+            event.category = LayoutIssueKindName(issue.kind);
+            event.message = issue.message;
+            event.owner = function ? function->fullName : owner.fullName;
+            event.ownerAddress = function ? function->address : owner.address;
+            event.scope = scope;
+            event.superAddress = function ? 0 : owner.superAddress;
+            event.typeSize = size;
+            event.initialCursor = initialOffset;
+            event.conflictingAddress = issue.conflictingAddress;
+            event.cursorSource = "layout-analysis";
+            const auto base = symbols.types.find(event.superAddress);
+            if (!function && base != symbols.types.end())
+            {
+                event.super = base->second.name;
+                event.baseSize = base->second.size;
+            }
+            const auto property = std::find_if(plan.fields.begin(), plan.fields.end(), [&](const FieldGenerationEntry &entry)
+                                               { return entry.property->address == issue.propertyAddress; });
+            if (property != plan.fields.end())
+            {
+                event.property = property->property->name;
+                event.propertyAddress = property->property->address;
+                event.offset = property->property->offset;
+                event.elementSize = property->property->elementSize;
+                event.arrayDim = property->property->arrayDim;
+                event.end = static_cast<int64_t>(property->property->offset) +
+                            static_cast<int64_t>(property->property->elementSize) * property->property->arrayDim;
+                event.boolean = property->property->boolean;
+            }
+            const auto conflicting = std::find_if(plan.fields.begin(), plan.fields.end(), [&](const FieldGenerationEntry &entry)
+                                                  { return entry.property->address == issue.conflictingAddress; });
+            if (conflicting != plan.fields.end())
+                event.conflictingProperty = conflicting->property->name;
+            event.strategy = LayoutRepresentationName(analysis.representation);
+            if (issue.kind == LayoutIssueKind::InheritedExtentIntersection && !issue.affectsCompleteness)
+                report.Info(std::move(event));
+            else
+                report.Warn(std::move(event));
+        }
+        if (analysis.representation == LayoutRepresentation::OffsetDescription)
+        {
+            LayoutEvent event;
+            event.category = "offset-description";
+            event.message = "fields use explicit offset descriptions; sequential member order is not asserted";
+            event.owner = function ? function->fullName : owner.fullName;
+            event.ownerAddress = function ? function->address : owner.address;
+            event.scope = scope;
+            event.superAddress = function ? 0 : owner.superAddress;
+            event.typeSize = size;
+            event.initialCursor = initialOffset;
+            event.strategy = "offset-description";
+            report.Info(std::move(event));
+            stream << "    // Representation: offset-description; reflected order is not asserted.\n";
+            stream << "    // Native data size is the reflected type/parameter size; unreflected bytes are not inferred as padding.\n";
+            size_t ordinal = 0;
+            for (const FieldGenerationEntry &entry : plan.fields)
+            {
+                const PropertyIR &property = *entry.property;
+                const std::string member = SanitizeIdentifier(property.name, "Member_") + "_" + std::to_string(ordinal++);
+                const std::string typeName = entry.cppType.empty() ? property.reflectedClass : entry.cppType;
+                if (!entry.validBounds)
+                {
+                    stream << "    // Invalid offset description: name=" << property.name << " symbol=" << member << " type=" << typeName
+                           << " offset=" << property.offset << " element_size=" << property.elementSize
+                           << " array_dim=" << property.arrayDim << "\n";
+                    ++opaqueFields;
+                    continue;
+                }
+                stream << "    // OffsetDescription name=" << property.name << " symbol=" << member << " type=" << typeName
+                       << " offset=" << Hex(static_cast<uint64_t>(property.offset))
+                       << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim << "\n";
+                stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
+                stream << "    static constexpr std::size_t " << member << "_ElementSize = " << property.elementSize << ";\n";
+                stream << "    static constexpr std::size_t " << member << "_ArrayDim = " << property.arrayDim << ";\n";
+                if (property.type.kind != PropertyKind::Bool &&
+                    (entry.cppType.empty() || property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map))
+                    ++opaqueFields;
+                if (entry.boolLayout)
+                {
+                    stream << "    static constexpr std::uint8_t " << member << "_ByteOffset = "
+                           << static_cast<unsigned int>(property.boolean.byteOffset) << ";\n";
+                    stream << "    static constexpr std::uint8_t " << member << "_ByteMask = "
+                           << Hex(property.boolean.byteMask) << ";\n";
+                    stream << "    static constexpr std::uint8_t " << member << "_Mask = "
+                           << Hex(property.boolean.fieldMask) << ";\n";
+                }
+            }
+            return;
+        }
+
         struct BoolStorage
         {
             int32_t end = 0;
@@ -292,81 +418,30 @@ namespace anduefker::generation
             const PropertyIR *firstProperty = nullptr;
         };
         std::unordered_map<int32_t, BoolStorage> boolStorage;
-        std::vector<const PropertyIR *> ordered;
-        ordered.reserve(properties.size());
-        for (const PropertyIR &property : properties)
-            ordered.push_back(&property);
-        std::stable_sort(ordered.begin(), ordered.end(), [](const PropertyIR *left, const PropertyIR *right)
-                         { return left->offset < right->offset; });
+        std::vector<const FieldGenerationEntry *> ordered;
+        ordered.reserve(plan.fields.size());
+        for (const FieldGenerationEntry &entry : plan.fields)
+            ordered.push_back(&entry);
+        std::stable_sort(ordered.begin(), ordered.end(), [](const FieldGenerationEntry *left, const FieldGenerationEntry *right)
+                         { return left->property->offset < right->property->offset; });
 
         int32_t cursor = initialOffset;
-        const PropertyIR *cursorProperty = nullptr;
         size_t ordinal = 0;
-        const auto warn = [&](const PropertyIR &property, const std::string &category,
-                              const std::string &message, const char *strategy, const PropertyIR *conflicting)
+        for (const FieldGenerationEntry *entry : ordered)
         {
-            LayoutEvent event;
-            event.category = category;
-            event.message = message;
-            event.owner = function ? function->fullName : owner.fullName;
-            event.ownerAddress = function ? function->address : owner.address;
-            event.scope = function ? "function-parameters" : "type-fields";
-            event.superAddress = function ? 0 : owner.superAddress;
-            const auto base = symbols.types.find(event.superAddress);
-            if (!function && base != symbols.types.end())
-            {
-                event.super = base->second.name;
-                event.baseSize = base->second.size;
-            }
-            event.typeSize = size;
-            event.initialCursor = initialOffset;
-            event.property = property.name;
-            event.propertyAddress = property.address;
-            event.offset = property.offset;
-            event.elementSize = property.elementSize;
-            event.arrayDim = property.arrayDim;
-            event.end = static_cast<int64_t>(property.offset) + static_cast<int64_t>(property.elementSize) * property.arrayDim;
-            event.cursor = cursor;
-            event.cursorSource = cursorProperty ? "previous-field" : (initialOffset != 0 ? "base-extent" : "origin");
-            if (conflicting)
-            {
-                event.conflictingAddress = conflicting->address;
-                event.conflictingProperty = conflicting->name;
-            }
-            else if (property.offset < initialOffset)
-                event.conflictingAddress = owner.superAddress;
-            event.boolean = property.boolean;
-            event.strategy = strategy;
-            if (property.type.kind != PropertyKind::Bool && strategy != std::string_view("omitted"))
-            {
-                const bool details = property.typeDetailsResolved && property.type.elementSize == property.elementSize;
-                const auto cppType = details ? PropertyType(property.type, symbols, context_.Module().pointerWidth,
-                                                            context_.Schema().fname.size)
-                                             : std::string{};
-                event.strategy = cppType.empty() ? "opaque-storage-and-offset" : "typed-member-and-offset";
-            }
-            report.Warn(std::move(event));
-        };
-        for (const PropertyIR *entry : ordered)
-        {
-            const PropertyIR &property = *entry;
+            const PropertyIR &property = *entry->property;
             const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
             const int64_t end = static_cast<int64_t>(property.offset) + total;
             const std::string member = SanitizeIdentifier(property.name, "Member_") + "_" + std::to_string(ordinal++);
-            if (property.elementSize <= 0 || property.arrayDim <= 0 || property.offset < 0 || end > size)
+            if (!entry->validBounds)
             {
                 ++report.omittedFields;
-                warn(property, "invalid-property-bounds", "field omitted: " + property.name + " address=" + Hex(property.address),
-                     "omitted", nullptr);
+                report.Warn("invalid-property-bounds", "field omitted: " + property.name + " address=" + Hex(property.address));
                 stream << "    // Field has invalid dimensions or exceeds the reflected size: " << member << "\n";
                 continue;
             }
 
-            const bool boolLayout = property.type.kind == PropertyKind::Bool &&
-                                    property.boolean.fieldSize == property.elementSize &&
-                                    property.boolean.fieldSize > 0 && property.boolean.fieldSize <= 8 &&
-                                    property.boolean.byteOffset < property.boolean.fieldSize &&
-                                    property.boolean.byteMask != 0 && property.boolean.fieldMask != 0;
+            const bool boolLayout = entry->boolLayout;
             if (boolLayout)
             {
                 // ByteOffset 是存储内部的字节位置，不能加到存储起点后再占用整个 FieldSize。
@@ -376,11 +451,7 @@ namespace anduefker::generation
                 {
                     if (existing->second.end != end || (existing->second.masks & mask) != 0)
                     {
-                        warn(property, existing->second.end != end ? "bool-storage-size-conflict" : "bool-mask-conflict",
-                             "bool storage conflict: " + property.name + " address=" + Hex(property.address),
-                             "shared-storage-and-offsets", existing->second.firstProperty);
-                        stream << "    // Conflicting bool storage size or mask: " << member
-                               << ", offset=" << Hex(property.offset) << ", size=" << Hex(static_cast<uint64_t>(total)) << "\n";
+                        stream << "    // Unexpected bool analysis conflict: " << member << "\n";
                     }
                     existing->second.masks |= mask;
                 }
@@ -388,19 +459,14 @@ namespace anduefker::generation
                 {
                     if (property.offset < cursor)
                     {
-                        warn(property, property.offset < initialOffset ? "inherited-extent-intersection" : "bool-storage-overlap",
-                             "bool storage overlap: " + property.name + " address=" + Hex(property.address),
-                             "sequential-bool-storage-and-offsets", cursorProperty);
-                        stream << "    // Bool storage overlaps the base or an existing field: " << member << "\n";
+                        stream << "    // Unexpected bool interval overlap after layout analysis: " << member << "\n";
                     }
                     if (property.offset > cursor)
-                        stream << "    std::uint8_t Pad_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
+                        stream << "    std::uint8_t UnknownData_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
                     const std::string storageName = "BoolStorage_" + std::to_string(ordinal++);
                     stream << "    std::uint8_t " << storageName << "[" << Hex(static_cast<uint64_t>(total)) << "]; // "
                            << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
                     boolStorage.emplace(property.offset, BoolStorage{static_cast<int32_t>(end), mask, &property});
-                    if (end > cursor)
-                        cursorProperty = &property;
                     cursor = std::max(cursor, static_cast<int32_t>(end));
                 }
                 stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
@@ -415,21 +481,10 @@ namespace anduefker::generation
             }
 
             if (property.offset < cursor)
-            {
-                warn(property, property.offset < initialOffset ? "inherited-extent-intersection" : "same-owner-overlap",
-                     "field overlap: " + property.name + " address=" + Hex(property.address),
-                     "sequential-member-and-offset", cursorProperty);
-                stream << "    // Overlapping reflected field; use its explicit offset: " << member << "\n";
-            }
+                stream << "    // Unexpected field interval overlap after layout analysis: " << member << "\n";
             if (property.offset > cursor)
-                stream << "    std::uint8_t Pad_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
-            const bool hasTypeDetails = property.type.kind != PropertyKind::Bool && property.typeDetailsResolved &&
-                                        property.type.elementSize == property.elementSize;
-            const std::string cppType = hasTypeDetails
-                                            ? PropertyType(property.type, symbols,
-                                                           context_.Module().pointerWidth, context_.Schema().fname.size)
-                                            : std::string{};
-            if (cppType.empty())
+                stream << "    std::uint8_t UnknownData_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
+            if (entry->cppType.empty())
             {
                 stream << "    std::uint8_t " << member << "[" << Hex(static_cast<uint64_t>(total))
                        << "]; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ") opaque\n";
@@ -437,7 +492,7 @@ namespace anduefker::generation
             }
             else
             {
-                stream << "    " << cppType << " " << member;
+                stream << "    " << entry->cppType << " " << member;
                 if (property.arrayDim > 1)
                     stream << "[" << property.arrayDim << "]";
                 stream << "; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
@@ -445,12 +500,10 @@ namespace anduefker::generation
                     ++opaqueFields;
             }
             stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
-            if (end > cursor)
-                cursorProperty = &property;
             cursor = std::max(cursor, static_cast<int32_t>(end));
         }
         if (cursor < size)
-            stream << "    std::uint8_t TailData[" << Hex(size - cursor) << "];\n";
+            stream << "    std::uint8_t UnknownTailData[" << Hex(size - cursor) << "];\n";
         stream << "};\n";
         stream << '\n';
     }
@@ -516,12 +569,12 @@ namespace anduefker::generation
         {
             const TypeIR &type = reflection_.types[typeIndex];
             const std::string typeName = types.at(type.address).name;
-            int32_t initialOffset = 0;
             const auto base = types.find(type.superAddress);
             const bool baseSizeValid = base != types.end() && base->second.size >= 0 && base->second.size <= type.size;
             if (type.superAddress != 0 && !baseSizeValid)
             {
                 LayoutEvent event;
+                event.severity = "error";
                 event.category = "missing-base-extent";
                 event.message = "base size unavailable: " + type.fullName;
                 event.owner = type.fullName;
@@ -529,23 +582,22 @@ namespace anduefker::generation
                 event.superAddress = type.superAddress;
                 event.typeSize = type.size;
                 event.scope = "type-fields";
-                event.strategy = "full-reflected-range";
+                event.strategy = "offset-description";
                 if (base != types.end())
                 {
                     event.super = base->second.name;
                     event.baseSize = base->second.size;
                 }
                 report.Warn(std::move(event));
-                stream << "// Base size is unavailable or inconsistent; padding uses the full reflected range.\n";
+                stream << "// Base extent is unavailable or inconsistent; fields use explicit target offsets where required.\n";
             }
             stream << "// Reflected size: " << Hex(static_cast<uint32_t>(type.size)) << "\n";
             stream << "struct " << typeName;
             if (base != types.end())
                 stream << " : public " << base->second.name;
-            if (baseSizeValid)
-                initialOffset = base->second.size;
             stream << "\n{\n";
-            WriteFields(stream, type, nullptr, type.properties, initialOffset, type.size, symbols, report);
+            const FieldGenerationPlan plan = BuildFieldGenerationPlan(type, nullptr, type.properties, type.size, symbols);
+            WriteFields(stream, type, nullptr, plan, symbols, report);
         }
         stream << "}\n";
         return stream.str();
@@ -568,7 +620,9 @@ namespace anduefker::generation
                        << "_NativeRva = " << Hex(function.nativeRva) << ";\n";
                 stream << "inline constexpr std::size_t " << functionName << "_ParamsSize = " << function.paramSize << ";\n";
                 stream << "struct " << functionName << "_Params\n{\n";
-                WriteFields(stream, type, &function, function.parameters, 0, function.paramSize, symbols, report);
+                const FieldGenerationPlan plan = BuildFieldGenerationPlan(type, &function, function.parameters,
+                                                                          function.paramSize, symbols);
+                WriteFields(stream, type, &function, plan, symbols, report);
             }
         }
         stream << "}\n";
@@ -798,14 +852,16 @@ namespace anduefker::generation
                                                    " total=" + std::to_string(count) +
                                                    " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
         for (const auto &event : report.events)
-            result.generationDiagnostics.push_back("SDK layout event: category=" + event.category +
+            result.generationDiagnostics.push_back("SDK layout event: severity=" + event.severity +
+                                                   " category=" + event.category +
                                                    " owner=" + event.owner + " property=" + event.property +
                                                    " address=" + Hex(event.propertyAddress) +
                                                    " offset=" + std::to_string(event.offset) +
                                                    " end=" + std::to_string(event.end) +
                                                    " base_size=" + std::to_string(event.baseSize) +
                                                    " cursor=" + std::to_string(event.cursor) +
-                                                   " cursor_source=" + event.cursorSource);
+                                                   " cursor_source=" + event.cursorSource +
+                                                   " strategy=" + event.strategy);
         const std::string artifactStem = packageStem + (status == ParseStatus::Partial ? ".partial" : "");
         const std::filesystem::path finalPath = outputRoot_ / artifactStem;
         if (std::filesystem::exists(finalPath, error))
