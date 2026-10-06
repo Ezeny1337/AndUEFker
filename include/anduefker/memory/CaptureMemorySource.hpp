@@ -16,6 +16,8 @@ namespace anduefker::memory
         bool limitExceeded = false;
         bool generationChanged = false;
         std::vector<uintptr_t> failedAddresses;
+        size_t readFailures = 0;
+        std::vector<ReadResult> readFailureSamples;
 
         [[nodiscard]] bool Stable() const
         {
@@ -60,6 +62,8 @@ namespace anduefker::memory
         mutable bool limitExceeded_ = false;
         mutable bool changedDuringRead_ = false;
         mutable uint64_t generation_ = 0;
+        mutable size_t readFailures_ = 0;
+        mutable std::vector<ReadResult> readFailureSamples_;
     };
 
     class CaptureObservationScope

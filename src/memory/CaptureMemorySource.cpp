@@ -13,22 +13,35 @@ namespace anduefker::memory
         limitExceeded_ = false;
         changedDuringRead_ = false;
         generation_ = source_.AddressSpaceGeneration();
+        readFailures_ = 0;
+        readFailureSamples_.clear();
     }
 
     ReadResult CaptureMemorySource::ReadBytes(uintptr_t address, void *buffer, size_t size) const
     {
+        const auto readFresh = [&]()
+        {
+            const ReadResult read = source_.ReadFreshBytes(address, buffer, size);
+            if (!read.Ok())
+            {
+                ++readFailures_;
+                if (readFailureSamples_.size() < 16)
+                    readFailureSamples_.push_back(read);
+            }
+            return read;
+        };
         if (buffer == nullptr || size == 0)
-            return source_.ReadFreshBytes(address, buffer, size);
+            return readFresh();
 
         if (!observing_)
-            return source_.ReadFreshBytes(address, buffer, size);
+            return readFresh();
         auto previous = observations_.find(address);
         if (previous != observations_.end() && previous->second.size() >= size)
         {
             std::memcpy(buffer, previous->second.data(), size);
             return {ReadError::None, address, size, size};
         }
-        const ReadResult read = source_.ReadFreshBytes(address, buffer, size);
+        const ReadResult read = readFresh();
         if (!read.Ok())
             return read;
 
@@ -62,6 +75,8 @@ namespace anduefker::memory
         result.limitExceeded = limitExceeded_;
         result.generationChanged = generation_ != source_.AddressSpaceGeneration();
         result.changedRanges = changedDuringRead_ ? 1 : 0;
+        result.readFailures = readFailures_;
+        result.readFailureSamples = readFailureSamples_;
         std::vector<uint8_t> current(kMaxReadSize);
         for (const auto &[address, bytes] : observations_)
         {

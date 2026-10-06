@@ -92,6 +92,39 @@ namespace anduefker::ir
         uint8_t fieldMask = 0;
     };
 
+    struct PropertyDetailDiagnostic
+    {
+        bool headerAvailable = true;
+        uintptr_t address = 0;
+        uintptr_t immediateOwner = 0;
+        bool ownerIsUObject = false;
+        std::string name;
+        std::string reflectedClass;
+        std::string normalizedClass;
+        std::string reason;
+        std::string detailsStatus;
+        int32_t offset = 0;
+        int32_t elementSize = 0;
+        int32_t arrayDim = 0;
+        uint64_t flags = 0;
+        uintptr_t referencedAddress = 0;
+        uintptr_t secondaryAddress = 0;
+        std::string referencedClass;
+        std::string secondaryClass;
+        BoolLayoutIR boolean;
+        struct DetailRead
+        {
+            std::string member;
+            int32_t offset = -1;
+            uintptr_t address = 0;
+            uintptr_t rawValue = 0;
+            int32_t error = 0;
+            size_t requested = 0;
+            size_t transferred = 0;
+        };
+        std::vector<DetailRead> reads;
+    };
+
     struct PropertyIR
     {
         uintptr_t address = 0;
@@ -111,6 +144,8 @@ namespace anduefker::ir
         std::vector<std::string> diagnostics;
         TypeReferenceIR type;
         BoolLayoutIR boolean;
+        // 仅保留失败节点的事实，嵌套属性受 ReadTypeReference 的遍历预算约束。
+        std::vector<PropertyDetailDiagnostic> detailDiagnostics;
     };
 
     struct FunctionIR
@@ -219,6 +254,15 @@ namespace anduefker::ir
         size_t changedRanges = 0;
         size_t unreadableRanges = 0;
         uint32_t attempts = 0;
+        struct ReadFailure
+        {
+            uintptr_t address = 0;
+            int32_t error = 0;
+            size_t requested = 0;
+            size_t transferred = 0;
+        };
+        size_t readFailures = 0;
+        std::vector<ReadFailure> readFailureSamples;
     };
 
     struct ReflectionIR

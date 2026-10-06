@@ -87,6 +87,26 @@ namespace anduefker::ue
         };
         DetailsStatus detailsStatus = DetailsStatus::Complete;
         std::array<uint8_t, 4> boolLayout{};
+        struct DetailRead
+        {
+            const char *member = "";
+            int32_t offset = -1;
+            uintptr_t address = 0;
+            uintptr_t rawValue = 0;
+            ::anduefker::memory::ReadResult read;
+        };
+        // 记录已发生的读取，不为诊断重新扫描属性内存；一个属性最多读取两个引用。
+        std::array<DetailRead, 2> detailReads{};
+        size_t detailReadCount = 0;
+    };
+
+    struct FieldClassMetadata
+    {
+        std::string name;
+        uint64_t id = 0;
+        uint64_t castFlags = 0;
+        uint32_t classFlags = 0;
+        uintptr_t superClass = 0;
     };
 
     struct EnumValueMetadata
@@ -145,6 +165,8 @@ namespace anduefker::ue
         [[nodiscard]] FieldChainResult FieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] FieldChainResult UFieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::optional<PropertyMetadata> Property(uintptr_t field) const;
+        [[nodiscard]] std::optional<FieldClassMetadata> FieldClass(uintptr_t address) const;
+        [[nodiscard]] bool IsValidFieldClass(uintptr_t address) const;
         [[nodiscard]] std::optional<DefinitionKind> DefinitionKindForClass(uintptr_t classAddress) const;
         [[nodiscard]] std::optional<uintptr_t> StructChildren(uintptr_t structure) const;
         [[nodiscard]] std::optional<uintptr_t> StructProperties(uintptr_t structure) const;

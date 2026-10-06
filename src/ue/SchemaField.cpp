@@ -243,7 +243,9 @@ namespace anduefker::ue::schema_probe
                         {
                             return (offset + alignment - 1) / alignment * alignment;
                         };
-                        const int32_t candidateId = alignOffset(classNameOffset + fnameSize, pointerSize);
+                        // Id 是 uint64，Android ARM32 与 ARM64 均按其类型对齐，不能使用指针对齐代替。
+                        const int32_t candidateId = alignOffset(classNameOffset + fnameSize,
+                                                                static_cast<int32_t>(alignof(uint64_t)));
                         const int32_t candidateCastFlags = candidateId + static_cast<int32_t>(sizeof(uint64_t));
                         const int32_t candidateClassFlags = candidateCastFlags + static_cast<int32_t>(sizeof(uint64_t));
                         const int32_t candidateSuperClass = alignOffset(

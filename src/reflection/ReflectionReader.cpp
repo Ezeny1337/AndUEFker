@@ -99,6 +99,73 @@ namespace anduefker::reflection
         return PropertyKind::Unknown;
     }
 
+    void ReflectionReader::RecordPropertyDetail(const PropertyMetadata &metadata, PropertyIR &property,
+                                                const std::string &reason, bool headerAvailable) const
+    {
+        ::anduefker::ir::PropertyDetailDiagnostic diagnostic;
+        diagnostic.headerAvailable = headerAvailable;
+        diagnostic.address = metadata.address;
+        diagnostic.immediateOwner = metadata.ownerAddress;
+        diagnostic.ownerIsUObject = metadata.ownerIsUObject;
+        diagnostic.name = metadata.name;
+        diagnostic.reflectedClass = metadata.className;
+        diagnostic.normalizedClass = metadata.normalizedClassName;
+        diagnostic.reason = reason;
+        switch (metadata.detailsStatus)
+        {
+        case PropertyMetadata::DetailsStatus::Complete:
+            diagnostic.detailsStatus = "complete";
+            break;
+        case PropertyMetadata::DetailsStatus::UnsupportedLayout:
+            diagnostic.detailsStatus = "unsupported-layout";
+            break;
+        case PropertyMetadata::DetailsStatus::Unreadable:
+            diagnostic.detailsStatus = "unreadable";
+            break;
+        case PropertyMetadata::DetailsStatus::InvalidReference:
+            diagnostic.detailsStatus = "invalid-reference";
+            break;
+        }
+        diagnostic.offset = metadata.offset;
+        diagnostic.elementSize = metadata.elementSize;
+        diagnostic.arrayDim = metadata.arrayDim;
+        diagnostic.flags = metadata.flags;
+        diagnostic.referencedAddress = metadata.referencedAddress;
+        diagnostic.secondaryAddress = metadata.secondaryAddress;
+        diagnostic.boolean = {metadata.boolLayout[0], metadata.boolLayout[1], metadata.boolLayout[2], metadata.boolLayout[3]};
+        for (size_t index = 0; index < metadata.detailReadCount; ++index)
+        {
+            const auto &read = metadata.detailReads[index];
+            diagnostic.reads.push_back({read.member, read.offset, read.address, read.rawValue,
+                                        static_cast<int32_t>(read.read.error), read.read.requested, read.read.transferred});
+        }
+        diagnostic.referencedClass = "not-observed";
+        diagnostic.secondaryClass = "not-observed";
+        // 仅在已完成读取与基本指针检查后补充类型身份；不尝试解码未知对象句柄。
+        const auto referenceClass = [&](uintptr_t address, bool secondary) -> std::string
+        {
+            if (address == 0 || metadata.detailsStatus != PropertyMetadata::DetailsStatus::Complete)
+                return "not-observed";
+            const auto kind = PropertyKindFromName(metadata.className);
+            if (kind == PropertyKind::FieldPath)
+            {
+                const auto cls = objects_.FieldClass(address);
+                return cls ? cls->name : "<invalid-field-class>";
+            }
+            if (kind == PropertyKind::Map || (!secondary && (kind == PropertyKind::Array || kind == PropertyKind::Set ||
+                                                             kind == PropertyKind::Enum || kind == PropertyKind::Optional)))
+            {
+                const auto field = objects_.Field(address);
+                return field ? field->className : "<invalid-field>";
+            }
+            const auto cls = objects_.ClassName(address);
+            return cls ? *cls : "<unreadable>";
+        };
+        diagnostic.referencedClass = referenceClass(metadata.referencedAddress, false);
+        diagnostic.secondaryClass = referenceClass(metadata.secondaryAddress, true);
+        property.detailDiagnostics.push_back(std::move(diagnostic));
+    }
+
     TypeReferenceIR ReflectionReader::ReadTypeReference(const PropertyMetadata &metadata, PropertyIR &property,
                                                         ReflectionStats &stats, std::unordered_set<uintptr_t> &path,
                                                         size_t depth, size_t &remaining) const
@@ -112,6 +179,7 @@ namespace anduefker::reflection
         if (depth >= 32 || remaining == 0 || !path.insert(metadata.address).second)
         {
             property.diagnostics.push_back("nested property cycle or traversal limit: address=" + std::to_string(metadata.address));
+            RecordPropertyDetail(metadata, property, "cycle-or-traversal-limit");
             ++stats.failures;
             return result;
         }
@@ -136,12 +204,20 @@ namespace anduefker::reflection
             {
                 ++stats.failures;
                 property.diagnostics.push_back("nested property header unreadable: address=" + std::to_string(address));
+                PropertyMetadata missing;
+                missing.address = address;
+                missing.name = "<unreadable>";
+                missing.className = "<unreadable>";
+                missing.normalizedClassName = "<unreadable>";
+                missing.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+                RecordPropertyDetail(missing, property, "nested-header-unreadable", false);
                 return {};
             }
             if (schema_.features.useFProperty && (child->ownerIsUObject || child->ownerAddress != metadata.address))
             {
                 ++stats.failures;
                 property.diagnostics.push_back("nested property owner mismatch: address=" + std::to_string(address));
+                RecordPropertyDetail(*child, property, "nested-owner-mismatch");
                 return {};
             }
             return std::make_shared<TypeReferenceIR>(ReadTypeReference(*child, property, stats, path, depth + 1, remaining));
@@ -198,6 +274,10 @@ namespace anduefker::reflection
                             metadata.boolLayout[0] <= 8 && metadata.boolLayout[1] < metadata.boolLayout[0] &&
                             metadata.boolLayout[2] != 0 && metadata.boolLayout[3] != 0;
             break;
+        case PropertyKind::FieldPath:
+            semanticMatch = metadata.detailsStatus == PropertyMetadata::DetailsStatus::Complete &&
+                            objects_.IsValidFieldClass(result.referencedObject);
+            break;
         default:
             break;
         }
@@ -205,6 +285,29 @@ namespace anduefker::reflection
         {
             property.diagnostics.push_back("property type semantics unresolved: address=" + std::to_string(metadata.address));
             result.detailsResolved = false;
+        }
+        if (!result.detailsResolved)
+        {
+            std::string reason = "semantic-mismatch";
+            switch (metadata.detailsStatus)
+            {
+            case PropertyMetadata::DetailsStatus::UnsupportedLayout:
+                reason = "unsupported-layout";
+                break;
+            case PropertyMetadata::DetailsStatus::Unreadable:
+                reason = "unreadable";
+                break;
+            case PropertyMetadata::DetailsStatus::InvalidReference:
+                reason = "invalid-reference";
+                break;
+            case PropertyMetadata::DetailsStatus::Complete:
+                if (result.kind == PropertyKind::Unknown)
+                    reason = "unknown-property-kind";
+                else if (metadata.elementSize <= 0)
+                    reason = "invalid-element-size";
+                break;
+            }
+            RecordPropertyDetail(metadata, property, reason);
         }
         path.erase(metadata.address);
         return result;
@@ -263,7 +366,8 @@ namespace anduefker::reflection
         {
             ++stats.failures;
             result.complete = false;
-            diagnostics.push_back("property field chain status=" + std::to_string(static_cast<int>(chain.status)));
+            diagnostics.push_back("property field chain status=" + std::to_string(static_cast<int>(chain.status)) +
+                                  " owner=" + std::to_string(owner) + " root=" + std::to_string(first));
         }
         for (const FieldMetadata &field : chain.fields)
         {
@@ -283,7 +387,10 @@ namespace anduefker::reflection
             {
                 ++stats.failures;
                 result.complete = false;
-                diagnostics.push_back("property owner mismatch: property=" + field.name);
+                diagnostics.push_back("property owner mismatch: property=" + field.name +
+                                      " address=" + std::to_string(field.address) +
+                                      " expected_owner=" + std::to_string(owner) +
+                                      " actual_owner=" + std::to_string(field.ownerAddress));
                 continue;
             }
             const auto property = ReadProperty(field.address, stats);
@@ -293,7 +400,8 @@ namespace anduefker::reflection
             {
                 ++stats.failures;
                 result.complete = false;
-                diagnostics.push_back("property header unreadable: property=" + field.name);
+                diagnostics.push_back("property header unreadable: property=" + field.name +
+                                      " class=" + field.className + " address=" + std::to_string(field.address));
             }
         }
         return result;
@@ -415,7 +523,8 @@ namespace anduefker::reflection
         {
             ++stats.failures;
             type.status = ParseStatus::Partial;
-            type.layoutConflicts.push_back("function field chain status=" + std::to_string(static_cast<int>(chain.status)));
+            type.layoutConflicts.push_back("function field chain status=" + std::to_string(static_cast<int>(chain.status)) +
+                                           " root=" + std::to_string(first));
         }
         for (const FieldMetadata &field : chain.fields)
         {
@@ -432,7 +541,9 @@ namespace anduefker::reflection
                 if (!flags || (*flags & (::anduefker::ue::kRFUnavailableDefinition | ::anduefker::ue::kRFClassDefaultObject)) != 0)
                 {
                     ++stats.failures;
-                    type.layoutConflicts.push_back("function definition is unavailable: function=" + field.name);
+                    type.layoutConflicts.push_back("function definition is unavailable: function=" + field.name +
+                                                   " address=" + std::to_string(field.address) +
+                                                   " flags=" + (flags ? std::to_string(*flags) : "unreadable"));
                     continue;
                 }
                 FunctionIR function;
@@ -457,7 +568,8 @@ namespace anduefker::reflection
                     !readMember(schema_.ufunction.returnValueOffset, function.returnValueOffset))
                 {
                     ++stats.failures;
-                    type.layoutConflicts.push_back("function header unreadable: function=" + field.name);
+                    type.layoutConflicts.push_back("function header unreadable: function=" + field.name +
+                                                   " address=" + std::to_string(field.address));
                     continue;
                 }
                 function.numParams = function.headerNumParams;
@@ -467,7 +579,9 @@ namespace anduefker::reflection
                 {
                     ++stats.failures;
                     function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("function native pointer unreadable");
+                    function.layoutConflicts.push_back("function native pointer unreadable: address=" +
+                                                       std::to_string(field.address) +
+                                                       " offset=" + std::to_string(schema_.ufunction.nativeFunction));
                 }
                 else if (native >= moduleBase_ && native < moduleEnd_ && memory_.IsExecutable(native, sizeof(uintptr_t)))
                     function.nativeRva = native - moduleBase_;
@@ -476,7 +590,8 @@ namespace anduefker::reflection
                 {
                     ++stats.failures;
                     function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("native function pointer is invalid");
+                    function.layoutConflicts.push_back("native function pointer is invalid: pointer=" + std::to_string(native) +
+                                                       " flags=" + std::to_string(function.flags));
                 }
                 function.nativeAddress = native;
                 const auto parameters = objects_.StructProperties(field.address);
@@ -486,7 +601,9 @@ namespace anduefker::reflection
                 {
                     ++stats.failures;
                     function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("function parameter chain root unreadable");
+                    function.layoutConflicts.push_back("function parameter chain root unreadable: address=" +
+                                                       std::to_string(field.address) +
+                                                       " offset=" + std::to_string(schema_.features.useFProperty ? schema_.ustruct.childProperties : schema_.ustruct.children));
                 }
                 type.functions.push_back(std::move(function));
                 ++stats.parsedFunctions;
@@ -499,11 +616,24 @@ namespace anduefker::reflection
         const auto name = objects_.Name(object);
         const auto className = objects_.ClassName(object);
         if (!name || !className)
+        {
+            ir.diagnostics.push_back("type identity unreadable: address=" + std::to_string(object) +
+                                     " name_readable=" + std::to_string(name.has_value()) +
+                                     " class_readable=" + std::to_string(className.has_value()));
             return std::nullopt;
+        }
         const auto size = objects_.StructSize(object);
         const auto super = objects_.StructSuper(object);
         if (!size || *size < 0 || !super)
+        {
+            ir.diagnostics.push_back("type header invalid or unreadable: name=" + *name +
+                                     " address=" + std::to_string(object) +
+                                     " size_offset=" + std::to_string(schema_.ustruct.propertiesSizeOffset) +
+                                     " size=" + (size ? std::to_string(*size) : "unreadable") +
+                                     " super_offset=" + std::to_string(schema_.ustruct.superStruct) +
+                                     " super_readable=" + std::to_string(super.has_value()));
             return std::nullopt;
+        }
 
         TypeIR type;
         type.address = object;
@@ -603,9 +733,18 @@ namespace anduefker::reflection
             memory_.Reset();
             result = ReadAttempt();
             const auto validation = memory_.Validate();
-            result.capture = {validation.Stable() && validation.observedRanges != 0, validation.limitExceeded,
-                              validation.generationChanged, validation.observedRanges, validation.observedBytes,
-                              validation.changedRanges, validation.unreadableRanges, attempt};
+            result.capture.observationsStable = validation.Stable() && validation.observedRanges != 0;
+            result.capture.limitExceeded = validation.limitExceeded;
+            result.capture.generationChanged = validation.generationChanged;
+            result.capture.observedRanges = validation.observedRanges;
+            result.capture.observedBytes = validation.observedBytes;
+            result.capture.changedRanges = validation.changedRanges;
+            result.capture.unreadableRanges = validation.unreadableRanges;
+            result.capture.attempts = attempt;
+            result.capture.readFailures = validation.readFailures;
+            for (const auto &failure : validation.readFailureSamples)
+                result.capture.readFailureSamples.push_back({failure.address, static_cast<int32_t>(failure.error),
+                                                             failure.requested, failure.transferred});
             if (!result.capture.observationsStable)
             {
                 result.status = result.types.empty() ? ParseStatus::Failed : ParseStatus::Partial;
@@ -622,6 +761,14 @@ namespace anduefker::reflection
         }
         result.diagnostics.push_back("capture attempts=" + std::to_string(result.capture.attempts) +
                                      "; consistency covers observed bytes, not an atomic process snapshot");
+        for (const auto &failure : result.capture.readFailureSamples)
+            result.diagnostics.push_back("capture read failure: address=" + std::to_string(failure.address) +
+                                         " requested=" + std::to_string(failure.requested) +
+                                         " transferred=" + std::to_string(failure.transferred) +
+                                         " read_error=" + std::to_string(failure.error));
+        if (result.capture.readFailures > result.capture.readFailureSamples.size())
+            result.diagnostics.push_back("capture read failure samples omitted=" +
+                                         std::to_string(result.capture.readFailures - result.capture.readFailureSamples.size()));
         return result;
     }
 
@@ -633,6 +780,7 @@ namespace anduefker::reflection
         {
             result.status = ParseStatus::Failed;
             ++result.stats.failures;
+            result.diagnostics.push_back("reflection object store initialization failed");
             return result;
         }
         result.stats.objectSlots = objects_.Count();
@@ -656,6 +804,14 @@ namespace anduefker::reflection
 
         std::unordered_set<uintptr_t> seenTypes;
         std::unordered_map<uintptr_t, std::optional<::anduefker::ue::DefinitionKind>> classKinds;
+        std::unordered_map<std::string, size_t> failureReasons;
+        const auto recordFailure = [&](const std::string &reason, int32_t index, uintptr_t address)
+        {
+            const size_t count = ++failureReasons[reason];
+            if (count <= 8)
+                result.diagnostics.push_back("reflection object failure: reason=" + reason +
+                                             " index=" + std::to_string(index) + " address=" + std::to_string(address));
+        };
         for (int32_t index = 0; index < objects_.Count(); ++index)
         {
             if (memory_.LimitExceeded())
@@ -705,6 +861,7 @@ namespace anduefker::reflection
             if (!classAddress)
             {
                 ++result.stats.failures;
+                recordFailure("class-pointer-unreadable", index, object);
                 continue;
             }
             auto classification = classKinds.find(*classAddress);
@@ -717,6 +874,7 @@ namespace anduefker::reflection
             {
                 ++result.stats.failures;
                 ++result.stats.classNameReadFailures;
+                recordFailure("class-hierarchy-unresolved", index, object);
                 continue;
             }
             const auto kind = *classification->second;
@@ -741,6 +899,7 @@ namespace anduefker::reflection
             if (!objectFlags)
             {
                 ++result.stats.failures;
+                recordFailure("object-flags-unreadable", index, object);
                 continue;
             }
             if ((*objectFlags & ::anduefker::ue::kRFClassDefaultObject) != 0)
@@ -775,6 +934,7 @@ namespace anduefker::reflection
             if (!type)
             {
                 ++result.stats.failures;
+                recordFailure("type-header-unavailable", index, object);
                 continue;
             }
             result.types.push_back(*type);
@@ -785,6 +945,10 @@ namespace anduefker::reflection
             result.diagnostics.push_back("object diagnostic samples omitted=" +
                                          std::to_string(result.stats.objectDiagnosticSamplesOmitted) +
                                          "; sample limit per reason=" + std::to_string(maxObjectSamplesPerReason));
+        for (const auto &[reason, count] : failureReasons)
+            result.diagnostics.push_back("reflection object failure summary: reason=" + reason +
+                                         " total=" + std::to_string(count) +
+                                         " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
 
         std::unordered_map<uintptr_t, size_t> enumByAddress;
         for (size_t index = 0; index < result.enums.size(); ++index)
@@ -858,6 +1022,38 @@ namespace anduefker::reflection
                     inferEnumType(inferEnumType, local.type, 0);
             }
         }
+
+        std::unordered_map<std::string, size_t> detailCounts;
+        const auto noteDetails = [&](const PropertyIR &property, const std::string &owner, uintptr_t ownerAddress)
+        {
+            for (const auto &detail : property.detailDiagnostics)
+            {
+                if (++detailCounts[detail.reason + ":" + detail.normalizedClass] <= 8)
+                    result.diagnostics.push_back("property detail failure: owner=" + owner +
+                                                 " owner_address=" + std::to_string(ownerAddress) +
+                                                 " root=" + property.name + " property=" + detail.name +
+                                                 " property_class=" + detail.reflectedClass +
+                                                 " address=" + std::to_string(detail.address) +
+                                                 " reason=" + detail.reason +
+                                                 " referenced_address=" + std::to_string(detail.referencedAddress) +
+                                                 " secondary_address=" + std::to_string(detail.secondaryAddress));
+            }
+        };
+        for (const TypeIR &type : result.types)
+        {
+            for (const auto &property : type.properties)
+                noteDetails(property, type.fullName, type.address);
+            for (const auto &function : type.functions)
+            {
+                for (const auto &property : function.parameters)
+                    noteDetails(property, function.fullName, function.address);
+                for (const auto &property : function.locals)
+                    noteDetails(property, function.fullName, function.address);
+            }
+        }
+        for (const auto &[reason, count] : detailCounts)
+            result.diagnostics.push_back("property detail summary: reason_and_class=" + reason + " total=" + std::to_string(count) +
+                                         " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
 
         if (result.stats.parsedTypes == 0)
             result.status = ParseStatus::Failed;

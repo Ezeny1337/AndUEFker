@@ -239,7 +239,6 @@ namespace anduefker::ue::schema_probe
         return true;
     }
 
-
     bool SchemaProbeContext::ResolvePropertySubtypes(EngineSchema &schema, SchemaResolutionReport &report) const
     {
         if (!schema.features.useFProperty)
@@ -256,9 +255,11 @@ namespace anduefker::ue::schema_probe
             "BoolProperty", "ByteProperty", "ObjectProperty", "ObjectPropertyBase", "ClassProperty",
             "StructProperty", "ArrayProperty", "SetProperty", "MapProperty", "EnumProperty",
             "DelegateProperty", "MulticastDelegateProperty", "MulticastInlineDelegateProperty",
-            "MulticastSparseDelegateProperty", "OptionalProperty"};
+            "MulticastSparseDelegateProperty", "OptionalProperty", "FieldPathProperty"};
         std::unordered_map<std::string, uintptr_t> samples;
+        std::unordered_map<std::string, size_t> sampleCounts;
         std::vector<uintptr_t> delegateSamples;
+        std::vector<FieldMetadata> fieldPathSamples;
         const auto isDelegatePropertyName = [](FieldKind kind, const std::string &name)
         {
             const std::string normalized = NormalizeRuntimeFieldName(name);
@@ -289,6 +290,9 @@ namespace anduefker::ue::schema_probe
             for (const FieldMetadata &field : fields.fields)
             {
                 const std::string &propertyClassName = field.normalizedClassName;
+                ++sampleCounts[propertyClassName];
+                if (propertyClassName == "FieldPathProperty" && fieldPathSamples.size() < 16)
+                    fieldPathSamples.push_back(field);
                 if (isDelegatePropertyName(field.kind, field.className) && delegateSamples.size() < 128)
                     delegateSamples.push_back(field.address);
                 if (std::find(wanted.begin(), wanted.end(), propertyClassName) != wanted.end() &&
@@ -309,6 +313,17 @@ namespace anduefker::ue::schema_probe
                                                schema.ffield.next + static_cast<int32_t>(sizeof(uintptr_t))});
         const int32_t firstSubtypeOffset = (propertyTail + static_cast<int32_t>(sizeof(uintptr_t)) - 1) /
                                            static_cast<int32_t>(sizeof(uintptr_t)) * static_cast<int32_t>(sizeof(uintptr_t));
+        report.evidence.push_back("property subtype anchors: pointer_width=" + std::to_string(sizeof(uintptr_t)) +
+                                  " pointer_alignment=" + std::to_string(alignof(uintptr_t)) +
+                                  " uint64_alignment=" + std::to_string(alignof(uint64_t)) +
+                                  " fname_size=" + std::to_string(schema.fname.size) +
+                                  " offset_internal=" + std::to_string(schema.property.offsetInternal) +
+                                  " calculated_base_tail=" + std::to_string(fPropertyBaseTail) +
+                                  " first_subtype_offset=" + std::to_string(firstSubtypeOffset));
+        for (const auto &name : wanted)
+            report.evidence.push_back("property subtype samples: class=" + name + " count=" + std::to_string(sampleCounts[name]) +
+                                      " sample_address=" + std::to_string(samples.contains(name) ? samples.at(name) : 0) +
+                                      "; scope=direct-class-and-scriptstruct-fields");
 
         auto readPointer = [&](uintptr_t field, int32_t offset, uintptr_t &value)
         {
@@ -335,18 +350,75 @@ namespace anduefker::ue::schema_probe
         {
             const auto sample = samples.find(sampleName);
             if (sample == samples.end())
+            {
+                report.evidence.push_back("property subtype probe: class=" + sampleName + " reason=missing-sample");
                 return -1;
+            }
+            size_t readableHits = 0;
+            size_t nullHits = 0;
+            size_t failures = 0;
             for (int32_t offset = firstSubtypeOffset; offset <= 0x180; offset += static_cast<int32_t>(sizeof(uintptr_t)))
             {
                 uintptr_t value = 0;
-                if (readPointer(sample->second, offset, value) && predicate(value))
+                const auto address = Add(sample->second, offset);
+                const ::anduefker::memory::ReadResult read = address
+                                                                 ? memory_.ReadBytes(*address, &value, sizeof(value))
+                                                                 : ::anduefker::memory::ReadResult{::anduefker::memory::ReadError::InvalidArgument, 0, sizeof(value), 0};
+                if (!read.Ok())
+                {
+                    ++failures;
+                    if (failures <= 2)
+                        report.evidence.push_back("property subtype read failure: class=" + sampleName +
+                                                  " sample=" + std::to_string(sample->second) +
+                                                  " offset=" + std::to_string(offset) +
+                                                  " address=" + std::to_string(read.address) +
+                                                  " error=" + std::to_string(static_cast<int>(read.error)) +
+                                                  " requested=" + std::to_string(read.requested) +
+                                                  " transferred=" + std::to_string(read.transferred));
+                    continue;
+                }
+                ++readableHits;
+                if (value == 0)
+                {
+                    ++nullHits;
+                    continue;
+                }
+                if (predicate(value))
+                {
+                    report.evidence.push_back("property subtype probe: class=" + sampleName +
+                                              " sample=" + std::to_string(sample->second) +
+                                              " selected_offset=" + std::to_string(offset) +
+                                              " raw_value=" + std::to_string(value) +
+                                              " readable=" + std::to_string(readableHits) +
+                                              " null=" + std::to_string(nullHits) +
+                                              " failures=" + std::to_string(failures) +
+                                              " failure_samples_omitted=" + std::to_string(failures > 2 ? failures - 2 : 0) +
+                                              "; selection=first-semantic-hit; later-candidates=not-examined");
                     return offset;
+                }
             }
+            report.evidence.push_back("property subtype probe: class=" + sampleName + " reason=no-semantic-hit" +
+                                      " readable=" + std::to_string(readableHits) + " null=" + std::to_string(nullHits) +
+                                      " failures=" + std::to_string(failures) +
+                                      " failure_samples_omitted=" + std::to_string(failures > 2 ? failures - 2 : 0));
             return -1;
         };
 
         if (schema.propertySubtypes.boolBase < 0 && samples.contains("BoolProperty"))
             schema.propertySubtypes.boolBase = firstSubtypeOffset;
+        if (samples.contains("BoolProperty"))
+        {
+            std::array<uint8_t, 4> layout{};
+            const auto address = Add(samples.at("BoolProperty"), schema.propertySubtypes.boolBase);
+            const auto read = address ? memory_.ReadBytes(*address, layout.data(), layout.size())
+                                      : ::anduefker::memory::ReadResult{::anduefker::memory::ReadError::InvalidArgument, 0, layout.size(), 0};
+            report.evidence.push_back("property subtype bool candidate: sample=" + std::to_string(samples.at("BoolProperty")) +
+                                      " selected_offset=" + std::to_string(schema.propertySubtypes.boolBase) +
+                                      " field_size=" + std::to_string(layout[0]) + " byte_offset=" + std::to_string(layout[1]) +
+                                      " byte_mask=" + std::to_string(layout[2]) + " field_mask=" + std::to_string(layout[3]) +
+                                      " read_error=" + std::to_string(static_cast<int>(read.error)) +
+                                      "; selection=calculated-boundary-not-semantically-validated");
+        }
         if (schema.propertySubtypes.objectClass < 0)
             schema.propertySubtypes.objectClass = findPointer("ObjectProperty", [&](uintptr_t value)
                                                               { return isUObjectClass(value, "Class"); });
@@ -437,6 +509,78 @@ namespace anduefker::ue::schema_probe
             schema.propertySubtypes.byteEnum = findPointer("ByteProperty", [&](uintptr_t value)
                                                            { return isUObjectClass(value, "Enum"); });
 
+        // FieldPath 引用 FFieldClass 而非 UObject；所有采样必须在同一偏移通过父类链验证。
+        if (schema.features.useFProperty && schema.propertySubtypes.fieldPathClass < 0)
+        {
+            std::vector<int32_t> candidates;
+            for (const auto &sample : fieldPathSamples)
+                report.evidence.push_back("property subtype FieldPath sample: address=" + std::to_string(sample.address) +
+                                          " name=" + sample.name + " owner=" + std::to_string(sample.ownerAddress));
+            if (fieldPathSamples.size() >= 2)
+            {
+                for (int32_t offset = firstSubtypeOffset; offset <= 0x180; offset += static_cast<int32_t>(sizeof(uintptr_t)))
+                {
+                    size_t hits = 0;
+                    size_t readable = 0;
+                    size_t nulls = 0;
+                    size_t failures = 0;
+                    for (const auto &sample : fieldPathSamples)
+                    {
+                        uintptr_t value = 0;
+                        const auto address = Add(sample.address, offset);
+                        if (!address || !memory_.IsReadable(*address, sizeof(value)) || !memory_.Read(*address, value))
+                        {
+                            ++failures;
+                            continue;
+                        }
+                        ++readable;
+                        if (value == 0)
+                        {
+                            ++nulls;
+                            continue;
+                        }
+                        if (model.IsValidFieldClass(value))
+                            ++hits;
+                    }
+                    if (hits == fieldPathSamples.size())
+                        candidates.push_back(offset);
+                    report.evidence.push_back("property subtype FieldPath candidate: offset=" + std::to_string(offset) +
+                                              " hits=" + std::to_string(hits) +
+                                              " samples=" + std::to_string(fieldPathSamples.size()) +
+                                              " readable=" + std::to_string(readable) +
+                                              " null=" + std::to_string(nulls) + " failures=" + std::to_string(failures));
+                }
+            }
+            if (candidates.size() == 1)
+                schema.propertySubtypes.fieldPathClass = candidates.front();
+            report.evidence.push_back("property subtype FieldPath result: samples=" + std::to_string(fieldPathSamples.size()) +
+                                      " sample_limit=16 samples_omitted=" +
+                                      std::to_string(sampleCounts["FieldPathProperty"] - fieldPathSamples.size()) +
+                                      " candidates=" + std::to_string(candidates.size()) +
+                                      " selected_offset=" + std::to_string(schema.propertySubtypes.fieldPathClass) +
+                                      " reason=" + (fieldPathSamples.size() < 2 ? "insufficient-samples" : candidates.empty()  ? "no-semantic-hit"
+                                                                                                       : candidates.size() > 1 ? "ambiguous-candidates"
+                                                                                                                               : "validated"));
+        }
+
+        // 仅补充已采到样本的身份；不改变旧 subtype 的选择顺序与接受条件。
+        for (const auto &name : wanted)
+        {
+            const auto sample = samples.find(name);
+            if (sample == samples.end())
+                continue;
+            const auto field = model.Field(sample->second);
+            if (!field)
+                continue;
+            const auto owner = schema.features.useFProperty && field->ownerIsUObject
+                                   ? model.FullName(field->ownerAddress)
+                                   : std::optional<std::string>{};
+            report.evidence.push_back("property subtype sample identity: class=" + name +
+                                      " name=" + field->name + " address=" + std::to_string(field->address) +
+                                      " owner_address=" + std::to_string(field->ownerAddress) +
+                                      " owner_full_name=" + (owner ? *owner : "not-observed"));
+        }
+
         report.evidence.push_back("property subtypes: object_class=" + std::to_string(schema.propertySubtypes.objectClass) +
                                   " class_meta_class=" + std::to_string(schema.propertySubtypes.classMetaClass) +
                                   " struct_type=" + std::to_string(schema.propertySubtypes.structType) +
@@ -445,7 +589,10 @@ namespace anduefker::ue::schema_probe
                                   " map_base=" + std::to_string(schema.propertySubtypes.mapBase) +
                                   " enum_base=" + std::to_string(schema.propertySubtypes.enumBase) +
                                   " delegate_signature=" + std::to_string(schema.propertySubtypes.delegateSignature) +
-                                  " optional_value=" + std::to_string(schema.propertySubtypes.optionalValue));
+                                  " optional_value=" + std::to_string(schema.propertySubtypes.optionalValue) +
+                                  " byte_enum=" + std::to_string(schema.propertySubtypes.byteEnum) +
+                                  " bool_base=" + std::to_string(schema.propertySubtypes.boolBase) +
+                                  " field_path_class=" + std::to_string(schema.propertySubtypes.fieldPathClass));
         return true;
     }
 } // namespace anduefker::ue::schema_probe

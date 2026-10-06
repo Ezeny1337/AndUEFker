@@ -386,20 +386,33 @@ namespace anduefker::ue
             !memory_.Read(*flagsAddress, result.flags))
             return std::nullopt;
 
-        const auto readOptionalPointer = [&](int32_t offset, bool nullable = false) -> uintptr_t
+        const auto readOptionalPointer = [&](const char *member, int32_t offset, bool nullable = false) -> uintptr_t
         {
+            PropertyMetadata::DetailRead detail;
+            detail.member = member;
+            detail.offset = offset;
+            detail.read = {::anduefker::memory::ReadError::InvalidArgument, 0, sizeof(uintptr_t), 0};
             if (offset < 0)
             {
+                result.detailReads[result.detailReadCount++] = detail;
                 result.detailsStatus = PropertyMetadata::DetailsStatus::UnsupportedLayout;
                 return 0;
             }
             const auto address = Add(field, offset);
             uintptr_t value = 0;
-            if (!address || !memory_.Read(*address, value))
+            if (address)
             {
+                detail.address = *address;
+                detail.read = memory_.ReadBytes(*address, &value, sizeof(value));
+            }
+            if (!address || !detail.read.Ok())
+            {
+                result.detailReads[result.detailReadCount++] = detail;
                 result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
                 return 0;
             }
+            detail.rawValue = value;
+            result.detailReads[result.detailReadCount++] = detail;
             if ((!nullable && value == 0) || (value != 0 && !IsReadableObject(value)))
                 result.detailsStatus = PropertyMetadata::DetailsStatus::InvalidReference;
             return value;
@@ -408,52 +421,109 @@ namespace anduefker::ue
         if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" || propertyClassName == "ObjectPtrProperty" ||
             propertyClassName == "SoftObjectProperty" || propertyClassName == "WeakObjectProperty" ||
             propertyClassName == "LazyObjectProperty" || propertyClassName == "InterfaceProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.objectClass);
+            result.referencedAddress = readOptionalPointer("object_class", schema_.propertySubtypes.objectClass);
         else if (propertyClassName == "ClassProperty" || propertyClassName == "SoftClassProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.classMetaClass);
+            result.referencedAddress = readOptionalPointer("class_meta_class", schema_.propertySubtypes.classMetaClass);
         else if (propertyClassName == "StructProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.structType);
+            result.referencedAddress = readOptionalPointer("struct_type", schema_.propertySubtypes.structType);
         else if (propertyClassName == "ByteProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.byteEnum, true);
+            result.referencedAddress = readOptionalPointer("byte_enum", schema_.propertySubtypes.byteEnum, true);
         else if (propertyClassName == "BoolProperty")
         {
             const auto address = Add(field, schema_.propertySubtypes.boolBase);
+            PropertyMetadata::DetailRead detail;
+            detail.member = "bool_layout";
+            detail.offset = schema_.propertySubtypes.boolBase;
+            detail.read = {::anduefker::memory::ReadError::InvalidArgument, 0, result.boolLayout.size(), 0};
             if (schema_.propertySubtypes.boolBase < 0)
                 result.detailsStatus = PropertyMetadata::DetailsStatus::UnsupportedLayout;
-            else if (!address || !memory_.ReadBytes(*address, result.boolLayout.data(), result.boolLayout.size()).Ok())
-                result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+            else
+            {
+                if (address)
+                {
+                    detail.address = *address;
+                    detail.read = memory_.ReadBytes(*address, result.boolLayout.data(), result.boolLayout.size());
+                }
+                if (!address || !detail.read.Ok())
+                    result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+            }
+            result.detailReads[result.detailReadCount++] = detail;
         }
         else if (propertyClassName == "ArrayProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.arrayInner);
+            result.referencedAddress = readOptionalPointer("array_inner", schema_.propertySubtypes.arrayInner);
         else if (propertyClassName == "SetProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.setElement);
+            result.referencedAddress = readOptionalPointer("set_element", schema_.propertySubtypes.setElement);
         else if (propertyClassName == "MapProperty")
         {
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.mapBase);
+            result.referencedAddress = readOptionalPointer("map_key", schema_.propertySubtypes.mapBase);
             const int32_t valueOffset = schema_.propertySubtypes.mapBase >= 0 &&
                                                 schema_.propertySubtypes.mapBase <= INT32_MAX - static_cast<int32_t>(sizeof(uintptr_t))
                                             ? schema_.propertySubtypes.mapBase + static_cast<int32_t>(sizeof(uintptr_t))
                                             : -1;
-            result.secondaryAddress = readOptionalPointer(valueOffset);
+            result.secondaryAddress = readOptionalPointer("map_value", valueOffset);
         }
         else if (propertyClassName == "EnumProperty")
         {
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.enumBase);
+            result.referencedAddress = readOptionalPointer("enum_underlying", schema_.propertySubtypes.enumBase);
             const int32_t enumOffset = schema_.propertySubtypes.enumBase >= 0 &&
                                                schema_.propertySubtypes.enumBase <= INT32_MAX - static_cast<int32_t>(sizeof(uintptr_t))
                                            ? schema_.propertySubtypes.enumBase + static_cast<int32_t>(sizeof(uintptr_t))
                                            : -1;
-            result.secondaryAddress = readOptionalPointer(enumOffset);
+            result.secondaryAddress = readOptionalPointer("enum_type", enumOffset);
         }
         else if (propertyClassName == "OptionalProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.optionalValue);
+            result.referencedAddress = readOptionalPointer("optional_value", schema_.propertySubtypes.optionalValue);
         else if (propertyClassName == "DelegateProperty" || propertyClassName == "MulticastDelegateProperty" ||
                  propertyClassName == "MulticastInlineDelegateProperty" || propertyClassName == "MulticastSparseDelegateProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.delegateSignature);
+            result.referencedAddress = readOptionalPointer("delegate_signature", schema_.propertySubtypes.delegateSignature);
         else if (propertyClassName == "FieldPathProperty")
-            result.referencedAddress = readOptionalPointer(schema_.propertySubtypes.fieldPathClass);
+            result.referencedAddress = readOptionalPointer("field_path_class", schema_.propertySubtypes.fieldPathClass);
 
         return result;
+    }
+
+    std::optional<FieldClassMetadata> ObjectModelReader::FieldClass(uintptr_t address) const
+    {
+        if (!schema_.features.useFProperty || address == 0 || schema_.fname.size <= 0)
+            return std::nullopt;
+        const auto nameAddress = Add(address, schema_.ffieldClass.name);
+        const auto idAddress = Add(address, schema_.ffieldClass.id);
+        const auto castAddress = Add(address, schema_.ffieldClass.castFlags);
+        const auto flagsAddress = Add(address, schema_.ffieldClass.classFlags);
+        const auto superAddress = Add(address, schema_.ffieldClass.superClass);
+        if (!nameAddress || !idAddress || !castAddress || !flagsAddress || !superAddress ||
+            !memory_.IsReadable(*nameAddress, static_cast<size_t>(schema_.fname.size)) ||
+            !memory_.IsReadable(*idAddress, sizeof(uint64_t)) ||
+            !memory_.IsReadable(*castAddress, sizeof(uint64_t)) ||
+            !memory_.IsReadable(*flagsAddress, sizeof(uint32_t)) ||
+            !memory_.IsReadable(*superAddress, sizeof(uintptr_t)))
+            return std::nullopt;
+        FieldClassMetadata result;
+        const auto name = names_.ReadFName(*nameAddress);
+        if (!name || name->empty() || !memory_.Read(*idAddress, result.id) ||
+            !memory_.Read(*castAddress, result.castFlags) || !memory_.Read(*flagsAddress, result.classFlags) ||
+            !memory_.Read(*superAddress, result.superClass))
+            return std::nullopt;
+        result.name = *name;
+        return result;
+    }
+
+    bool ObjectModelReader::IsValidFieldClass(uintptr_t address) const
+    {
+        std::unordered_set<uintptr_t> visited;
+        uint64_t childCastFlags = UINT64_MAX;
+        for (size_t depth = 0; address != 0 && depth < 32 && visited.insert(address).second; ++depth)
+        {
+            const auto metadata = FieldClass(address);
+            if (!metadata || (metadata->id != 0 && (metadata->castFlags & metadata->id) != metadata->id) ||
+                (childCastFlags & metadata->castFlags) != metadata->castFlags)
+                return false;
+            if (metadata->superClass == 0)
+                return NormalizeRuntimeFieldName(metadata->name) == "Field";
+            childCastFlags = metadata->castFlags;
+            address = metadata->superClass;
+        }
+        return false;
     }
 
     std::optional<DefinitionKind> ObjectModelReader::DefinitionKindForClass(uintptr_t classAddress) const

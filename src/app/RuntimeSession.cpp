@@ -296,7 +296,9 @@ namespace anduefker::app
                                            evidence.find("candidate") != std::string::npos ||
                                            evidence.find("sample eligibility") != std::string::npos ||
                                            evidence.find("parameter chain") != std::string::npos ||
-                                           evidence.find("case-preserving") != std::string::npos;
+                                           evidence.find("case-preserving") != std::string::npos ||
+                                           evidence.find("property subtype") != std::string::npos ||
+                                           evidence.find("delegate subtype") != std::string::npos;
                     if (important)
                         Note(RuntimeLogLevel::Debug, "schema_evidence id=" + profile.id + " " + evidence);
                 }
@@ -470,6 +472,8 @@ namespace anduefker::app
         {
             ArtifactWriter writer(context_, reflection_, config_.outputRoot, config_.packageName);
             artifacts_ = writer.Write();
+            for (const auto &diagnostic : artifacts_.generationDiagnostics)
+                Note(RuntimeLogLevel::Debug, diagnostic);
             if (artifacts_.status == ParseStatus::Failed)
             {
                 failures_.push_back(artifacts_.error);

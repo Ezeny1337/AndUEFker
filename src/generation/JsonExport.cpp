@@ -1,6 +1,7 @@
 #include "anduefker/generation/JsonExport.hpp"
 
 #include <iterator>
+#include <map>
 #include <ostream>
 #include <sstream>
 
@@ -151,7 +152,114 @@ namespace anduefker::generation
                << ",\"generation_changed\":" << (capture.generationChanged ? "true" : "false")
                << ",\"observed_ranges\":" << capture.observedRanges << ",\"observed_bytes\":" << capture.observedBytes
                << ",\"changed_ranges\":" << capture.changedRanges << ",\"unreadable_ranges\":" << capture.unreadableRanges
-               << ",\"attempts\":" << capture.attempts << '}';
+               << ",\"attempts\":" << capture.attempts
+               << ",\"read_failures\":" << capture.readFailures
+               << ",\"read_failure_samples_omitted\":" << (capture.readFailures - capture.readFailureSamples.size())
+               << ",\"read_failure_samples\":[";
+        for (size_t index = 0; index < capture.readFailureSamples.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const auto &failure = capture.readFailureSamples[index];
+            stream << "{\"address\":\"" << Hex(failure.address) << "\",\"read_error\":" << failure.error
+                   << ",\"requested\":" << failure.requested << ",\"transferred\":" << failure.transferred << '}';
+        }
+        stream << "]}";
+    }
+
+    void WritePropertyDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection)
+    {
+        struct Sample
+        {
+            const ir::TypeIR *type;
+            const ir::FunctionIR *function;
+            const ir::PropertyIR *property;
+            const ir::PropertyDetailDiagnostic *detail;
+            const char *scope;
+        };
+        std::map<std::string, size_t> counts;
+        std::vector<Sample> samples;
+        size_t total = 0;
+        size_t unresolvedRoots = 0;
+        const auto collect = [&](const ir::TypeIR &type, const ir::FunctionIR *function,
+                                 const ir::PropertyIR &property, const char *scope)
+        {
+            unresolvedRoots += property.typeDetailsResolved ? 0u : 1u;
+            for (const auto &detail : property.detailDiagnostics)
+            {
+                ++total;
+                if (++counts[detail.reason + ":" + detail.normalizedClass] <= 8)
+                    samples.push_back({&type, function, &property, &detail, scope});
+            }
+        };
+        for (const auto &type : reflection.types)
+        {
+            for (const auto &property : type.properties)
+                collect(type, nullptr, property, "type-field");
+            for (const auto &function : type.functions)
+            {
+                for (const auto &property : function.parameters)
+                    collect(type, &function, property, "function-parameter");
+                for (const auto &property : function.locals)
+                    collect(type, &function, property, "function-local");
+            }
+        }
+        stream << "{\"unresolved_roots_in_ir\":" << unresolvedRoots << ",\"total\":" << total
+               << ",\"sample_limit_per_reason_and_class\":8,\"samples_omitted\":" << (total - samples.size())
+               << ",\"counts_by_reason_and_class\":{";
+        bool first = true;
+        for (const auto &[reason, count] : counts)
+        {
+            if (!first)
+                stream << ',';
+            first = false;
+            stream << '"' << EscapeJson(reason) << "\":" << count;
+        }
+        stream << "},\"samples\":[";
+        for (size_t index = 0; index < samples.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const Sample &sample = samples[index];
+            const auto &detail = *sample.detail;
+            stream << "{\"owner_full_name\":\"" << EscapeJson(sample.function ? sample.function->fullName : sample.type->fullName)
+                   << "\",\"owner_address\":\"" << Hex(sample.function ? sample.function->address : sample.type->address)
+                   << "\",\"scope\":\"" << sample.scope << "\",\"root_property\":\"" << EscapeJson(sample.property->name)
+                   << "\",\"root_address\":\"" << Hex(sample.property->address)
+                   << "\",\"property_name\":\"" << EscapeJson(detail.name)
+                   << "\",\"property_address\":\"" << Hex(detail.address)
+                   << "\",\"header_available\":" << (detail.headerAvailable ? "true" : "false")
+                   << ",\"immediate_owner\":\"" << Hex(detail.immediateOwner)
+                   << "\",\"owner_is_uobject\":" << (detail.ownerIsUObject ? "true" : "false")
+                   << ",\"property_class\":\"" << EscapeJson(detail.reflectedClass)
+                   << "\",\"normalized_class\":\"" << EscapeJson(detail.normalizedClass)
+                   << "\",\"reason\":\"" << EscapeJson(detail.reason)
+                   << "\",\"details_status\":\"" << EscapeJson(detail.detailsStatus)
+                   << "\",\"offset\":" << detail.offset << ",\"element_size\":" << detail.elementSize
+                   << ",\"array_dim\":" << detail.arrayDim << ",\"flags\":\"" << Hex(detail.flags)
+                   << "\",\"referenced_address\":\"" << Hex(detail.referencedAddress)
+                   << "\",\"secondary_address\":\"" << Hex(detail.secondaryAddress)
+                   << "\",\"referenced_class\":\"" << EscapeJson(detail.referencedClass)
+                   << "\",\"secondary_class\":\"" << EscapeJson(detail.secondaryClass)
+                   << "\",\"bool_layout\":{\"field_size\":" << static_cast<unsigned int>(detail.boolean.fieldSize)
+                   << ",\"byte_offset\":" << static_cast<unsigned int>(detail.boolean.byteOffset)
+                   << ",\"byte_mask\":" << static_cast<unsigned int>(detail.boolean.byteMask)
+                   << ",\"field_mask\":" << static_cast<unsigned int>(detail.boolean.fieldMask) << "},\"reads\":[";
+            for (size_t readIndex = 0; readIndex < detail.reads.size(); ++readIndex)
+            {
+                if (readIndex != 0)
+                    stream << ',';
+                const auto &read = detail.reads[readIndex];
+                stream << "{\"member\":\"" << EscapeJson(read.member) << "\",\"selected_offset\":" << read.offset
+                       << ",\"address\":\"" << Hex(read.address) << "\",\"raw_value\":\"" << Hex(read.rawValue)
+                       << "\",\"read_error\":" << read.error << ",\"requested\":" << read.requested
+                       << ",\"transferred\":" << read.transferred << '}';
+            }
+            stream << "],\"messages\":";
+            Strings(stream, sample.property->diagnostics);
+            stream << '}';
+        }
+        stream << "]}";
     }
 
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
