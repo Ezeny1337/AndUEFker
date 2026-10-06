@@ -96,6 +96,8 @@ namespace anduefker::ir
     {
         bool headerAvailable = true;
         uintptr_t address = 0;
+        uintptr_t classAddress = 0;
+        uintptr_t nextAddress = 0;
         uintptr_t immediateOwner = 0;
         bool ownerIsUObject = false;
         std::string name;
@@ -121,6 +123,7 @@ namespace anduefker::ir
             int32_t error = 0;
             size_t requested = 0;
             size_t transferred = 0;
+            std::string status;
         };
         std::vector<DetailRead> reads;
     };

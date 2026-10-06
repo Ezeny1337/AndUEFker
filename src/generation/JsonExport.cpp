@@ -228,6 +228,8 @@ namespace anduefker::generation
                    << "\",\"root_address\":\"" << Hex(sample.property->address)
                    << "\",\"property_name\":\"" << EscapeJson(detail.name)
                    << "\",\"property_address\":\"" << Hex(detail.address)
+                   << "\",\"property_class_address\":\"" << Hex(detail.classAddress)
+                   << "\",\"property_next_address\":\"" << Hex(detail.nextAddress)
                    << "\",\"header_available\":" << (detail.headerAvailable ? "true" : "false")
                    << ",\"immediate_owner\":\"" << Hex(detail.immediateOwner)
                    << "\",\"owner_is_uobject\":" << (detail.ownerIsUObject ? "true" : "false")
@@ -253,7 +255,7 @@ namespace anduefker::generation
                 stream << "{\"member\":\"" << EscapeJson(read.member) << "\",\"selected_offset\":" << read.offset
                        << ",\"address\":\"" << Hex(read.address) << "\",\"raw_value\":\"" << Hex(read.rawValue)
                        << "\",\"read_error\":" << read.error << ",\"requested\":" << read.requested
-                       << ",\"transferred\":" << read.transferred << '}';
+                       << ",\"transferred\":" << read.transferred << ",\"status\":\"" << EscapeJson(read.status) << "\"}";
             }
             stream << "],\"messages\":";
             Strings(stream, sample.property->diagnostics);

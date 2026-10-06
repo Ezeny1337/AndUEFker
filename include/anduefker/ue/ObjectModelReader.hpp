@@ -83,7 +83,8 @@ namespace anduefker::ue
             Complete,
             UnsupportedLayout,
             Unreadable,
-            InvalidReference
+            InvalidReference,
+            NullReference
         };
         DetailsStatus detailsStatus = DetailsStatus::Complete;
         std::array<uint8_t, 4> boolLayout{};
@@ -94,11 +95,30 @@ namespace anduefker::ue
             uintptr_t address = 0;
             uintptr_t rawValue = 0;
             ::anduefker::memory::ReadResult read;
+            DetailsStatus status = DetailsStatus::Complete;
         };
         // 记录已发生的读取，不为诊断重新扫描属性内存；一个属性最多读取两个引用。
         std::array<DetailRead, 2> detailReads{};
         size_t detailReadCount = 0;
     };
+
+    [[nodiscard]] inline const char *PropertyDetailsStatusName(PropertyMetadata::DetailsStatus status)
+    {
+        switch (status)
+        {
+        case PropertyMetadata::DetailsStatus::Complete:
+            return "complete";
+        case PropertyMetadata::DetailsStatus::UnsupportedLayout:
+            return "unsupported-layout";
+        case PropertyMetadata::DetailsStatus::Unreadable:
+            return "unreadable";
+        case PropertyMetadata::DetailsStatus::InvalidReference:
+            return "invalid-reference";
+        case PropertyMetadata::DetailsStatus::NullReference:
+            return "null-reference";
+        }
+        return "unknown-status";
+    }
 
     struct FieldClassMetadata
     {

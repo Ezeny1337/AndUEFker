@@ -12,7 +12,7 @@ namespace anduefker::ue
 
         std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
         {
-            if (offset < 0)
+            if (base == 0 || offset < 0)
                 return std::nullopt;
             const uintptr_t value = static_cast<uintptr_t>(offset);
             if (base > UINTPTR_MAX - value)
@@ -386,6 +386,14 @@ namespace anduefker::ue
             !memory_.Read(*flagsAddress, result.flags))
             return std::nullopt;
 
+        // 分别保留两次引用读取的状态，整体状态保留第一次失败，不能由后一次读取覆盖。
+        const auto recordDetail = [&](const PropertyMetadata::DetailRead &detail)
+        {
+            result.detailReads.at(result.detailReadCount++) = detail;
+            if (result.detailsStatus == PropertyMetadata::DetailsStatus::Complete)
+                result.detailsStatus = detail.status;
+        };
+
         const auto readOptionalPointer = [&](const char *member, int32_t offset, bool nullable = false) -> uintptr_t
         {
             PropertyMetadata::DetailRead detail;
@@ -394,8 +402,8 @@ namespace anduefker::ue
             detail.read = {::anduefker::memory::ReadError::InvalidArgument, 0, sizeof(uintptr_t), 0};
             if (offset < 0)
             {
-                result.detailReads[result.detailReadCount++] = detail;
-                result.detailsStatus = PropertyMetadata::DetailsStatus::UnsupportedLayout;
+                detail.status = PropertyMetadata::DetailsStatus::UnsupportedLayout;
+                recordDetail(detail);
                 return 0;
             }
             const auto address = Add(field, offset);
@@ -407,14 +415,16 @@ namespace anduefker::ue
             }
             if (!address || !detail.read.Ok())
             {
-                result.detailReads[result.detailReadCount++] = detail;
-                result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+                detail.status = PropertyMetadata::DetailsStatus::Unreadable;
+                recordDetail(detail);
                 return 0;
             }
             detail.rawValue = value;
-            result.detailReads[result.detailReadCount++] = detail;
-            if ((!nullable && value == 0) || (value != 0 && !IsReadableObject(value)))
-                result.detailsStatus = PropertyMetadata::DetailsStatus::InvalidReference;
+            if (value == 0 && !nullable)
+                detail.status = PropertyMetadata::DetailsStatus::NullReference;
+            else if (value != 0 && !IsReadableObject(value))
+                detail.status = PropertyMetadata::DetailsStatus::InvalidReference;
+            recordDetail(detail);
             return value;
         };
         const std::string &propertyClassName = base->normalizedClassName;
@@ -436,7 +446,7 @@ namespace anduefker::ue
             detail.offset = schema_.propertySubtypes.boolBase;
             detail.read = {::anduefker::memory::ReadError::InvalidArgument, 0, result.boolLayout.size(), 0};
             if (schema_.propertySubtypes.boolBase < 0)
-                result.detailsStatus = PropertyMetadata::DetailsStatus::UnsupportedLayout;
+                detail.status = PropertyMetadata::DetailsStatus::UnsupportedLayout;
             else
             {
                 if (address)
@@ -445,9 +455,9 @@ namespace anduefker::ue
                     detail.read = memory_.ReadBytes(*address, result.boolLayout.data(), result.boolLayout.size());
                 }
                 if (!address || !detail.read.Ok())
-                    result.detailsStatus = PropertyMetadata::DetailsStatus::Unreadable;
+                    detail.status = PropertyMetadata::DetailsStatus::Unreadable;
             }
-            result.detailReads[result.detailReadCount++] = detail;
+            recordDetail(detail);
         }
         else if (propertyClassName == "ArrayProperty")
             result.referencedAddress = readOptionalPointer("array_inner", schema_.propertySubtypes.arrayInner);
@@ -528,6 +538,8 @@ namespace anduefker::ue
 
     std::optional<DefinitionKind> ObjectModelReader::DefinitionKindForClass(uintptr_t classAddress) const
     {
+        if (classAddress == 0)
+            return std::nullopt;
         std::unordered_set<uintptr_t> visited;
         uintptr_t current = classAddress;
         for (size_t depth = 0; current != 0 && depth < 64; ++depth)

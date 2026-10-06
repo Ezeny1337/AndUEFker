@@ -105,27 +105,15 @@ namespace anduefker::reflection
         ::anduefker::ir::PropertyDetailDiagnostic diagnostic;
         diagnostic.headerAvailable = headerAvailable;
         diagnostic.address = metadata.address;
+        diagnostic.classAddress = metadata.classAddress;
+        diagnostic.nextAddress = metadata.nextAddress;
         diagnostic.immediateOwner = metadata.ownerAddress;
         diagnostic.ownerIsUObject = metadata.ownerIsUObject;
         diagnostic.name = metadata.name;
         diagnostic.reflectedClass = metadata.className;
         diagnostic.normalizedClass = metadata.normalizedClassName;
         diagnostic.reason = reason;
-        switch (metadata.detailsStatus)
-        {
-        case PropertyMetadata::DetailsStatus::Complete:
-            diagnostic.detailsStatus = "complete";
-            break;
-        case PropertyMetadata::DetailsStatus::UnsupportedLayout:
-            diagnostic.detailsStatus = "unsupported-layout";
-            break;
-        case PropertyMetadata::DetailsStatus::Unreadable:
-            diagnostic.detailsStatus = "unreadable";
-            break;
-        case PropertyMetadata::DetailsStatus::InvalidReference:
-            diagnostic.detailsStatus = "invalid-reference";
-            break;
-        }
+        diagnostic.detailsStatus = ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus);
         diagnostic.offset = metadata.offset;
         diagnostic.elementSize = metadata.elementSize;
         diagnostic.arrayDim = metadata.arrayDim;
@@ -137,7 +125,8 @@ namespace anduefker::reflection
         {
             const auto &read = metadata.detailReads[index];
             diagnostic.reads.push_back({read.member, read.offset, read.address, read.rawValue,
-                                        static_cast<int32_t>(read.read.error), read.read.requested, read.read.transferred});
+                                        static_cast<int32_t>(read.read.error), read.read.requested, read.read.transferred,
+                                        ::anduefker::ue::PropertyDetailsStatusName(read.status)});
         }
         diagnostic.referencedClass = "not-observed";
         diagnostic.secondaryClass = "not-observed";
@@ -188,10 +177,16 @@ namespace anduefker::reflection
                                  result.kind != PropertyKind::Unknown && metadata.elementSize > 0;
         if (metadata.detailsStatus != PropertyMetadata::DetailsStatus::Complete)
         {
+            // 成员读取失败或必需引用为空时，仅记录证据，不能再以其结果做对象/子属性解引用。
             property.diagnostics.push_back("property details status=" + std::to_string(static_cast<int>(metadata.detailsStatus)) +
                                            " address=" + std::to_string(metadata.address));
             if (metadata.detailsStatus != PropertyMetadata::DetailsStatus::UnsupportedLayout)
                 ++stats.failures;
+            if (result.kind == PropertyKind::Unknown)
+                ++stats.unknownProperties;
+            RecordPropertyDetail(metadata, property, ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus));
+            path.erase(metadata.address);
+            return result;
         }
         if (result.kind == PropertyKind::Unknown)
             ++stats.unknownProperties;
@@ -224,6 +219,8 @@ namespace anduefker::reflection
         };
         const auto objectMatches = [&](uintptr_t address, ::anduefker::ue::DefinitionKind expected)
         {
+            if (address == 0)
+                return false;
             const auto cls = objects_.Class(address);
             const auto kind = cls ? objects_.DefinitionKindForClass(*cls) : std::nullopt;
             return kind && *kind == expected;
@@ -289,24 +286,10 @@ namespace anduefker::reflection
         if (!result.detailsResolved)
         {
             std::string reason = "semantic-mismatch";
-            switch (metadata.detailsStatus)
-            {
-            case PropertyMetadata::DetailsStatus::UnsupportedLayout:
-                reason = "unsupported-layout";
-                break;
-            case PropertyMetadata::DetailsStatus::Unreadable:
-                reason = "unreadable";
-                break;
-            case PropertyMetadata::DetailsStatus::InvalidReference:
-                reason = "invalid-reference";
-                break;
-            case PropertyMetadata::DetailsStatus::Complete:
-                if (result.kind == PropertyKind::Unknown)
-                    reason = "unknown-property-kind";
-                else if (metadata.elementSize <= 0)
-                    reason = "invalid-element-size";
-                break;
-            }
+            if (result.kind == PropertyKind::Unknown)
+                reason = "unknown-property-kind";
+            else if (metadata.elementSize <= 0)
+                reason = "invalid-element-size";
             RecordPropertyDetail(metadata, property, reason);
         }
         path.erase(metadata.address);

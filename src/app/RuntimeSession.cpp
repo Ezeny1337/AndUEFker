@@ -433,7 +433,7 @@ namespace anduefker::app
                                         " limit_exceeded=" + std::to_string(reflection_.capture.limitExceeded) + " atomic_snapshot=0");
         reflection_.diagnostics.push_back("reflection status=" + std::string(ParseStatusName(reflection_.status)));
         if (reflection_.stats.failures != 0)
-            reflection_.diagnostics.push_back("reflection read failures=" + std::to_string(reflection_.stats.failures));
+            reflection_.diagnostics.push_back("reflection failures=" + std::to_string(reflection_.stats.failures));
         if (reflection_.stats.unknownProperties != 0)
             reflection_.diagnostics.push_back("unknown properties=" + std::to_string(reflection_.stats.unknownProperties));
         if (reflection_.stats.unresolvedTypeDetails != 0)
