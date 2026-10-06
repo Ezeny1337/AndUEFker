@@ -129,6 +129,15 @@ namespace anduefker::ue
         uintptr_t superClass = 0;
     };
 
+    struct FieldClassValidationResult
+    {
+        uintptr_t address = 0;
+        std::string targetName;
+        std::string reason = "unvalidated";
+        size_t depth = 0;
+        bool valid = false;
+    };
+
     struct EnumValueMetadata
     {
         std::string name;
@@ -186,6 +195,7 @@ namespace anduefker::ue
         [[nodiscard]] FieldChainResult UFieldsWithStatus(uintptr_t first, size_t maxFields = 65536) const;
         [[nodiscard]] std::optional<PropertyMetadata> Property(uintptr_t field) const;
         [[nodiscard]] std::optional<FieldClassMetadata> FieldClass(uintptr_t address) const;
+        [[nodiscard]] FieldClassValidationResult ValidateFieldClass(uintptr_t address) const;
         [[nodiscard]] bool IsValidFieldClass(uintptr_t address) const;
         [[nodiscard]] std::optional<DefinitionKind> DefinitionKindForClass(uintptr_t classAddress) const;
         [[nodiscard]] std::optional<uintptr_t> StructChildren(uintptr_t structure) const;

@@ -321,6 +321,36 @@ namespace anduefker::ue::schema_probe
             return {offsets.begin(), offsets.end()};
         }
 
+        struct FieldPathCandidate
+        {
+            int32_t offset = -1;
+            std::string basis;
+        };
+
+        std::vector<FieldPathCandidate> FieldPathCandidates(const std::vector<PropertyTailCandidate> &tails)
+        {
+            // FFieldPathProperty::PropertyClass starts at the complete FProperty size,
+            // including any ABI tail padding.  Do not turn dataEnd into a scan range.
+            // Keep this list structural: scanning neighboring descriptor objects would
+            // incorrectly accept their unrelated FField::ClassPrivate pointers.
+            std::map<int32_t, std::string> byOffset;
+            for (const auto &tail : tails)
+            {
+                if (tail.completeSize < 0)
+                    continue;
+                auto &basis = byOffset[tail.completeSize];
+                if (!basis.empty())
+                    basis += ",";
+                basis += std::string("property-tail:") + PropertyTailName(tail.layout) + ":complete-size";
+            }
+
+            std::vector<FieldPathCandidate> result;
+            result.reserve(byOffset.size());
+            for (const auto &[offset, basis] : byOffset)
+                result.push_back({offset, basis});
+            return result;
+        }
+
         bool ObjectIdentity(ObjectModelReader &model, uintptr_t address)
         {
             if (address == 0)
@@ -540,7 +570,7 @@ namespace anduefker::ue::schema_probe
                 valid = FunctionIdentity(model, first);
                 break;
             case Payload::FieldPath:
-                valid = model.IsValidFieldClass(first);
+                valid = model.ValidateFieldClass(first).valid;
                 break;
             case Payload::Array:
             case Payload::Set:
@@ -564,11 +594,126 @@ namespace anduefker::ue::schema_probe
             return valid ? Observation::Match : Observation::Mismatch;
         }
 
+        void ResolveFieldPathSpec(ObjectModelReader &model, ProbeMemory &probeMemory, Budget &budget,
+                                  const SubtypeSpec &spec, const std::vector<PropertyTailCandidate> &tails,
+                                  const std::vector<Sample> &samples, PropertySubtypesSchema &output,
+                                  SchemaResolutionReport &report)
+        {
+            const auto candidates = FieldPathCandidates(tails);
+            std::vector<int32_t> accepted;
+            for (const auto &candidate : candidates)
+            {
+                size_t matches = 0;
+                size_t nulls = 0;
+                size_t unreadable = 0;
+                size_t mismatches = 0;
+                size_t printed = 0;
+                std::set<uintptr_t> owners;
+                std::set<uintptr_t> rawReferences;
+                std::set<std::string> targetClasses;
+                std::set<std::string> rejectionReasons;
+                for (const auto &sample : samples)
+                {
+                    uintptr_t rawReference = 0;
+                    const auto physicalAddress = Add(sample.metadata.address, candidate.offset);
+                    std::string targetName = "<unobserved>";
+                    std::string reason;
+                    Observation state = Observation::Unreadable;
+                    if (!budget.Read(sample.metadata.address, candidate.offset, rawReference))
+                    {
+                        reason = "property-class-reference-unreadable";
+                        ++unreadable;
+                        targetName = "<unreadable>";
+                    }
+                    else if (rawReference == 0)
+                    {
+                        reason = "null-reference";
+                        state = Observation::Null;
+                        ++nulls;
+                        targetName = "<null>";
+                    }
+                    else
+                    {
+                        const auto validation = model.ValidateFieldClass(rawReference);
+                        targetName = validation.targetName.empty() ? "<unreadable>" : validation.targetName;
+                        reason = validation.reason;
+                        state = validation.valid ? Observation::Match : Observation::Mismatch;
+                        if (validation.valid)
+                        {
+                            ++matches;
+                            owners.insert(sample.rootOwner);
+                        }
+                        else
+                            ++mismatches;
+                    }
+                    rawReferences.insert(rawReference);
+                    targetClasses.insert(targetName);
+                    rejectionReasons.insert(reason);
+                    if (printed++ < 2)
+                    {
+                        report.evidence.push_back("property class candidate observation: member=" + std::string(spec.name) +
+                                                  " offset=" + std::to_string(candidate.offset) +
+                                                  " physical_position=" +
+                                                  (physicalAddress ? std::to_string(*physicalAddress) : "unrepresentable") +
+                                                  " basis=" + candidate.basis +
+                                                  " property=" + std::to_string(sample.metadata.address) +
+                                                  " owner=" + std::to_string(sample.rootOwner) +
+                                                  " raw_reference=" + std::to_string(rawReference) +
+                                                  " target_ffield_class=" + targetName +
+                                                  " state=" + ObservationName(state) +
+                                                  " rejection_reason=" + reason);
+                    }
+                }
+                const bool valid = matches >= 2 && owners.size() >= 2 && mismatches == 0 && unreadable == 0 &&
+                                   !budget.exhausted && !probeMemory.Exhausted();
+                if (valid)
+                    accepted.push_back(candidate.offset);
+                report.evidence.push_back("property class candidate: member=" + std::string(spec.name) + " offset=" + std::to_string(candidate.offset) + " physical_position_deduplicated=1 basis=" + candidate.basis + " samples=" + std::to_string(samples.size()) + " matches=" + std::to_string(matches) + " independent_owners=" + std::to_string(owners.size()) + " raw_references=" + [&rawReferences]
+                                          {
+                                              std::string values;
+                                              for (const auto value : rawReferences)
+                                                  values += (values.empty() ? "" : ",") + std::to_string(value);
+                                              return values.empty() ? "none" : values; }() + " target_ffield_classes=" + [&targetClasses]
+                                          {
+                                              std::string values;
+                                              for (const auto &value : targetClasses)
+                                                  values += (values.empty() ? "" : ",") + value;
+                                              return values.empty() ? "none" : values; }() + " observed_rejection_reasons=" + [&rejectionReasons]
+                                          {
+                                              std::string values;
+                                              for (const auto &value : rejectionReasons)
+                                                  values += (values.empty() ? "" : ",") + value;
+                                              return values.empty() ? "none" : values; }() + " null=" + std::to_string(nulls) + " unreadable=" + std::to_string(unreadable) + " mismatches=" + std::to_string(mismatches) + " accepted=" + std::to_string(valid) + " rejection_reason=" + (valid ? "none" : budget.exhausted || probeMemory.Exhausted() ? "read-budget-exhausted"
+                                                                                                                                                                                                                                                             : tails.empty()                                 ? "unresolved-property-tail"
+                                                                                                                                                                                                                                                             : samples.empty()                               ? "missing-sample"
+                                                                                                                                                                                                                                                             : matches < 2 || owners.size() < 2              ? "insufficient-independent-owner-matches"
+                                                                                                                                                                                                                                                             : mismatches != 0                               ? "ffield-class-validation-rejected"
+                                                                                                                                                                                                                                                             : unreadable != 0                               ? "property-class-reference-unreadable"
+                                                                                                                                                                                                                                                                                                             : "no-consensus"));
+            }
+            if (accepted.size() == 1 && !budget.exhausted && !probeMemory.Exhausted())
+                output.*(spec.member) = accepted.front();
+            report.evidence.push_back("property subtype result: member=" + std::string(spec.name) +
+                                      " selected_offset=" + std::to_string(output.*(spec.member)) +
+                                      " accepted_candidates=" + std::to_string(accepted.size()) +
+                                      " candidate_source=property-tail-structure; broad-field-scan=disabled reason=" +
+                                      (budget.exhausted || probeMemory.Exhausted() ? "read-budget-exhausted" : tails.empty()     ? "unresolved-property-tail"
+                                                                                                           : samples.empty()     ? "missing-sample"
+                                                                                                           : accepted.empty()    ? "no-consensus"
+                                                                                                           : accepted.size() > 1 ? "ambiguous-candidates"
+                                                                                                                                 : "validated"));
+        }
+
         void ResolveSpec(ObjectModelReader &model, const EngineSchema &schema, Budget &budget,
                          const SubtypeSpec &spec, const std::vector<PropertyTailCandidate> &tails,
                          const std::vector<Sample> &samples, PropertySubtypesSchema &output,
                          SchemaResolutionReport &report)
         {
+            if (spec.payload == Payload::FieldPath)
+            {
+                ResolveFieldPathSpec(model, budget.memory, budget, spec, tails, samples, output, report);
+                return;
+            }
             std::set<int32_t> offsets;
             for (const auto &tail : tails)
                 for (const auto offset : PayloadOffsets(tail, spec.payload))

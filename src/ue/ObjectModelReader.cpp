@@ -520,22 +520,55 @@ namespace anduefker::ue
         return result;
     }
 
-    bool ObjectModelReader::IsValidFieldClass(uintptr_t address) const
+    FieldClassValidationResult ObjectModelReader::ValidateFieldClass(uintptr_t address) const
     {
+        FieldClassValidationResult result;
+        result.address = address;
+        if (address == 0)
+        {
+            result.reason = "null-reference";
+            return result;
+        }
+
         std::unordered_set<uintptr_t> visited;
         uint64_t childCastFlags = UINT64_MAX;
         for (size_t depth = 0; address != 0 && depth < 32 && visited.insert(address).second; ++depth)
         {
             const auto metadata = FieldClass(address);
-            if (!metadata || (metadata->id != 0 && (metadata->castFlags & metadata->id) != metadata->id) ||
-                (childCastFlags & metadata->castFlags) != metadata->castFlags)
-                return false;
+            result.depth = depth + 1;
+            if (!metadata)
+            {
+                result.reason = "ffield-class-identity-unreadable";
+                return result;
+            }
+            if (depth == 0)
+                result.targetName = metadata->name;
+            if (metadata->id != 0 && (metadata->castFlags & metadata->id) != metadata->id)
+            {
+                result.reason = "ffield-class-id-not-covered-by-cast-flags";
+                return result;
+            }
+            if ((childCastFlags & metadata->castFlags) != metadata->castFlags)
+            {
+                result.reason = "ffield-class-parent-cast-flags-not-subset";
+                return result;
+            }
             if (metadata->superClass == 0)
-                return NormalizeRuntimeFieldName(metadata->name) == "Field";
+            {
+                result.valid = NormalizeRuntimeFieldName(metadata->name) == "Field";
+                result.reason = result.valid ? "validated" : "ffield-class-parent-chain-root-is-not-field";
+                return result;
+            }
             childCastFlags = metadata->castFlags;
             address = metadata->superClass;
         }
-        return false;
+        result.reason = address == 0 ? "ffield-class-parent-chain-ended-before-field" : (visited.find(address) != visited.end() ? "ffield-class-parent-chain-cycle" : "ffield-class-parent-chain-depth-limit");
+        return result;
+    }
+
+    bool ObjectModelReader::IsValidFieldClass(uintptr_t address) const
+    {
+        return ValidateFieldClass(address).valid;
     }
 
     std::optional<DefinitionKind> ObjectModelReader::DefinitionKindForClass(uintptr_t classAddress) const
