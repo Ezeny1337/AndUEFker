@@ -4,7 +4,7 @@ namespace anduefker::ue
 {
     std::vector<EngineProfile> SchemaCatalog::Profiles()
     {
-        return {
+        std::vector<EngineProfile> result = {
             {"ue4-uproperty", "UE4 UProperty", "4.23-4.24", ParseEngineVersion("4.24.0"),
              EngineFamily::UE4UProperty, FeaturesForLayout(SchemaLayoutVariant::UProperty),
              SchemaLayoutVariant::UProperty},
@@ -27,6 +27,12 @@ namespace anduefker::ue
              EngineFamily::UE5FProperty, FeaturesForLayout(SchemaLayoutVariant::FFieldTaggedModern),
              SchemaLayoutVariant::FFieldTaggedModern},
         };
+        for (auto &profile : result)
+        {
+            profile.optionalPropertyAvailable = profile.layout == SchemaLayoutVariant::FFieldTagged ||
+                                                profile.layout == SchemaLayoutVariant::FFieldTaggedModern;
+        }
+        return result;
     }
 
     SchemaLayoutVariant SchemaCatalog::LayoutFor(const EngineVersion &version)

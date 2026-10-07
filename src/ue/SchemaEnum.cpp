@@ -408,6 +408,10 @@ namespace anduefker::ue::schema_probe
                                   " flag_hits=" + std::to_string(selectedTail.flagHits) +
                                   " display_hits=" + std::to_string(selectedTail.displayHits) +
                                   " package_hits=" + std::to_string(selectedTail.packageHits));
+        report.versionEvidence.push_back({"uenum-tail-layout",
+                                          EnumTailLayoutName(selectedTail.layout),
+                                          VersionEvidenceStrength::Medium,
+                                          "selected from UEnum form, flags, display-name and package semantics"});
         schema.validation.enums = true;
         report.evidence.push_back(schema.features.enumUsesFNameData ? "FNameData-backed enum family selected" : "legacy enum container family selected");
         return true;

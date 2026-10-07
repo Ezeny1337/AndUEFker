@@ -286,6 +286,10 @@ namespace anduefker::ue::schema_probe
                                                   " owner=" + std::to_string(ownerOffset) + " next=" + std::to_string(nextOffset) +
                                                   " name=" + std::to_string(nameOffset) + " class_name=" +
                                                   std::to_string(classNameOffset) + "; four names, classes and owners validated");
+                        report.versionEvidence.push_back({"f-field-owner-encoding",
+                                                          taggedOwner ? "tagged-pointer" : "explicit-discriminator",
+                                                          VersionEvidenceStrength::Strong,
+                                                          "observed from FField owner storage and discriminator semantics"});
                         return true;
                     }
                 }

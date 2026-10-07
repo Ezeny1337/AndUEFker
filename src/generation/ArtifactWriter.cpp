@@ -83,8 +83,23 @@ namespace anduefker::generation
     std::string ArtifactWriter::BasicTypes() const
     {
         std::ostringstream stream;
+        const auto &identity = context_.Schema().identity;
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n\n";
         stream << "// For inspection and analysis; reflected offsets and sizes are authoritative.\n";
+        stream << "// Canonical profile: " << identity.canonicalProfileId << " (" << identity.canonicalVersionRange << ").\n";
+        stream << "// Runtime layout: " << identity.layoutProfileId << "; layout confidence: validated.\n";
+        stream << "// Engine-version confidence: " << identity.versionConfidence
+               << " (selection: " << identity.selectionReason << ").\n";
+        stream << "// Layout-compatible profiles:";
+        for (const auto &profile : identity.compatibleProfiles)
+            stream << " " << profile;
+        stream << "\n";
+        for (const auto &evidence : identity.evidence)
+            stream << "// Version evidence: " << evidence.kind << "=" << evidence.observed
+                   << " [" << ::anduefker::ue::VersionEvidenceStrengthName(evidence.strength) << "]\n";
+        stream << "// Capture observations stable: " << (reflection_.capture.observationsStable ? "yes" : "no")
+               << "; changed ranges: " << reflection_.capture.changedRanges
+               << "; read failures: " << reflection_.capture.readFailures << ".\n";
         stream << "// Target pointer width: " << static_cast<unsigned int>(context_.Module().pointerWidth) << " bytes.\n";
         stream << "namespace AndUE\n{\n";
         stream << "struct FName { std::uint8_t Data[" << context_.Schema().fname.size << "]; };\n";
@@ -103,13 +118,16 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 1,\n";
+        stream << "  \"schema_version\": 2,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
-        stream << "  \"engine\": \"" << EscapeJson(context_.Schema().validation.familyEvidence) << "\",\n";
+        stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
                << EscapeJson(context_.Schema().validation.profileId) << "\",\"label\":\""
                << EscapeJson(context_.Schema().validation.profileLabel) << "\",\"version_range\":\""
                << EscapeJson(context_.Schema().validation.profileVersionRange) << "\"},\n";
+        stream << "  \"schema_identity\":";
+        WriteSchemaIdentityJson(stream, context_.Schema().identity);
+        stream << ",\n";
         stream << "  \"status\": \"" << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\": \"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\": \"" << ParseStatusName(report.Status()) << "\",\n";
@@ -150,10 +168,13 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 1,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 2,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
+        stream << "  \"schema_identity\":";
+        WriteSchemaIdentityJson(stream, context_.Schema().identity);
+        stream << ",\n";
         stream << "  \"summary\": {\"unknown_properties\": " << reflection_.stats.unknownProperties
                << ", \"unresolved_type_details\": " << reflection_.stats.unresolvedTypeDetails
                << ", \"layout_conflicts\": " << reflection_.stats.layoutConflicts
@@ -660,12 +681,30 @@ namespace anduefker::generation
         const RuntimeBinding &binding = context_.Binding();
         const EngineSchema &schema = context_.Schema();
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 1,\n";
-        stream << "  \"engine\": \"" << EscapeJson(schema.validation.familyEvidence) << "\",\n";
+        stream << "{\n  \"schema_version\": 2,\n";
+        stream << "  \"engine\": \"" << EscapeJson(schema.identity.canonicalVersionRange.empty() ? schema.validation.familyEvidence : schema.identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\"" << EscapeJson(schema.validation.profileId)
                << "\",\"label\":\"" << EscapeJson(schema.validation.profileLabel)
                << "\",\"version_range\":\"" << EscapeJson(schema.validation.profileVersionRange)
                << "\",\"layout\":\"" << SchemaLayoutVariantName(schema.layout) << "\"},\n";
+        stream << "  \"schema_identity\":";
+        WriteSchemaIdentityJson(stream, schema.identity);
+        stream << ",\n";
+        stream << "  \"feature_evidence\": {\"observed_large_world_coordinates\":"
+               << (schema.features.largeWorldCoordinates ? "true" : "false")
+               << ",\"profile_expected_large_world_coordinates\":"
+               << (schema.profileFeatures.largeWorldCoordinates ? "true" : "false")
+               << ",\"observed_owner_encoding\":\""
+               << (schema.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
+                       ? "tagged-pointer"
+                       : "explicit-discriminator")
+               << "\",\"profile_expected_owner_encoding\":\""
+               << (schema.profileFeatures.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
+                       ? "tagged-pointer"
+                       : "explicit-discriminator")
+               << "\",\"observed_enum_tail\":\"" << EnumTailLayoutName(schema.features.enumTailLayout)
+               << "\",\"profile_expected_enum_tail\":\"" << EnumTailLayoutName(schema.profileFeatures.enumTailLayout)
+               << "\",\"optional_property_sample_count\":" << schema.optionalPropertySupport.sampleCount << "},\n";
         stream << "  \"module\": {\"name\":\"" << EscapeJson(context_.Module().name)
                << "\",\"base\":\"" << Hex(context_.Module().base) << "\",\"end\":\""
                << Hex(context_.Module().end) << "\",\"architecture\":\""
@@ -802,7 +841,7 @@ namespace anduefker::generation
     {
         std::ostringstream stream;
         const auto &validation = context_.Schema().validation;
-        WriteReflectionJson(stream, reflection_, {validation.familyEvidence, validation.profileId, validation.profileLabel, validation.profileVersionRange});
+        WriteReflectionJson(stream, reflection_, {context_.Schema().identity.canonicalVersionRange.empty() ? validation.familyEvidence : context_.Schema().identity.canonicalVersionRange, validation.profileId, validation.profileLabel, validation.profileVersionRange, &context_.Schema().identity});
         return stream.str();
     }
 

@@ -57,11 +57,13 @@ namespace anduefker::ue
     {
         bool accepted = false;
         bool addressSpaceChanged = false;
-        int32_t score = 0;
+        int32_t layoutScore = 0;
+        int32_t versionEvidenceScore = 0;
         std::string profileId;
         std::string profileLabel;
         std::string failureStage;
         std::vector<std::string> evidence;
+        std::vector<VersionEvidence> versionEvidence;
         std::vector<std::string> failures;
     };
 
@@ -73,6 +75,9 @@ namespace anduefker::ue
         bool ambiguous = false;
         bool layoutAmbiguous = false;
         size_t selectedIndex = 0;
+        std::string selectionReason = "not-selected";
+        std::string versionConfidence = "unknown";
+        std::vector<size_t> compatibleIndices;
         std::vector<SchemaCandidateSummary> candidates;
     };
 

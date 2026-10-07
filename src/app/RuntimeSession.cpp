@@ -286,7 +286,8 @@ namespace anduefker::app
                                                  " layout=" + SchemaLayoutVariantName(profile.layout) +
                                                  " stage=" + candidateReport.failureStage +
                                                  " accepted=" + std::to_string(candidateReport.accepted) +
-                                                 " score=" + std::to_string(candidateReport.score) +
+                                                 " layout_score=" + std::to_string(candidateReport.layoutScore) +
+                                                 " version_evidence_score=" + std::to_string(candidateReport.versionEvidenceScore) +
                                                  " reason=" + reason);
                 for (const std::string &evidence : candidateReport.evidence)
                 {
@@ -302,6 +303,11 @@ namespace anduefker::app
                     if (important)
                         Note(RuntimeLogLevel::Debug, "schema_evidence id=" + profile.id + " " + evidence);
                 }
+                for (const auto &evidence : candidateReport.versionEvidence)
+                    Note(RuntimeLogLevel::Debug, "schema_version_evidence id=" + profile.id +
+                                                     " kind=" + evidence.kind + " observed=" + evidence.observed +
+                                                     " strength=" + ::anduefker::ue::VersionEvidenceStrengthName(evidence.strength) +
+                                                     " detail=" + evidence.detail);
                 schemaSelection.candidates.push_back(std::move(candidateReport));
                 candidateSchemas.push_back(std::move(candidateSchema));
             }
@@ -339,17 +345,40 @@ namespace anduefker::app
             schema = std::move(candidateSchemas[schemaSelection.selectedIndex]);
             schemaReport = schemaSelection.candidates[schemaSelection.selectedIndex];
             selectedProfile = profiles[schemaSelection.selectedIndex];
+            schema.identity.layoutProfileId = schema.features.useFProperty
+                                                  ? (schema.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
+                                                         ? "fproperty-tagged-owner"
+                                                         : "fproperty-explicit-owner")
+                                                  : "uproperty";
+            if (schema.features.enumHasFlags)
+                schema.identity.layoutProfileId += "-enum-flags";
+            schema.identity.layoutProfileLabel = "Validated runtime reflection layout";
+            schema.identity.layoutVersionRange = "runtime-observed; compatible profiles listed separately";
+            schema.identity.canonicalProfileId = selectedProfile.id;
+            schema.identity.canonicalProfileLabel = selectedProfile.label;
+            schema.identity.canonicalVersionRange = selectedProfile.versionRange;
+            schema.identity.selectionReason = schemaSelection.selectionReason;
+            schema.identity.versionConfidence = schemaSelection.versionConfidence;
+            schema.identity.layoutScore = schemaReport.layoutScore;
+            schema.identity.versionEvidenceScore = schemaReport.versionEvidenceScore;
+            schema.identity.evidence = schemaReport.versionEvidence;
+            for (const size_t index : schemaSelection.compatibleIndices)
+            {
+                schema.identity.compatibleProfiles.push_back(profiles[index].id);
+                if (index != schemaSelection.selectedIndex)
+                    schemaReport.evidence.push_back("compatible profile=" + profiles[index].id);
+            }
             if (schemaSelection.ambiguous)
             {
                 std::string equivalentProfiles;
-                for (const SchemaCandidateSummary &candidate : schemaSelection.candidates)
+                for (const size_t index : schemaSelection.compatibleIndices)
                 {
-                    if (candidate.accepted && candidate.score == schemaReport.score)
-                        equivalentProfiles += " " + candidate.profileId;
+                    equivalentProfiles += " " + profiles[index].id;
                 }
-                const std::string evidence = "equivalent resolved layouts; selected=" + selectedProfile.id +
+                const std::string evidence = "equivalent resolved layouts; canonical=" + selectedProfile.id +
                                              " compatible_profiles=" + equivalentProfiles +
-                                             "; exact engine version is not identified by layout alone";
+                                             " selection_reason=" + schemaSelection.selectionReason +
+                                             " version_confidence=" + schemaSelection.versionConfidence;
                 schemaReport.evidence.push_back(evidence);
                 Note(RuntimeLogLevel::Debug, evidence);
             }

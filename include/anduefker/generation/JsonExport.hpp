@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "anduefker/ir/ReflectionIR.hpp"
+#include "anduefker/ue/EngineSchema.hpp"
 
 namespace anduefker::generation
 {
@@ -14,9 +15,11 @@ namespace anduefker::generation
         std::string_view profileId;
         std::string_view profileLabel;
         std::string_view versionRange;
+        const ::anduefker::ue::SchemaIdentity *schemaIdentity = nullptr;
     };
 
     [[nodiscard]] std::string EscapeJson(std::string_view value);
+    void WriteSchemaIdentityJson(std::ostream &stream, const ::anduefker::ue::SchemaIdentity &identity);
     void WriteStatsJson(std::ostream &stream, const ir::ReflectionStats &stats, std::optional<size_t> opaqueFields = std::nullopt);
     void WriteCaptureJson(std::ostream &stream, const ir::CaptureInfo &capture);
     void WritePropertyDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection);

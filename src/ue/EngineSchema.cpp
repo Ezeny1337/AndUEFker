@@ -72,6 +72,22 @@ namespace anduefker::ue
         return "unknown";
     }
 
+    const char *EnumTailLayoutName(EnumTailLayout layout)
+    {
+        switch (layout)
+        {
+        case EnumTailLayout::Legacy:
+            return "legacy";
+        case EnumTailLayout::Flags:
+            return "flags";
+        case EnumTailLayout::FlagsDisplayNamePackage:
+            return "flags-display-package";
+        case EnumTailLayout::FlagsPackageDisplayName:
+            return "flags-package-display";
+        }
+        return "unknown";
+    }
+
     FNamePhysicalLayout GetFNamePhysicalLayout(const FNameSchema &schema)
     {
         return FNamePhysicalLayout{schema.size,
@@ -83,7 +99,11 @@ namespace anduefker::ue
 
     bool EngineSchema::HasSameReflectionLayout(const EngineSchema &other) const
     {
-        return features == other.features && fname == other.fname && uobject == other.uobject &&
+        EngineFeatures leftFeatures = features;
+        EngineFeatures rightFeatures = other.features;
+        leftFeatures.largeWorldCoordinates = false;
+        rightFeatures.largeWorldCoordinates = false;
+        return leftFeatures == rightFeatures && fname == other.fname && uobject == other.uobject &&
                ufield == other.ufield && ffield == other.ffield && ffieldClass == other.ffieldClass &&
                ustruct == other.ustruct && uclass == other.uclass && ufunction == other.ufunction &&
                uenum == other.uenum && property == other.property && propertySubtypes == other.propertySubtypes;

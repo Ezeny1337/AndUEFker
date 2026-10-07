@@ -5,25 +5,6 @@
 
 namespace anduefker::ue
 {
-    namespace
-    {
-        const char *EnumTailLayoutName(EnumTailLayout layout)
-        {
-            switch (layout)
-            {
-            case EnumTailLayout::Legacy:
-                return "legacy";
-            case EnumTailLayout::Flags:
-                return "flags";
-            case EnumTailLayout::FlagsDisplayNamePackage:
-                return "flags-display-package";
-            case EnumTailLayout::FlagsPackageDisplayName:
-                return "flags-package-display";
-            }
-            return "unknown";
-        }
-    } // namespace
-
     std::shared_ptr<const SchemaProbeBootstrap> CreateSchemaProbeBootstrap(const IMemorySource &memory,
                                                                            const RuntimeBinding &binding,
                                                                            size_t maxSamples)
@@ -81,6 +62,7 @@ namespace anduefker::ue
         report.profileLabel = profile_.label;
         schema.family = profile_.family;
         schema.layout = profile_.layout;
+        schema.profileFeatures = profile_.features;
         schema.features = profile_.features;
         const schema_probe::SchemaProbeContext probe{memory_, binding_, profile_, names_,
                                                      moduleBase_, moduleEnd_, bootstrap_};
@@ -144,17 +126,51 @@ namespace anduefker::ue
         report.accepted = schema.IsReadyForReflection();
         if (report.accepted)
         {
-            report.score = 100;
+            report.layoutScore = 100;
             if (schema.uobject.outer == schema.uobject.name + schema.fname.size)
-                report.score += 10;
+                report.layoutScore += 10;
             if (schema.ufield.next == schema.uobject.outer + static_cast<int32_t>(sizeof(uintptr_t)))
-                report.score += 10;
+                report.layoutScore += 10;
             if (schema.uenum.names >= 0 && schema.uenum.cppForm >= 0)
-                report.score += 5;
+                report.layoutScore += 5;
             if (schema.features.enumFlagsRequired && schema.uenum.flags >= 0)
-                report.score += 5;
+                report.layoutScore += 5;
             if (schema.features.enumHasPackage && schema.uenum.enumPackage >= 0)
-                report.score += 5;
+                report.layoutScore += 5;
+
+            const bool ue5Profile = profile_.family == EngineFamily::UE5FProperty;
+            if (schema.features.largeWorldCoordinates)
+            {
+                if (ue5Profile)
+                    report.versionEvidenceScore += 5;
+            }
+            else
+            {
+                if (!ue5Profile)
+                    report.versionEvidenceScore += 2;
+            }
+            if (schema.optionalPropertySupport.sampleCount != 0)
+            {
+                const bool optionalEraProfile = profile_.optionalPropertyAvailable;
+                if (optionalEraProfile)
+                    report.versionEvidenceScore += 5;
+            }
+            for (const auto &evidence : report.versionEvidence)
+            {
+                if (evidence.kind == "f-field-owner-encoding")
+                {
+                    const std::string expected = schema.profileFeatures.fFieldOwnerEncoding == FFieldOwnerEncoding::TaggedPointer
+                                                     ? "tagged-pointer"
+                                                     : "explicit-discriminator";
+                    if (evidence.observed == expected)
+                        report.versionEvidenceScore += 3;
+                }
+                else if (evidence.kind == "uenum-tail-layout" &&
+                         evidence.observed == EnumTailLayoutName(schema.profileFeatures.enumTailLayout))
+                    report.versionEvidenceScore += 2;
+            }
+            report.evidence.push_back("schema scores: layout_score=" + std::to_string(report.layoutScore) +
+                                      " version_evidence_score=" + std::to_string(report.versionEvidenceScore));
         }
         return report;
     }

@@ -64,6 +64,10 @@ namespace anduefker::ue::schema_probe
                                       " guid_size=16 color_size=4 vector_size=" +
                                       std::to_string(sizeCandidates.front().vectorSize) +
                                       " candidates=" + std::to_string(sizeCandidates.size()));
+            report.versionEvidence.push_back({"large-world-coordinates",
+                                              sizeCandidates.front().vectorSize == 0x18 ? "FVector.size=24" : "FVector.size=12",
+                                              VersionEvidenceStrength::Strong,
+                                              "observed from Guid/Color/Vector UStruct::PropertiesSize samples"});
         }
         if (schema.ustruct.propertiesSizeOffset < 0)
         {

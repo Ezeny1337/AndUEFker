@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace anduefker::ue
 {
@@ -70,6 +71,52 @@ namespace anduefker::ue
     };
 
     [[nodiscard]] const char *SchemaLayoutVariantName(SchemaLayoutVariant variant);
+    [[nodiscard]] const char *EnumTailLayoutName(EnumTailLayout layout);
+
+    enum class VersionEvidenceStrength
+    {
+        Weak,
+        Medium,
+        Strong,
+    };
+
+    [[nodiscard]] inline const char *VersionEvidenceStrengthName(VersionEvidenceStrength strength)
+    {
+        switch (strength)
+        {
+        case VersionEvidenceStrength::Weak:
+            return "weak";
+        case VersionEvidenceStrength::Medium:
+            return "medium";
+        case VersionEvidenceStrength::Strong:
+            return "strong";
+        }
+        return "weak";
+    }
+
+    struct VersionEvidence
+    {
+        std::string kind;
+        std::string observed;
+        VersionEvidenceStrength strength = VersionEvidenceStrength::Weak;
+        std::string detail;
+    };
+
+    struct SchemaIdentity
+    {
+        std::string layoutProfileId;
+        std::string layoutProfileLabel;
+        std::string layoutVersionRange;
+        std::string canonicalProfileId;
+        std::string canonicalProfileLabel;
+        std::string canonicalVersionRange;
+        std::string selectionReason = "not-selected";
+        std::string versionConfidence = "unknown";
+        int32_t layoutScore = 0;
+        int32_t versionEvidenceScore = 0;
+        std::vector<std::string> compatibleProfiles;
+        std::vector<VersionEvidence> evidence;
+    };
 
     enum class EngineFamily
     {
@@ -284,6 +331,9 @@ namespace anduefker::ue
     {
         EngineFamily family = EngineFamily::Unknown;
         SchemaLayoutVariant layout = SchemaLayoutVariant::Unknown;
+        // profileFeatures preserves the catalog expectation; features is the
+        // operational layout after runtime probes have normalized build options.
+        EngineFeatures profileFeatures;
         EngineFeatures features;
         FNameSchema fname;
         UObjectSchema uobject;
@@ -297,6 +347,7 @@ namespace anduefker::ue
         PropertySchema property;
         PropertySubtypesSchema propertySubtypes;
         OptionalPropertySupport optionalPropertySupport;
+        SchemaIdentity identity;
         SchemaValidation validation;
 
         [[nodiscard]] bool IsReadyForReflection() const;

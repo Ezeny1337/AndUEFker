@@ -859,6 +859,12 @@ namespace anduefker::ue::schema_probe
                                       " selected_offset=" + std::to_string(support.selectedOffset) +
                                       " confidence=" + support.confidence + " source=" + support.source +
                                       " reason=" + support.reason);
+            if (support.presentInProfile && support.sampleCount != 0)
+                report.versionEvidence.push_back({"optional-property-capability",
+                                                  "sample_count=" + std::to_string(support.sampleCount) +
+                                                      " selected_offset=" + std::to_string(support.selectedOffset),
+                                                  VersionEvidenceStrength::Strong,
+                                                  "OptionalProperty child field validated from the property tail"});
         }
         void ResolveSpec(ObjectModelReader &model, const EngineSchema &schema, Budget &budget,
                          const SubtypeSpec &spec, const std::vector<PropertyTailCandidate> &tails,

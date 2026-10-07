@@ -712,12 +712,18 @@ namespace anduefker::ue::schema_probe
             return false;
         }
         schema.ufunction.nativeFunction = bestNative.offset;
+        const int32_t nativeTailDelta = bestNative.offset - best.offset;
         report.evidence.push_back("resolved UFunction::ExecFunction from module executable pointers; offset=" +
                                   std::to_string(schema.ufunction.nativeFunction) + " hits=" +
                                   std::to_string(bestNative.moduleExecutableHits) + " native_samples=" +
                                   std::to_string(bestNative.nativeSamples) + " outside_module=" +
                                   std::to_string(bestNative.outsideModuleExecutableHits) + " non_native_samples=" +
                                   std::to_string(bestNative.nonNativeSamples));
+        report.versionEvidence.push_back({"ufunction-native-tail",
+                                          "native_function_offset=" + std::to_string(schema.ufunction.nativeFunction) +
+                                              " tail_delta=" + std::to_string(nativeTailDelta),
+                                          VersionEvidenceStrength::Medium,
+                                          "tail position is build-conditional; does not uniquely identify WITH_LIVE_CODING"});
 
         const auto readClassName = [&](uintptr_t object) -> std::optional<std::string>
         {

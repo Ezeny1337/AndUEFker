@@ -16,6 +16,7 @@ namespace anduefker::ue
         EngineFamily family = EngineFamily::Unknown;
         EngineFeatures features;
         SchemaLayoutVariant layout = SchemaLayoutVariant::Unknown;
+        bool optionalPropertyAvailable = false;
 
         [[nodiscard]] bool IsValid() const
         {

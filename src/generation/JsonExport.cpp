@@ -173,6 +173,39 @@ namespace anduefker::generation
         }
     } // namespace
 
+    void WriteSchemaIdentityJson(std::ostream &stream, const ::anduefker::ue::SchemaIdentity &identity)
+    {
+        stream << "{\"layout_profile_id\":\"" << EscapeJson(identity.layoutProfileId)
+               << "\",\"layout_profile_label\":\"" << EscapeJson(identity.layoutProfileLabel)
+               << "\",\"layout_version_range\":\"" << EscapeJson(identity.layoutVersionRange)
+               << "\",\"canonical_profile_id\":\"" << EscapeJson(identity.canonicalProfileId)
+               << "\",\"canonical_profile_label\":\"" << EscapeJson(identity.canonicalProfileLabel)
+               << "\",\"canonical_version_range\":\"" << EscapeJson(identity.canonicalVersionRange)
+               << "\",\"selection_reason\":\"" << EscapeJson(identity.selectionReason)
+               << "\",\"version_confidence\":\"" << EscapeJson(identity.versionConfidence)
+               << "\",\"layout_score\":" << identity.layoutScore
+               << ",\"version_evidence_score\":" << identity.versionEvidenceScore
+               << ",\"compatible_profiles\":[";
+        for (size_t index = 0; index < identity.compatibleProfiles.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            stream << "\"" << EscapeJson(identity.compatibleProfiles[index]) << "\"";
+        }
+        stream << "],\"evidence\":[";
+        for (size_t index = 0; index < identity.evidence.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const auto &evidence = identity.evidence[index];
+            stream << "{\"kind\":\"" << EscapeJson(evidence.kind)
+                   << "\",\"observed\":\"" << EscapeJson(evidence.observed)
+                   << "\",\"strength\":\"" << ::anduefker::ue::VersionEvidenceStrengthName(evidence.strength)
+                   << "\",\"detail\":\"" << EscapeJson(evidence.detail) << "\"}";
+        }
+        stream << "]}";
+    }
+
     void WriteStatsJson(std::ostream &stream, const ir::ReflectionStats &stats, std::optional<size_t> opaqueFields)
     {
         stream << "{\"object_slots\":" << stats.objectSlots << ",\"valid_objects\":" << stats.validObjects
@@ -317,10 +350,16 @@ namespace anduefker::generation
 
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
     {
-        stream << "{\n\"schema_version\":2,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":3,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
-               << "\"},\n\"stats\":";
+               << "\"}";
+        if (identity.schemaIdentity)
+        {
+            stream << ",\n\"schema_identity\":";
+            WriteSchemaIdentityJson(stream, *identity.schemaIdentity);
+        }
+        stream << ",\n\"stats\":";
         WriteStatsJson(stream, reflection.stats);
         stream << ",\n\"capture\":";
         WriteCaptureJson(stream, reflection.capture);
