@@ -100,6 +100,8 @@ namespace anduefker::ue
         // 记录已发生的读取，不为诊断重新扫描属性内存；一个属性最多读取两个引用。
         std::array<DetailRead, 2> detailReads{};
         size_t detailReadCount = 0;
+        bool objectPropertyClassNull = false;
+        uintptr_t objectPropertyClassPointerAddress = 0;
     };
 
     [[nodiscard]] inline const char *PropertyDetailsStatusName(PropertyMetadata::DetailsStatus status)

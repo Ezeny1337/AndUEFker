@@ -173,6 +173,8 @@ namespace anduefker::ir
         uintptr_t secondaryAddress = 0;
         std::string referencedClass;
         std::string secondaryClass;
+        bool objectPropertyClassNull = false;
+        uintptr_t objectPropertyClassPointerAddress = 0;
         BoolLayoutIR boolean;
         struct DetailRead
         {

@@ -292,7 +292,9 @@ namespace anduefker::generation
                    << "\",\"secondary_address\":\"" << Hex(detail.secondaryAddress)
                    << "\",\"referenced_class\":\"" << EscapeJson(detail.referencedClass)
                    << "\",\"secondary_class\":\"" << EscapeJson(detail.secondaryClass)
-                   << "\",\"bool_layout\":{\"field_size\":" << static_cast<unsigned int>(detail.boolean.fieldSize)
+                   << "\",\"object_property_class_null\":" << (detail.objectPropertyClassNull ? "true" : "false")
+                   << ",\"object_property_class_pointer_address\":\"" << Hex(detail.objectPropertyClassPointerAddress) << "\""
+                   << ",\"bool_layout\":{\"field_size\":" << static_cast<unsigned int>(detail.boolean.fieldSize)
                    << ",\"byte_offset\":" << static_cast<unsigned int>(detail.boolean.byteOffset)
                    << ",\"byte_mask\":" << static_cast<unsigned int>(detail.boolean.byteMask)
                    << ",\"field_mask\":" << static_cast<unsigned int>(detail.boolean.fieldMask) << "},\"reads\":[";

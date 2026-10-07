@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -253,6 +254,16 @@ namespace anduefker::ue
         [[nodiscard]] bool operator==(const PropertySubtypesSchema &other) const = default;
     };
 
+    struct OptionalPropertySupport
+    {
+        bool presentInProfile = false;
+        size_t sampleCount = 0;
+        int32_t selectedOffset = -1;
+        std::string confidence = "none";
+        std::string source = "none";
+        std::string reason = "not-observed";
+    };
+
     struct SchemaValidation
     {
         bool uobject = false;
@@ -285,6 +296,7 @@ namespace anduefker::ue
         UEnumSchema uenum;
         PropertySchema property;
         PropertySubtypesSchema propertySubtypes;
+        OptionalPropertySupport optionalPropertySupport;
         SchemaValidation validation;
 
         [[nodiscard]] bool IsReadyForReflection() const;

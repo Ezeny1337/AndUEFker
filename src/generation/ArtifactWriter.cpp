@@ -758,6 +758,13 @@ namespace anduefker::generation
                << ",\"delegate_signature\":" << schema.propertySubtypes.delegateSignature
                << ",\"field_path_class\":" << schema.propertySubtypes.fieldPathClass
                << ",\"optional_value\":" << schema.propertySubtypes.optionalValue << "},\n";
+        stream << "    \"optional_property_support\": {\"present_in_profile\":"
+               << (schema.optionalPropertySupport.presentInProfile ? "true" : "false")
+               << ",\"sample_count\":" << schema.optionalPropertySupport.sampleCount
+               << ",\"selected_offset\":" << schema.optionalPropertySupport.selectedOffset
+               << ",\"confidence\":\"" << EscapeJson(schema.optionalPropertySupport.confidence)
+               << "\",\"source\":\"" << EscapeJson(schema.optionalPropertySupport.source)
+               << "\",\"reason\":\"" << EscapeJson(schema.optionalPropertySupport.reason) << "\"},\n";
         stream << "    \"ufunction\": {\"flags\":" << schema.ufunction.functionFlags
                << ",\"num_params\":" << schema.ufunction.numParams
                << ",\"param_size\":" << schema.ufunction.paramSize

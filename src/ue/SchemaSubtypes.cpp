@@ -2,6 +2,7 @@
 #include "PropertyLayout.hpp"
 #include "anduefker/ue/BoolLayout.hpp"
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <set>
@@ -704,14 +705,174 @@ namespace anduefker::ue::schema_probe
                                                                                                                                  : "validated"));
         }
 
+        void ResolveOptionalSpec(ObjectModelReader &model, const EngineSchema &schema, ProbeMemory &probeMemory,
+                                 Budget &budget, const SubtypeSpec &spec, const std::vector<PropertyTailCandidate> &tails,
+                                 const std::vector<Sample> &samples, PropertySubtypesSchema &output,
+                                 OptionalPropertySupport &support, SchemaResolutionReport &report)
+        {
+            support.presentInProfile = schema.layout == SchemaLayoutVariant::FFieldTagged ||
+                                       schema.layout == SchemaLayoutVariant::FFieldTaggedModern;
+            support.sampleCount = samples.size();
+            support.source = "property-tail-complete-size";
+            support.selectedOffset = -1;
+            support.confidence = "none";
+            support.reason = !support.presentInProfile ? "engine-family-has-no-optional-property-sample" : samples.empty() ? "no-optional-property-sample"
+                                                                                                       : tails.empty()     ? "unresolved-property-tail"
+                                                                                                                           : "no-consensus";
+
+            std::set<int32_t> offsets;
+            for (const auto &tail : tails)
+            {
+                if (tail.completeSize >= 0)
+                    offsets.insert(tail.completeSize);
+            }
+            if (!support.presentInProfile)
+            {
+                support.source = "none";
+                report.evidence.push_back("optional_property_support: present_in_profile=0 sample_count=0 selected_offset=-1 confidence=none source=none reason=engine-family-has-no-optional-property-sample");
+                return;
+            }
+
+            std::vector<int32_t> accepted;
+            for (const auto offset : offsets)
+            {
+                size_t matches = 0;
+                size_t nulls = 0;
+                size_t unreadable = 0;
+                size_t mismatches = 0;
+                size_t printed = 0;
+                std::set<uintptr_t> owners;
+                const auto tailForOffset = std::find_if(tails.begin(), tails.end(), [offset](const PropertyTailCandidate &tail)
+                                                        { return tail.completeSize == offset; });
+                const std::string tailLayout = tailForOffset == tails.end() ? "unknown" : PropertyTailName(tailForOffset->layout);
+                const int32_t dataEnd = tailForOffset == tails.end() ? -1 : tailForOffset->dataEnd;
+                const int32_t completeSize = tailForOffset == tails.end() ? -1 : tailForOffset->completeSize;
+
+                for (const auto &sample : samples)
+                {
+                    uintptr_t rawReference = 0;
+                    std::string childName = "<unobserved>";
+                    std::string childClass = "<unobserved>";
+                    uintptr_t childOwner = 0;
+                    bool childOwnerIsUObject = false;
+                    std::string matchState = "unreadable";
+                    std::string rejectionReason = "candidate-read-unreadable";
+                    if (!budget.Read(sample.metadata.address, offset, rawReference))
+                    {
+                        ++unreadable;
+                        if (budget.exhausted || probeMemory.Exhausted())
+                            rejectionReason = "read-budget-exhausted";
+                    }
+                    else if (rawReference == 0)
+                    {
+                        ++nulls;
+                        matchState = "null-reference";
+                        rejectionReason = "candidate-reference-null";
+                    }
+                    else
+                    {
+                        const auto child = model.Property(rawReference);
+                        if (!child || !ValidHeader(*child) || !IsPropertyFieldKind(child->kind))
+                        {
+                            ++mismatches;
+                            matchState = "invalid-child-property";
+                            rejectionReason = "reference-not-property";
+                        }
+                        else
+                        {
+                            childName = child->name;
+                            childClass = child->normalizedClassName;
+                            childOwner = child->ownerAddress;
+                            childOwnerIsUObject = child->ownerIsUObject;
+                            const bool ownerValid = schema.features.useFProperty
+                                                        ? !child->ownerIsUObject && child->ownerAddress == sample.metadata.address
+                                                        : ObjectIdentity(model, rawReference) && model.Outer(rawReference).value_or(0) == sample.metadata.address;
+                            if (!ownerValid)
+                            {
+                                ++mismatches;
+                                matchState = "owner-mismatch";
+                                rejectionReason = "child-owner-mismatch";
+                            }
+                            else
+                            {
+                                ++matches;
+                                owners.insert(sample.rootOwner);
+                                matchState = "match";
+                                rejectionReason = "none";
+                            }
+                        }
+                    }
+
+                    if (printed++ < 4)
+                    {
+                        report.evidence.push_back("optional candidate: property_address=" + std::to_string(sample.metadata.address) +
+                                                  " owner_address=" + std::to_string(sample.metadata.ownerAddress) +
+                                                  " root_owner_address=" + std::to_string(sample.rootOwner) +
+                                                  " property_class=" + sample.metadata.normalizedClassName +
+                                                  " tail_layout=" + tailLayout + " data_end=" + std::to_string(dataEnd) +
+                                                  " complete_size=" + std::to_string(completeSize) +
+                                                  " candidate_offset=" + std::to_string(offset) +
+                                                  " raw_reference=" + std::to_string(rawReference) +
+                                                  " child_property_address=" + std::to_string(rawReference) +
+                                                  " child_property_name=" + childName +
+                                                  " child_property_class=" + childClass +
+                                                  " child_owner_address=" + std::to_string(childOwner) +
+                                                  " child_owner_is_uobject=" + std::to_string(childOwnerIsUObject) +
+                                                  " match_state=" + matchState +
+                                                  " rejection_reason=" + rejectionReason);
+                    }
+                }
+
+                const bool budgetExhausted = budget.exhausted || probeMemory.Exhausted();
+                const bool valid = matches != 0 && nulls == 0 && mismatches == 0 && unreadable == 0 && !budgetExhausted;
+                if (valid)
+                    accepted.push_back(offset);
+                const std::string rejection = valid ? "none" : budgetExhausted ? "read-budget-exhausted"
+                                                           : tails.empty()     ? "unresolved-property-tail"
+                                                           : samples.empty()   ? "missing-optional-property-sample"
+                                                           : nulls != 0        ? "candidate-reference-null"
+                                                           : mismatches != 0   ? "candidate-child-validation-rejected"
+                                                           : unreadable != 0   ? "candidate-read-unreadable"
+                                                                               : "no-consensus";
+                report.evidence.push_back("optional candidate summary: property_class=OptionalProperty tail_layout=" + tailLayout +
+                                          " data_end=" + std::to_string(dataEnd) + " complete_size=" + std::to_string(completeSize) +
+                                          " candidate_offset=" + std::to_string(offset) + " samples=" + std::to_string(samples.size()) +
+                                          " matches=" + std::to_string(matches) + " independent_owners=" + std::to_string(owners.size()) +
+                                          " null=" + std::to_string(nulls) + " unreadable=" + std::to_string(unreadable) +
+                                          " mismatches=" + std::to_string(mismatches) + " read_budget_exhausted=" + std::to_string(budgetExhausted) +
+                                          " accepted=" + std::to_string(valid) + " rejection_reason=" + rejection);
+            }
+
+            if (accepted.size() == 1 && !budget.exhausted && !probeMemory.Exhausted())
+            {
+                output.*(spec.member) = accepted.front();
+                support.selectedOffset = accepted.front();
+                support.confidence = samples.size() == 1 ? "limited" : "validated";
+                support.reason = samples.size() == 1 ? "validated-single-sample" : "validated";
+            }
+            else if (accepted.size() > 1)
+                support.reason = "ambiguous-candidates";
+            else if (budget.exhausted || probeMemory.Exhausted())
+                support.reason = "read-budget-exhausted";
+            report.evidence.push_back("optional_property_support: present_in_profile=" + std::to_string(support.presentInProfile) +
+                                      " sample_count=" + std::to_string(support.sampleCount) +
+                                      " selected_offset=" + std::to_string(support.selectedOffset) +
+                                      " confidence=" + support.confidence + " source=" + support.source +
+                                      " reason=" + support.reason);
+        }
         void ResolveSpec(ObjectModelReader &model, const EngineSchema &schema, Budget &budget,
                          const SubtypeSpec &spec, const std::vector<PropertyTailCandidate> &tails,
                          const std::vector<Sample> &samples, PropertySubtypesSchema &output,
-                         SchemaResolutionReport &report)
+                         OptionalPropertySupport &optionalSupport, SchemaResolutionReport &report)
         {
             if (spec.payload == Payload::FieldPath)
             {
                 ResolveFieldPathSpec(model, budget.memory, budget, spec, tails, samples, output, report);
+                return;
+            }
+            if (spec.payload == Payload::Optional)
+            {
+                ResolveOptionalSpec(model, schema, budget.memory, budget, spec, tails, samples, output, optionalSupport, report);
                 return;
             }
             std::set<int32_t> offsets;
@@ -829,6 +990,7 @@ namespace anduefker::ue::schema_probe
         schema.property.propertyLinksEnd = -1;
         schema.property.subtypeStart = -1;
         schema.features.propertyTailLayout = PropertyTailLayout::Unknown;
+        schema.optionalPropertySupport = {};
         ProbeMemory probeMemory(memory_);
         ObjectModelReader model(probeMemory, binding_, schema);
         if (!model.Initialize())
@@ -887,7 +1049,8 @@ namespace anduefker::ue::schema_probe
                 report.evidence.push_back("property subtype sample class: member=" + std::string(spec.name) +
                                           " class=" + name + " retained=" + std::to_string(count) +
                                           " sample_limit_per_class=" + std::to_string(kMaxSamplesPerKind));
-            ResolveSpec(model, schema, validationBudget, spec, tails, samples.byPayload[spec.payload], resolved, report);
+            ResolveSpec(model, schema, validationBudget, spec, tails, samples.byPayload[spec.payload], resolved,
+                        schema.optionalPropertySupport, report);
             validationLimit = validationLimit || validationBudget.exhausted || probeMemory.Exhausted();
         }
         schema.propertySubtypes = resolved;

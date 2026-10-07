@@ -431,7 +431,13 @@ namespace anduefker::ue
         if (propertyClassName == "ObjectProperty" || propertyClassName == "ObjectPropertyBase" || propertyClassName == "ObjectPtrProperty" ||
             propertyClassName == "SoftObjectProperty" || propertyClassName == "WeakObjectProperty" ||
             propertyClassName == "LazyObjectProperty")
+        {
             result.referencedAddress = readOptionalPointer("object_class", schema_.propertySubtypes.objectClass);
+            result.objectPropertyClassNull = result.referencedAddress == 0 &&
+                                             result.detailsStatus == PropertyMetadata::DetailsStatus::NullReference;
+            if (result.objectPropertyClassNull && result.detailReadCount != 0)
+                result.objectPropertyClassPointerAddress = result.detailReads[result.detailReadCount - 1].address;
+        }
         else if (propertyClassName == "InterfaceProperty")
             result.referencedAddress = readOptionalPointer("interface_class", schema_.propertySubtypes.interfaceClass);
         else if (propertyClassName == "ClassProperty" || propertyClassName == "ClassPtrProperty" || propertyClassName == "SoftClassProperty")

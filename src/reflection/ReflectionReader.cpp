@@ -132,6 +132,8 @@ namespace anduefker::reflection
         }
         diagnostic.referencedClass = "not-observed";
         diagnostic.secondaryClass = "not-observed";
+        diagnostic.objectPropertyClassNull = metadata.objectPropertyClassNull;
+        diagnostic.objectPropertyClassPointerAddress = metadata.objectPropertyClassPointerAddress;
         // 仅在已完成读取与基本指针检查后补充类型身份；不尝试解码未知对象句柄。
         const auto referenceClass = [&](uintptr_t address, bool secondary) -> std::string
         {
@@ -186,7 +188,10 @@ namespace anduefker::reflection
                 ++stats.failures;
             if (result.kind == PropertyKind::Unknown)
                 ++stats.unknownProperties;
-            RecordPropertyDetail(metadata, property, ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus));
+            const std::string detailReason = metadata.objectPropertyClassNull
+                                                 ? "object-property-class-metadata-null"
+                                                 : ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus);
+            RecordPropertyDetail(metadata, property, detailReason);
             path.erase(metadata.address);
             return result;
         }
@@ -290,6 +295,8 @@ namespace anduefker::reflection
                 reason = "unknown-property-kind";
             else if (metadata.elementSize <= 0)
                 reason = "invalid-element-size";
+            else if (metadata.objectPropertyClassNull)
+                reason = "object-property-class-metadata-null";
             RecordPropertyDetail(metadata, property, reason);
         }
         path.erase(metadata.address);
