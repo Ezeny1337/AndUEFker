@@ -66,11 +66,14 @@ namespace anduefker::analyzer
 		/// for, and Single is the result every other mode is checked against.
 		EThreadMode ThreadMode = EThreadMode::Single;
 
+		/// Called on the analyzing thread at phase boundaries.
+		std::function<void(const std::string &)> Progress;
+
 		/// Which targets to analyse, by strategy name. Empty means all of them.
 		///
-		/// Each target costs its own pass over the module's literals to find its
-		/// anchors, so a caller after one global need not pay for the others. The
-		/// shared instruction harvest and call graph happen once either way.
+		/// Requested targets share proximity and resolution literal scans. Selecting
+		/// fewer targets reduces the needles and resolution work. Instruction harvest
+		/// and the call graph happen once either way.
 		///
 		/// A target left out answers empty from Find(), as an unknown name does.
 		std::vector<std::string> Targets;

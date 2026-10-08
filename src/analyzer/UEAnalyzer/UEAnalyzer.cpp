@@ -65,6 +65,7 @@ namespace anduefker::analyzer
 		std::vector<TargetAnalysis> Targets;
 
 		CallGraph Calls;
+		AnchoredResolution::AnchorSites ResolutionSites;
 
 		/// Borrowed from the caller, who must keep it alive for the analysis.
 		const IArchDecoder *Arch = nullptr;
@@ -171,19 +172,11 @@ namespace anduefker::analyzer
 		// knowledge here of what any of them is looking for. Built before either
 		// phase runs, because the literal scan below fills them.
 		//
-		// Only the requested ones are kept: every target costs its own pass over the
-		// module's literals, and a caller after one global should not pay for all of
-		// them. Constructing a strategy is free - it holds no state - so the filter
-		// asks each one its own name rather than keeping a separate table in step.
+		// Only requested strategies contribute needles to the shared literal scans.
 		{
 			std::vector<StrategyPtr> Available = Targets::CreateAll();
 
-			// Out.Options_, not Options: Options was moved from at the top of this
-			// function, so its Targets vector is empty whatever the caller asked for
-			// and every target looked wanted. A caller after one global silently paid
-			// for a literal pass per target - three full sweeps of the module where
-			// one was asked for, which on a syscall-backed transport is the module
-			// pulled across twice for nothing.
+			// Options was moved into Out; use the retained target selection.
 			for (StrategyPtr &S : Available)
 			{
 				if (!Out.Options_.IsTargetWanted(S->Name()))
@@ -203,14 +196,21 @@ namespace anduefker::analyzer
 		// touches, and both phases only read from Memory and Module.
 		const auto ScanLiterals = [&]
 		{
+			std::vector<StringAnchors *> Outputs;
+			std::vector<std::span<const AnchorString>> Groups;
 			for (Analysis::TargetAnalysis &T : State->Targets)
 			{
-				T.Anchors.Run(Memory, State->Module, T.Strategy->ProximityAnchors());
+				Outputs.push_back(&T.Anchors);
+				Groups.push_back(T.Strategy->ProximityAnchors());
 			}
+			StringAnchors::RunBatch(Memory, State->Module, Outputs, Groups);
 			State->TChar = DetectTCharKind(Memory, &State->TCharUtf16Hits, &State->TCharUtf32Hits);
 		};
 
 		bool bHarvested = false;
+		if (Out.Options_.Progress)
+			Out.Options_.Progress("analyzer: instruction harvest started");
+		Harvest.Progress = Out.Options_.Progress;
 		// Out.Options_ for the same reason as the target filter above. ThreadMode is
 		// a scalar and so survives the move intact, but reading a moved-from object
 		// at all is what let the Targets bug sit here unnoticed.
@@ -267,6 +267,8 @@ namespace anduefker::analyzer
 		else
 		{
 			bHarvested = Harvest_();
+			if (Out.Options_.Progress)
+				Out.Options_.Progress("analyzer: instruction harvest complete; scanning literals");
 			ScanLiterals();
 		}
 
@@ -286,7 +288,16 @@ namespace anduefker::analyzer
 			T.AnchorSitesByAnchor = T.Anchors.CollectAnchorSitesByAnchor(State->Harvester);
 		}
 
+		if (Out.Options_.Progress)
+			Out.Options_.Progress("analyzer: literals complete; ranking global accesses");
 		State->BuildRanking();
+		std::vector<const Anchor *> ResolutionAnchors;
+		for (const auto &Target : State->Targets)
+			for (const Anchor &A : Target.Strategy->ResolutionAnchors())
+				ResolutionAnchors.push_back(&A);
+		if (Out.Options_.Progress)
+			Out.Options_.Progress("analyzer: batch scanning resolution anchors");
+		State->ResolutionSites = AnchoredResolution::ScanAnchorSites(Memory, State->Module, State->Harvester, ResolutionAnchors);
 
 		Out.State_ = std::move(State);
 		return Out;
@@ -542,7 +553,7 @@ namespace anduefker::analyzer
 		if (!Found || !Found->Strategy)
 			return Out;
 
-		AnchoredResolution Anchored(Memory_, State_->Module, State_->Harvester, *State_->Arch, &State_->Calls);
+		AnchoredResolution Anchored(Memory_, State_->Module, State_->Harvester, *State_->Arch, &State_->Calls, &State_->ResolutionSites);
 		Anchored.Resolve(*Found->Strategy, Options_.Weights);
 		Out.reserve(Anchored.GetTraces().size());
 		for (const AnchoredResolution::AnchorTrace &Trace : Anchored.GetTraces())
@@ -606,7 +617,7 @@ namespace anduefker::analyzer
 		// and its output is never presented as a result.
 		if (State->Arch && bWantAnchored)
 		{
-			AnchoredResolution Anchored(Memory_, State->Module, State->Harvester, *State->Arch, &State->Calls);
+			AnchoredResolution Anchored(Memory_, State->Module, State->Harvester, *State->Arch, &State->Calls, &State->ResolutionSites);
 			std::vector<Candidate> Verified = Anchored.Resolve(Strategy, Options_.Weights);
 
 			// Structure verification says the shape is right; it does not say the

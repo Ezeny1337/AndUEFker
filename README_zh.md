@@ -10,7 +10,7 @@
 
 [English](README.md)
 
-AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运行时结构，验证对象表与名称存储，解析引擎反射 Schema，并生成紧凑的 C++ SDK 以及机器可读的诊断信息。
+AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运行时结构，验证对象表与名称存储，解析反射 Schema，并为开发者和逆向分析工具生成 C++ 描述及机器可读的反射元数据。
 
 它不依赖单一硬编码布局，而是结合二进制分析、运行时探针、交叉验证和反射数据，在读取对象图之前先建立经过验证的运行时绑定。
 
@@ -20,11 +20,13 @@ AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运�
 
 - **运行时绑定** — 运行时定位并验证 `GUObjectArray`、`ObjObjects` 与 `FName` 存储。
 - **Schema 自动解析** — 从实时数据中解析 `UObject`、`UStruct`、`FField`/`FProperty`、`UFunction` 和 `UEnum` 布局。
-- **ARM 架构分析** — 支持 ARM64 和 ARM32 ARM-mode 指令解码，以及面向 Unreal 二进制的候选地址分析策略。
+- **ARM 架构分析** — 支持 ARM64 和 ARM32 ARM-mode 指令解码，以及面向 Unreal 二进制的候选地址分析策略；Thumb/Thumb-2 暂未支持。
 - **反射提取** — 遍历 Unreal 运行时对象，输出类型、属性、函数、枚举、继承关系和布局元数据。
 - **常用类地址收集** — 记录 `World`、`Engine`、`GameInstance`、`PlayerController` 等常用 `UClass` 对象地址。
 - **完整产物输出** — 将生成头文件、JSON 元数据、诊断信息和运行时绑定信息写入统一产物目录。
 - **验证失败即拒绝** — 对无效候选和不一致布局进行拒绝，避免静默使用错误结果。
+- **有界采集** — 复核实际消费的字节，通过有限尾部枚举覆盖对象表增长。
+- **进度与计时** — 记录各阶段耗时和内存统计，并对指令扫描与反射遍历提供节流进度。
 
 ## 工作流程
 
@@ -46,9 +48,11 @@ flowchart TD
 1. 连接目标进程并发现 Unreal 模块。
 2. 分析模块，收集对象根和名称根候选地址。
 3. 验证对象容器和名称存储布局。
-4. 从运行时对象中解析引擎反射 Schema。
+4. 探测引擎 Schema profile，并验证运行时反射布局。
 5. 收集选定的常用 `UClass` 对象地址。
-6. 读取反射数据并生成 SDK 产物。
+6. 读取并校验反射数据，分析布局，生成 SDK 产物。
+
+Schema profile 覆盖 UE 4.23–4.27 和 5.0–5.6 的布局族，选择结果记录已验证的运行时布局、兼容 profile 和引擎版本置信度。
 
 ## 构建
 
@@ -159,16 +163,18 @@ AndUEFker -o <输出目录> -p <包名>
 
 | 文件 | 用途 |
 | --- | --- |
-| `BasicTypes.hpp` | SDK 基础类型与容器辅助定义。 |
-| `Types.hpp` | 生成的 Unreal 类和结构体，包含前置声明及布局信息。 |
+| `BasicTypes.hpp` | SDK 基础类型与容器描述。 |
+| `Types.hpp` | 生成的 Unreal 类和结构体，包含反射身份与目标布局信息。 |
 | `Enums.hpp` | 生成的枚举声明和值。 |
-| `Functions.hpp` | 生成的函数声明及调用元数据。 |
+| `Functions.hpp` | Native 函数地址与反射参数布局。 |
 | `reflection.json` | 详细反射 IR，包括属性、函数、枚举、继承关系和地址。 |
 | `manifest.json` | 产物状态和解析统计信息。 |
 | `diagnostics.json` | 反射诊断、冲突和失败计数。 |
 | `runtime.json` | 运行时模块、绑定布局、Schema 偏移和常用对象地址。 |
 
-生成的头文件使用 `AndUE` 命名空间。
+生成的头文件使用 `AndUE` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
+
+`reflection.json` 的 JSON schema 版本为 `4`，其他 JSON 文件为 `3`。
 
 ## 常用对象类地址
 
@@ -207,7 +213,11 @@ AndUEFker 会在绑定和 Schema 解析阶段记录以下证据：
 
 命令行程序在完整产物就绪时返回 `0`，反射读取或 SDK 描述部分完成时返回 `3`，其他失败或未完成运行阶段返回 `1`。
 
-`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Opaque 容器表示字段类型已识别，但内部实现没有展开；它本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。采集一致性只覆盖实际观测并复核的字节，最多重试一次；`capture.atomic_snapshot` 始终为 `false`，不表示获得了活动进程的原子快照。
+`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Opaque 容器表示字段类型已识别，但内部实现没有展开；它本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。
+
+采集会校验观测字节与枚举覆盖范围，对 chunked 对象表增长进行有界尾部补读，整轮最多重试一次。数据变化、范围不可读或预算耗尽可能使反射结果部分完成。`capture.atomic_snapshot` 始终为 `false`；`capture.attempt_history` 记录各次尝试的计数、变化和失败原因。
+
+`AndUEFker.log` 在运行过程中写入，记录阶段进度、耗时和内存读取统计。
 
 ## Issue
 

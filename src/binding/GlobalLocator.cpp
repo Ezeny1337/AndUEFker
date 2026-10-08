@@ -53,9 +53,12 @@ namespace anduefker::binding
     }
 
     BindingCandidates GlobalLocator::Locate(const std::vector<std::string> &objectSymbols,
-                                            const std::vector<std::string> &nameSymbols) const
+                                            const std::vector<std::string> &nameSymbols,
+                                            const std::function<void(const std::string &)> &progress) const
     {
         BindingCandidates result;
+        if (progress)
+            progress("locator: resolving exported and debug symbols");
         for (const std::string &symbol : objectSymbols)
         {
             const std::vector<LocatedAddress> candidates = SymbolCandidates(symbol);
@@ -76,6 +79,7 @@ namespace anduefker::binding
 
         anduefker::analyzer::AnalyzerOptions options;
         options.ThreadMode = anduefker::analyzer::EThreadMode::Single;
+        options.Progress = progress;
         options.Targets = {anduefker::analyzer::Targets::Names,
                            anduefker::analyzer::Targets::GUObjectArray,
                            anduefker::analyzer::Targets::ObjObjects};
@@ -101,8 +105,14 @@ namespace anduefker::binding
 
         // 符号可以是直接对象、指针槽、调试器助手，也可以是过时/部分导出
         // 绝不能仅因其存在而忽略二进制分析的候选对象
+        if (progress)
+            progress("locator: resolving GUObjectArray anchors");
         add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::GUObjectArray), "GUObjectArray");
+        if (progress)
+            progress("locator: resolving ObjObjects anchors");
         add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::ObjObjects), "ObjObjects");
+        if (progress)
+            progress("locator: resolving name anchors");
         add(result.nameRoots, analyzer.Find(anduefker::analyzer::Targets::Names), "Names");
         return result;
     }

@@ -145,15 +145,17 @@ namespace anduefker::ue
         return object != 0 && memory_.IsReadable(object, sizeof(uintptr_t));
     }
 
-    std::optional<uintptr_t> ObjectModelReader::Class(uintptr_t object) const
+    std::optional<uintptr_t> ObjectModelReader::Class(uintptr_t object, bool fresh) const
     {
         const auto address = Add(object, schema_.uobject.classPointer);
         if (!address)
             return std::nullopt;
-        const auto raw = ReadPointer(*address);
-        if (!raw)
+        uintptr_t raw = 0;
+        const auto read = fresh ? memory_.ReadFreshBytes(*address, &raw, sizeof(raw))
+                                : memory_.ReadBytes(*address, &raw, sizeof(raw));
+        if (!read.Ok() || raw == 0)
             return std::nullopt;
-        return binding_.decode.objectClass(*raw, *address);
+        return binding_.decode.objectClass(raw, *address);
     }
 
     std::optional<uintptr_t> ObjectModelReader::Outer(uintptr_t object) const
@@ -170,13 +172,15 @@ namespace anduefker::ue
         return outer;
     }
 
-    std::optional<int32_t> ObjectModelReader::InternalIndex(uintptr_t object) const
+    std::optional<int32_t> ObjectModelReader::InternalIndex(uintptr_t object, bool fresh) const
     {
         const auto address = Add(object, schema_.uobject.internalIndex);
         if (!address)
             return std::nullopt;
         int32_t raw = 0;
-        if (!memory_.Read(*address, raw))
+        const auto read = fresh ? memory_.ReadFreshBytes(*address, &raw, sizeof(raw))
+                                : memory_.ReadBytes(*address, &raw, sizeof(raw));
+        if (!read.Ok())
             return std::nullopt;
         return binding_.decode.objectIndex(raw, *address);
     }

@@ -70,6 +70,12 @@ namespace anduefker::ue
 
     std::optional<uintptr_t> NameStoreReader::EntryAt(int32_t index) const
     {
+        const auto location = LocateEntry(index);
+        return location ? std::optional<uintptr_t>(location->address) : std::nullopt;
+    }
+
+    std::optional<NameStoreReader::EntryLocation> NameStoreReader::LocateEntry(int32_t index) const
+    {
         if (root_ == 0 || index < 0 || !layout_.IsValid())
             return std::nullopt;
 
@@ -79,6 +85,8 @@ namespace anduefker::ue
             if (array.elementsPerChunk <= 0)
                 return std::nullopt;
             const int32_t chunkIndex = index / array.elementsPerChunk;
+            if (chunkIndex >= 128)
+                return std::nullopt;
             const int32_t withinChunk = index % array.elementsPerChunk;
             const auto chunksAddress = AddOffset(root_, static_cast<uintptr_t>(array.chunksOffset));
             if (!chunksAddress)
@@ -90,6 +98,8 @@ namespace anduefker::ue
             if (!rawChunk)
                 return std::nullopt;
             const uintptr_t chunk = decode_.nameChunks(*rawChunk, *chunkSlot);
+            if (chunk == 0 || !memory_.IsReadable(chunk, sizeof(uintptr_t)))
+                return std::nullopt;
             const auto entrySlot = AddScaled(chunk, withinChunk, static_cast<int32_t>(sizeof(uintptr_t)));
             if (!entrySlot)
                 return std::nullopt;
@@ -97,12 +107,50 @@ namespace anduefker::ue
             if (!rawEntry)
                 return std::nullopt;
             const uintptr_t entry = decode_.nameEntry(*rawEntry, *entrySlot);
-            return entry != 0 && memory_.IsReadable(entry, sizeof(uint32_t)) ? std::optional<uintptr_t>(entry) : std::nullopt;
+            return entry != 0 && memory_.IsReadable(entry, sizeof(uint32_t)) ? std::optional<EntryLocation>({entry, 2048}) : std::nullopt;
         }
 
         const NamePoolLayout &pool = layout_.pool;
         const int32_t blockIndex = index >> pool.blocksBit;
+        if (blockIndex >= 8192)
+            return std::nullopt;
         const int32_t entryIndex = index & ((1 << pool.blocksBit) - 1);
+        const size_t blockSize = (size_t{1} << pool.blocksBit) * static_cast<size_t>(pool.entryStride);
+        const size_t offset = static_cast<size_t>(entryIndex) * static_cast<size_t>(pool.entryStride);
+        size_t usedBytes = blockSize;
+        if (pool.maxChunkIndexOffset >= 0)
+        {
+            const uint64_t generation = memory_.AddressSpaceGeneration();
+            if (generation != boundaryGeneration_)
+            {
+                currentBlock_.reset();
+                boundaryGeneration_ = generation;
+            }
+            // The pool appends names. Reuse a published boundary until a newer name requires extending it.
+            if (!currentBlock_ || static_cast<uint32_t>(blockIndex) > *currentBlock_ ||
+                (static_cast<uint32_t>(blockIndex) == *currentBlock_ && offset >= byteCursor_))
+            {
+                const auto currentAddress = AddOffset(root_, static_cast<uintptr_t>(pool.maxChunkIndexOffset));
+                uint32_t current = 0;
+                uint32_t cursor = static_cast<uint32_t>(blockSize);
+                if (!currentAddress || !memory_.ReadFreshBytes(*currentAddress, &current, sizeof(current)).Ok() || current >= 8192)
+                    return std::nullopt;
+                if (pool.byteCursorOffset >= 0)
+                {
+                    const auto cursorAddress = AddOffset(root_, static_cast<uintptr_t>(pool.byteCursorOffset));
+                    if (!cursorAddress || !memory_.ReadFreshBytes(*cursorAddress, &cursor, sizeof(cursor)).Ok() || cursor > blockSize)
+                        return std::nullopt;
+                }
+                currentBlock_ = current;
+                byteCursor_ = cursor;
+            }
+            if (static_cast<uint32_t>(blockIndex) > *currentBlock_)
+                return std::nullopt;
+            if (static_cast<uint32_t>(blockIndex) == *currentBlock_)
+                usedBytes = byteCursor_;
+        }
+        if (offset >= usedBytes || usedBytes - offset < static_cast<size_t>(pool.entryStringOffset))
+            return std::nullopt;
         const auto blocksAddress = AddOffset(root_, static_cast<uintptr_t>(pool.blocksOffset));
         if (!blocksAddress)
             return std::nullopt;
@@ -113,10 +161,12 @@ namespace anduefker::ue
         if (!rawBlock)
             return std::nullopt;
         const uintptr_t block = decode_.nameBlocks(*rawBlock, *blockSlot);
+        if (block == 0)
+            return std::nullopt;
         const auto entryOffset = AddScaled(block, entryIndex, pool.entryStride);
         if (!entryOffset || !memory_.IsReadable(*entryOffset, sizeof(uint16_t)))
             return std::nullopt;
-        return decode_.nameEntry(*entryOffset, *entryOffset);
+        return EntryLocation{decode_.nameEntry(*entryOffset, *entryOffset), usedBytes - offset};
     }
 
     std::optional<std::string> NameStoreReader::ReadBytesAsUtf8(uintptr_t address, size_t length) const
@@ -161,7 +211,7 @@ namespace anduefker::ue
         return result;
     }
 
-    std::optional<std::string> NameStoreReader::ReadEntry(uintptr_t entry, size_t depth) const
+    std::optional<std::string> NameStoreReader::ReadEntry(uintptr_t entry, size_t depth, size_t available) const
     {
         if (entry == 0 || depth >= 32)
             return std::nullopt;
@@ -189,29 +239,33 @@ namespace anduefker::ue
             return std::nullopt;
         const uint16_t header = decode_.nameHeader(rawHeader, *headerAddress);
         const int32_t length = static_cast<int32_t>(header >> pool.entryLengthShift);
+        if (length > 1024)
+            return std::nullopt;
         if (length == 0)
         {
             const int32_t indexOffset = pool.entryStringOffset + (pool.entryStringOffset == 6 ? 2 : 0);
             const auto indexAddress = AddOffset(entry, static_cast<uintptr_t>(indexOffset));
             const auto numberAddress = indexAddress ? AddOffset(*indexAddress, sizeof(int32_t)) : std::nullopt;
-            if (!indexAddress || !numberAddress)
+            if (!indexAddress || !numberAddress || static_cast<size_t>(indexOffset) + 2 * sizeof(int32_t) > available)
                 return std::nullopt;
             int32_t rawIndex = 0;
             uint32_t number = 0;
             if (!memory_.Read(*indexAddress, rawIndex) || !memory_.Read(*numberAddress, number))
                 return std::nullopt;
             const int32_t index = decode_.nameIndex(rawIndex, *indexAddress);
-            const auto baseEntry = EntryAt(index);
-            auto base = baseEntry ? ReadEntry(*baseEntry, depth + 1) : std::nullopt;
+            const auto baseEntry = LocateEntry(index);
+            auto base = baseEntry ? ReadEntry(baseEntry->address, depth + 1, baseEntry->available) : std::nullopt;
             if (!base)
                 return std::nullopt;
             if (number > 0)
                 *base += "_" + std::to_string(number - 1);
             return base;
         }
-        if (length <= 0 || length > 1024)
-            return std::nullopt;
         const bool wide = (header & pool.entryWideMask) != 0;
+        const size_t stringOffset = static_cast<size_t>(pool.entryStringOffset);
+        const size_t bytes = static_cast<size_t>(length) * (wide ? 2u : 1u);
+        if (stringOffset > available || bytes > available - stringOffset)
+            return std::nullopt;
         if (wide)
             return ReadUtf16AsUtf8(*stringAddress, static_cast<size_t>(length));
         return ReadBytesAsUtf8(*stringAddress, static_cast<size_t>(length));
@@ -219,8 +273,8 @@ namespace anduefker::ue
 
     std::optional<std::string> NameStoreReader::ReadName(int32_t index) const
     {
-        const auto entry = EntryAt(index);
-        return entry ? ReadEntry(*entry, 0) : std::nullopt;
+        const auto entry = LocateEntry(index);
+        return entry ? ReadEntry(entry->address, 0, entry->available) : std::nullopt;
     }
 
     std::optional<std::string> NameStoreReader::ReadFName(uintptr_t fnameAddress) const

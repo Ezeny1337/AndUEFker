@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <chrono>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -88,5 +90,8 @@ namespace anduefker::app
         ArtifactResult artifacts_;
         std::vector<std::string> failures_;
         std::vector<RuntimeLogEntry> logEntries_;
+        std::chrono::steady_clock::time_point started_;
+        std::ofstream liveLog_;
+        bool liveLogFailed_ = false;
     };
 } // namespace anduefker::app

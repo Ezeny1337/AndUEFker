@@ -298,16 +298,19 @@ protected:
 	{
 		std::vector<uint8_t> Buffer;
 		const size_t Step = static_cast<size_t>(Alignment);
-		while (Cur + sizeof(uintptr_t) <= End)
+		if (Alignment <= 0)
+			return 0;
+		while (Cur <= End && sizeof(uintptr_t) <= End - Cur)
 		{
 			size_t ChunkSize = std::min(static_cast<size_t>(End - Cur), kScanChunkBytes);
 			ChunkSize = (ChunkSize / Step) * Step;
 			if (!ChunkSize)
 				break;
 			Buffer.resize(ChunkSize);
-			if (ReadBytes(Cur, Buffer.data(), ChunkSize))
+			const size_t Received = ReadBytes(Cur, Buffer.data(), ChunkSize);
+			if (Received <= ChunkSize)
 			{
-				for (size_t Off = 0; Off + sizeof(uintptr_t) <= ChunkSize; Off += Step)
+				for (size_t Off = 0; Off + sizeof(uintptr_t) <= Received; Off += Step)
 				{
 					uintptr_t Val;
 					std::memcpy(&Val, Buffer.data() + Off, sizeof(uintptr_t));
@@ -334,16 +337,19 @@ protected:
 	{
 		std::vector<uint8_t> Buffer;
 		const size_t Step = static_cast<size_t>(Alignment);
-		while (Cur + sizeof(uintptr_t) <= End)
+		if (Alignment <= 0)
+			return;
+		while (Cur <= End && sizeof(uintptr_t) <= End - Cur)
 		{
 			size_t ChunkSize = std::min(static_cast<size_t>(End - Cur), kScanChunkBytes);
 			ChunkSize = (ChunkSize / Step) * Step;
 			if (!ChunkSize)
 				break;
 			Buffer.resize(ChunkSize);
-			if (ReadBytes(Cur, Buffer.data(), ChunkSize))
+			const size_t Received = ReadBytes(Cur, Buffer.data(), ChunkSize);
+			if (Received <= ChunkSize)
 			{
-				for (size_t Off = 0; Off + sizeof(uintptr_t) <= ChunkSize; Off += Step)
+				for (size_t Off = 0; Off + sizeof(uintptr_t) <= Received; Off += Step)
 				{
 					uintptr_t Val;
 					std::memcpy(&Val, Buffer.data() + Off, sizeof(uintptr_t));
@@ -444,7 +450,8 @@ public:
 	T Read(uintptr_t Address) const
 	{
 		T Result{};
-		ReadBytes(Address, &Result, sizeof(T));
+		if (ReadBytes(Address, &Result, sizeof(T)) != sizeof(T))
+			return T{};
 		return Result;
 	}
 

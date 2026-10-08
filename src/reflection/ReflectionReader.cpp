@@ -3,6 +3,7 @@
 #include "anduefker/ue/BoolLayout.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,12 +24,14 @@ namespace anduefker::reflection
                                        const RuntimeBinding &binding,
                                        const EngineSchema &schema,
                                        uintptr_t moduleBase,
-                                       uintptr_t moduleEnd)
+                                       uintptr_t moduleEnd,
+                                       std::function<void(const std::string &)> progress)
         : memory_(memory),
           schema_(schema),
           moduleBase_(moduleBase),
           moduleEnd_(moduleEnd),
-          objects_(memory_, binding, schema)
+          objects_(memory_, binding, schema),
+          progress_(std::move(progress))
     {
     }
 
@@ -657,8 +660,12 @@ namespace anduefker::reflection
     ReflectionIR ReflectionReader::Read()
     {
         ReflectionIR result;
+        std::vector<::anduefker::ir::CaptureInfo::Attempt> history;
         for (uint32_t attempt = 1; attempt <= 2; ++attempt)
         {
+            const auto started = std::chrono::steady_clock::now();
+            if (progress_)
+                progress_("capture attempt=" + std::to_string(attempt) + " started");
             if (attempt > 1 && !memory_.RefreshAddressSpace())
             {
                 result.status = result.types.empty() ? ParseStatus::Failed : ParseStatus::Partial;
@@ -667,9 +674,37 @@ namespace anduefker::reflection
                 break;
             }
             memory_.Reset();
-            result = ReadAttempt();
-            const auto validation = memory_.Validate();
-            result.capture.observationsStable = validation.Stable() && validation.observedRanges != 0;
+            ::anduefker::memory::CaptureValidation validation;
+            ::anduefker::ir::CaptureInfo::Attempt details;
+            result = ReadAttempt(validation, details);
+            memory_.CopyReadFailures(validation);
+            details.number = attempt;
+            details.elapsedMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                          std::chrono::steady_clock::now() - started)
+                                                          .count());
+            details.observedRanges = validation.observedRanges;
+            details.changedRanges = validation.changedRanges;
+            details.unreadableRanges = validation.unreadableRanges;
+            details.limitExceeded = validation.limitExceeded;
+            details.generationChanged = validation.generationChanged;
+            details.readFailures = validation.readFailures;
+            details.failures = result.stats.failures;
+            details.identityFailures = result.stats.identityFailures;
+            const size_t diagnosticSamples = std::min<size_t>(result.diagnostics.size(), 32);
+            details.diagnostics.assign(result.diagnostics.begin(), result.diagnostics.begin() + diagnosticSamples);
+            for (const auto &failure : validation.readFailureSamples)
+                details.readFailureSamples.push_back({failure.address, static_cast<int32_t>(failure.error),
+                                                      failure.requested, failure.transferred});
+            for (const auto &change : validation.changes)
+                details.changes.push_back({change.address, change.size, static_cast<int32_t>(change.read.error),
+                                           change.read.transferred, change.before, change.after});
+            if (details.reason.empty())
+                details.reason = validation.Stable() ? "observed-bytes-stable" : "observed-bytes-changed-or-unreadable";
+            history.push_back(std::move(details));
+            if (progress_)
+                progress_("capture attempt=" + std::to_string(attempt) + " elapsed_ms=" +
+                          std::to_string(history.back().elapsedMs) + " reason=" + history.back().reason);
+            result.capture.observationsStable = validation.Stable() && validation.observedRanges != 0 && history.back().coverageComplete;
             result.capture.limitExceeded = validation.limitExceeded;
             result.capture.generationChanged = validation.generationChanged;
             result.capture.observedRanges = validation.observedRanges;
@@ -695,6 +730,7 @@ namespace anduefker::reflection
             }
             break;
         }
+        result.capture.history = std::move(history);
         result.diagnostics.push_back("capture attempts=" + std::to_string(result.capture.attempts) +
                                      "; consistency covers observed bytes, not an atomic process snapshot");
         for (const auto &failure : result.capture.readFailureSamples)
@@ -708,7 +744,8 @@ namespace anduefker::reflection
         return result;
     }
 
-    ReflectionIR ReflectionReader::ReadAttempt()
+    ReflectionIR ReflectionReader::ReadAttempt(::anduefker::memory::CaptureValidation &validation,
+                                               ::anduefker::ir::CaptureInfo::Attempt &details)
     {
         ReflectionIR result;
         ::anduefker::memory::CaptureObservationScope observe(memory_);
@@ -717,9 +754,21 @@ namespace anduefker::reflection
             result.status = ParseStatus::Failed;
             ++result.stats.failures;
             result.diagnostics.push_back("reflection object store initialization failed");
+            details.reason = "object-store-initialization-failed";
             return result;
         }
         result.stats.objectSlots = objects_.Count();
+        details.initialCount = objects_.Count();
+        constexpr int32_t maxObjectSlots = 2 * 1024 * 1024;
+        constexpr int32_t maxAdditionalSlots = 65536;
+        constexpr uint32_t maxTailRounds = 3;
+        if (objects_.Count() > maxObjectSlots)
+        {
+            result.stats.unvisitedObjects = objects_.Count();
+            ++result.stats.failures;
+            details.reason = "initial-object-slot-budget-exceeded";
+            return result;
+        }
 
         constexpr int32_t maxObjectSamplesPerReason = 8;
         const auto recordObjectDiagnostic = [&](int32_t count, const auto &message)
@@ -741,6 +790,7 @@ namespace anduefker::reflection
         std::unordered_set<uintptr_t> seenTypes;
         std::unordered_map<uintptr_t, std::optional<::anduefker::ue::DefinitionKind>> classKinds;
         std::unordered_map<std::string, size_t> failureReasons;
+        auto lastProgress = std::chrono::steady_clock::now();
         const auto recordFailure = [&](const std::string &reason, int32_t index, uintptr_t address)
         {
             const size_t count = ++failureReasons[reason];
@@ -748,13 +798,60 @@ namespace anduefker::reflection
                 result.diagnostics.push_back("reflection object failure: reason=" + reason +
                                              " index=" + std::to_string(index) + " address=" + std::to_string(address));
         };
-        for (int32_t index = 0; index < objects_.Count(); ++index)
+        for (int32_t index = 0;; ++index)
         {
+            if (index == objects_.Count())
+            {
+                details.enumeratedCount = index;
+                if (progress_)
+                    progress_("capture: validating observed bytes; enumerated=" + std::to_string(index));
+                validation = memory_.Validate();
+                const auto boundary = objects_.RefreshObjectCount();
+                details.countAddress = boundary.countAddress;
+                details.finalCount = boundary.count;
+                if (!boundary.valid)
+                {
+                    details.reason = boundary.reason;
+                    ++result.stats.failures;
+                    break;
+                }
+                if (!validation.Stable())
+                {
+                    details.reason = "observed-bytes-changed-or-unreadable";
+                    break;
+                }
+                if (boundary.count == index)
+                {
+                    details.coverageComplete = true;
+                    break;
+                }
+                result.stats.objectSlots = boundary.count;
+                if (details.tailRounds >= maxTailRounds || boundary.count > maxObjectSlots ||
+                    boundary.count - details.initialCount > maxAdditionalSlots)
+                {
+                    result.stats.unvisitedObjects = boundary.count - index;
+                    ++result.stats.failures;
+                    details.reason = "object-tail-budget-exceeded";
+                    break;
+                }
+                ++details.tailRounds;
+                if (progress_)
+                    progress_("capture: count grew from=" + std::to_string(index) + " to=" + std::to_string(boundary.count) +
+                              "; reading tail round=" + std::to_string(details.tailRounds));
+            }
+            if (progress_ && index % 256 == 0 && std::chrono::steady_clock::now() - lastProgress >= std::chrono::seconds(1))
+            {
+                progress_("reflection visited=" + std::to_string(index) + "/" + std::to_string(objects_.Count()) +
+                          " types=" + std::to_string(result.stats.parsedTypes));
+                lastProgress = std::chrono::steady_clock::now();
+            }
             if (memory_.LimitExceeded())
             {
                 result.stats.unvisitedObjects = objects_.Count() - index;
                 ++result.stats.failures;
                 result.diagnostics.push_back("capture observation limit reached; remaining objects were not visited");
+                details.reason = "observation-budget-exceeded";
+                validation = memory_.Validate();
                 break;
             }
             const ObjectReadResult objectResult = objects_.Objects().ReadObject(index);
@@ -814,13 +911,33 @@ namespace anduefker::reflection
                 continue;
             }
             const auto kind = *classification->second;
+            if (index >= details.initialCount)
+            {
+                const auto tailIndex = objects_.InternalIndex(object);
+                const auto tailFlags = objects_.Flags(object);
+                const auto internalFlags = objects_.Objects().ReadInternalFlags(objectResult);
+                if (!tailIndex || *tailIndex != index || !tailFlags ||
+                    !internalFlags || (*internalFlags & 0x80000000u) != 0 || // PendingConstruction in supported layouts.
+                    (*tailFlags & ::anduefker::ue::kRFUnavailableDefinition) != 0 ||
+                    objects_.InternalIndex(object, true) != tailIndex || objects_.Class(object, true) != classAddress ||
+                    objects_.Objects().ReadObject(index, true).address != object)
+                {
+                    ++result.stats.failures;
+                    ++result.stats.skippedIncompleteObjects;
+                    recordFailure("new-object-not-ready-or-identity-changed", index, object);
+                    memory_.Invalidate();
+                    continue;
+                }
+            }
             if (kind == ::anduefker::ue::DefinitionKind::Other)
                 continue;
             ::anduefker::memory::CaptureObservationScope observe(memory_);
-            const auto verifiedObject = objects_.Objects().ReadObject(index);
-            const auto internalIndex = objects_.InternalIndex(object);
-            const auto verifiedClass = objects_.Class(object);
+            const auto verifiedObject = objects_.Objects().ReadObject(index, true);
+            const auto observedIndex = objects_.InternalIndex(object);
+            const auto internalIndex = objects_.InternalIndex(object, true);
+            const auto verifiedClass = objects_.Class(object, true);
             if (!verifiedObject.IsValid() || verifiedObject.address != object || !internalIndex || *internalIndex != index ||
+                observedIndex != internalIndex ||
                 !verifiedClass || *verifiedClass != *classAddress)
             {
                 ++result.stats.failures;
@@ -861,6 +978,8 @@ namespace anduefker::reflection
             {
                 result.enums.push_back(ReadEnum(object, result.stats));
                 ++result.stats.parsedEnums;
+                if (index >= details.initialCount)
+                    ++details.additionalEnums;
                 continue;
             }
             if (!seenTypes.insert(object).second)
@@ -875,7 +994,15 @@ namespace anduefker::reflection
             }
             result.types.push_back(*type);
             ++result.stats.parsedTypes;
+            if (index >= details.initialCount)
+                ++details.additionalTypes;
         }
+        if (!details.coverageComplete && details.reason.empty())
+            details.reason = "enumeration-coverage-incomplete";
+        result.diagnostics.push_back("object enumeration: initial_count=" + std::to_string(details.initialCount) +
+                                     " enumerated_count=" + std::to_string(details.enumeratedCount) +
+                                     " final_count=" + std::to_string(details.finalCount) +
+                                     " tail_rounds=" + std::to_string(details.tailRounds) + " reason=" + details.reason);
 
         if (result.stats.objectDiagnosticSamplesOmitted != 0)
             result.diagnostics.push_back("object diagnostic samples omitted=" +

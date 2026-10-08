@@ -1,6 +1,6 @@
 #pragma once
 
-#include <unordered_map>
+#include <map>
 #include <vector>
 
 #include "anduefker/memory/MemorySource.hpp"
@@ -9,6 +9,14 @@ namespace anduefker::memory
 {
     struct CaptureValidation
     {
+        struct Change
+        {
+            uintptr_t address = 0;
+            size_t size = 0;
+            ReadResult read;
+            std::vector<uint8_t> before;
+            std::vector<uint8_t> after;
+        };
         size_t observedRanges = 0;
         size_t observedBytes = 0;
         size_t changedRanges = 0;
@@ -16,6 +24,7 @@ namespace anduefker::memory
         bool limitExceeded = false;
         bool generationChanged = false;
         std::vector<uintptr_t> failedAddresses;
+        std::vector<Change> changes;
         size_t readFailures = 0;
         std::vector<ReadResult> readFailureSamples;
 
@@ -35,6 +44,11 @@ namespace anduefker::memory
         void Observe(bool enabled) const { observing_ = enabled; }
         [[nodiscard]] bool IsObserving() const { return observing_; }
         [[nodiscard]] bool LimitExceeded() const { return limitExceeded_; }
+        void CopyReadFailures(CaptureValidation &validation) const
+        {
+            validation.readFailures = readFailures_;
+            validation.readFailureSamples = readFailureSamples_;
+        }
         void Invalidate() const { changedDuringRead_ = true; }
         [[nodiscard]] CaptureValidation Validate() const;
         [[nodiscard]] bool IsInitialized() const override { return source_.IsInitialized(); }
@@ -46,7 +60,14 @@ namespace anduefker::memory
         [[nodiscard]] ReadResult ReadBytes(uintptr_t address, void *buffer, size_t size) const override;
         [[nodiscard]] ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const override
         {
-            return source_.ReadFreshBytes(address, buffer, size);
+            const auto read = source_.ReadFreshBytes(address, buffer, size);
+            if (!read.Ok())
+            {
+                ++readFailures_;
+                if (readFailureSamples_.size() < 16)
+                    readFailureSamples_.push_back(read);
+            }
+            return read;
         }
         [[nodiscard]] const ReadStats &Stats() const override { return source_.Stats(); }
 
@@ -56,11 +77,12 @@ namespace anduefker::memory
         static constexpr size_t kMaxReadSize = 2048;
 
         IMemorySource &source_;
-        mutable std::unordered_map<uintptr_t, std::vector<uint8_t>> observations_;
+        mutable std::map<uintptr_t, std::vector<uint8_t>> observations_;
         mutable size_t observedBytes_ = 0;
         mutable bool observing_ = false;
         mutable bool limitExceeded_ = false;
         mutable bool changedDuringRead_ = false;
+        mutable std::vector<CaptureValidation::Change> changesDuringRead_;
         mutable uint64_t generation_ = 0;
         mutable size_t readFailures_ = 0;
         mutable std::vector<ReadResult> readFailureSamples_;

@@ -15,12 +15,13 @@ namespace anduefker::analyzer
 
 	const uint8_t *CodeWindow::At(uint64_t Addr, size_t NeedBytes)
 	{
-		if (NeedBytes == 0)
+		if (!Memory_ || NeedBytes == 0 || Addr > UINTPTR_MAX || NeedBytes > UINTPTR_MAX - Addr)
 			return nullptr;
 
 		// Fast path: already buffered. This is the common case by a wide margin -
 		// a sequential decode walks the buffer and only refills once per chunk.
-		if (Valid_ && Addr >= BufferStart_ && Addr + NeedBytes <= BufferStart_ + Valid_)
+		if (Valid_ && Addr >= BufferStart_ && Addr - BufferStart_ <= Valid_ &&
+			NeedBytes <= Valid_ - static_cast<size_t>(Addr - BufferStart_))
 			return Buffer_.data() + (Addr - BufferStart_);
 
 		if (!Refill(Addr, NeedBytes))
@@ -64,10 +65,11 @@ namespace anduefker::analyzer
 			size_t Size = Want;
 			while (Size >= Least)
 			{
-				if (Memory_->ReadBytes(static_cast<uintptr_t>(Base), Buffer_.data(), Size))
+				const size_t Received = Memory_->ReadBytes(static_cast<uintptr_t>(Base), Buffer_.data(), Size);
+				if (Received >= Least && Received <= Size)
 				{
 					BufferStart_ = Base;
-					Valid_ = Size;
+					Valid_ = Received;
 					return true;
 				}
 				if (Size == Least)

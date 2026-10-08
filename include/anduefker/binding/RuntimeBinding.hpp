@@ -40,9 +40,19 @@ namespace anduefker::binding
         int32_t itemObjectOffset = -1;
         int32_t itemStride = -1;
         int32_t itemIndexOffset = -1;
+        bool packedPointers = false;
 
         [[nodiscard]] bool IsValid() const;
     };
+
+    // UE 5.5/5.6 packed FUObjectItem: ObjectPtrLow followed by Flags (low 14 bits carry the pointer high part).
+    [[nodiscard]] inline uintptr_t UnpackObjectItemPointer(uintptr_t value, bool packed)
+    {
+        if (!packed)
+            return value;
+        const uint64_t raw = static_cast<uint64_t>(value);
+        return static_cast<uintptr_t>(((raw >> 32) & 0x3FFFu) << 35 | (raw & UINT32_MAX) << 3);
+    }
 
     enum class NameContainerKind
     {

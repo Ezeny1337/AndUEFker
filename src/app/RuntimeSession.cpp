@@ -98,15 +98,22 @@ namespace anduefker::app
 
     void RuntimeSession::Note(RuntimeLogLevel level, std::string message)
     {
+        const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_).count();
+        message = "[" + std::to_string(elapsedMs) + "] " + message;
         logEntries_.push_back({level, message});
+        if (liveLog_.is_open())
+        {
+            liveLog_ << '[' << LevelName(level) << "] " << message << '\n';
+            if (level != RuntimeLogLevel::Debug)
+                liveLog_.flush();
+            if (!liveLog_.good())
+                liveLogFailed_ = true;
+        }
 
-        // 非 debug 消息立即输出到控制台。
+        // 非 debug 消息立即输出到控制台
         if (level != RuntimeLogLevel::Debug)
         {
-            const char *levelName = level == RuntimeLogLevel::Error     ? "ERROR"
-                                    : level == RuntimeLogLevel::Warning ? "WARN"
-                                                                        : "INFO";
-            std::printf("[%s] %s\n", levelName, message.c_str());
+            std::printf("[%s] %s\n", LevelName(level), message.c_str());
             std::fflush(stdout);
         }
     }
@@ -137,6 +144,7 @@ namespace anduefker::app
     RuntimeSessionStatus RuntimeSession::Run()
     {
         RuntimeSessionStatus status = RuntimeSessionStatus::Failed;
+        bool diagnosticsWritten = false;
         try
         {
             status = RunImpl();
@@ -164,7 +172,14 @@ namespace anduefker::app
         }
         try
         {
-            if (!FlushDiagnostics())
+            if (liveLog_.is_open())
+            {
+                liveLog_.flush();
+                liveLog_.close();
+                liveLogFailed_ = liveLogFailed_ || liveLog_.fail();
+            }
+            diagnosticsWritten = FlushDiagnostics();
+            if (!diagnosticsWritten)
             {
                 std::fprintf(stderr, "Runtime log write or close failed\n");
                 status = RuntimeSessionStatus::Failed;
@@ -175,6 +190,9 @@ namespace anduefker::app
             std::fprintf(stderr, "Runtime log could not be flushed\n");
             status = RuntimeSessionStatus::Failed;
         }
+        if (liveLogFailed_)
+            std::fprintf(stderr, "Live runtime log write failed; final diagnostics rewrite %s\n",
+                         diagnosticsWritten ? "succeeded" : "failed");
         return status;
     }
 
@@ -185,6 +203,34 @@ namespace anduefker::app
         reflection_ = {};
         artifacts_ = {};
         context_ = RuntimeContext(memory_);
+        started_ = std::chrono::steady_clock::now();
+        liveLogFailed_ = false;
+        liveLog_.clear();
+        if (!config_.outputRoot.empty())
+        {
+            std::error_code error;
+            std::filesystem::create_directories(config_.outputRoot, error);
+            if (!error)
+                liveLog_.open(LogPath(), std::ios::out | std::ios::trunc);
+            liveLogFailed_ = error || !liveLog_.is_open();
+        }
+        const auto progress = [&](const std::string &message)
+        { Note(message); };
+        auto stageStart = std::chrono::steady_clock::now();
+        auto stageStats = memory_->Stats();
+        const auto finishStage = [&](const char *stage)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            const auto stats = memory_->Stats();
+            Note("stage=" + std::string(stage) + " elapsed_ms=" +
+                 std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - stageStart).count()) +
+                 " operations=" + std::to_string(stats.operations - stageStats.operations) +
+                 " requested_bytes=" + std::to_string(stats.requestedBytes - stageStats.requestedBytes) +
+                 " transferred_bytes=" + std::to_string(stats.transferredBytes - stageStats.transferredBytes) +
+                 " failures=" + std::to_string(stats.failures - stageStats.failures));
+            stageStart = now;
+            stageStats = stats;
+        };
         Note("=== Runtime Session Started ===");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
@@ -202,6 +248,7 @@ namespace anduefker::app
             Note(RuntimeLogLevel::Error, failures_.back());
             return RuntimeSessionStatus::Failed;
         }
+        stageStats = memory_->Stats();
 
         ModuleImage module;
         if (!ModuleCatalog::Discover(*memory_, config_.moduleNames, module))
@@ -215,10 +262,12 @@ namespace anduefker::app
              " architecture=" + ModuleArchitectureName(context_.Module().architecture) +
              " pointer_width=" + std::to_string(context_.Module().pointerWidth));
 
+        finishStage("module-discovery");
         GlobalLocator locator(*memory_, context_.Module());
         const BindingCandidates candidates = locator.Locate(
             {"GUObjectArray", "GObjects", "ObjObjects"},
-            {"GNameBlocksDebug", "GFNameTableForDebuggerVisualizers_MT", "NamePoolData"});
+            {"GNameBlocksDebug", "GFNameTableForDebuggerVisualizers_MT", "NamePoolData"}, progress);
+        finishStage("global-locator");
         Note(RuntimeLogLevel::Debug, "Object candidates=" + std::to_string(candidates.objectRoots.size()));
         Note(RuntimeLogLevel::Debug, "Name candidates=" + std::to_string(candidates.nameRoots.size()));
         for (size_t index = 0; index < candidates.objectRoots.size(); ++index)
@@ -237,7 +286,8 @@ namespace anduefker::app
         }
 
         BindingBuilder builder(*memory_);
-        const auto binding = builder.Build(candidates);
+        const auto binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), progress);
+        finishStage("binding");
         if (!binding)
         {
             failures_.push_back("runtime binding failed; static symbol candidates were insufficient");
@@ -274,6 +324,7 @@ namespace anduefker::app
             schemaSelection.candidates.reserve(profiles.size());
             for (const EngineProfile &profile : profiles)
             {
+                Note("schema: probing profile=" + profile.id);
                 EngineSchema candidateSchema;
                 SchemaResolver resolver(*memory_, context_.Binding(), profile, {},
                                         context_.Module().base, context_.Module().end, schemaBootstrap);
@@ -339,6 +390,7 @@ namespace anduefker::app
             }
         }
 
+        finishStage("schema-resolution");
         const bool schemaAccepted = schemaSelection.accepted;
         if (schemaAccepted)
         {
@@ -444,11 +496,13 @@ namespace anduefker::app
         RuntimeBinding updatedBinding = context_.Binding();
         updatedBinding.commonObjects = std::move(commonObjects);
         context_.CommitBinding(std::move(updatedBinding));
+        finishStage("common-objects");
 
         const ReadStats beforeReflection = memory_->Stats();
         ReflectionReader reader(*memory_, context_.Binding(), context_.Schema(),
-                                context_.Module().base, context_.Module().end);
+                                context_.Module().base, context_.Module().end, progress);
         reflection_ = reader.Read();
+        finishStage("reflection");
         const ReadStats afterReflection = memory_->Stats();
         Note(RuntimeLogLevel::Debug, "memory stats stage=reflection operations=" + std::to_string(afterReflection.operations - beforeReflection.operations) +
                                          " requested_bytes=" + std::to_string(afterReflection.requestedBytes - beforeReflection.requestedBytes) +
@@ -501,6 +555,7 @@ namespace anduefker::app
         {
             ArtifactWriter writer(context_, reflection_, config_.outputRoot, config_.packageName);
             artifacts_ = writer.Write();
+            finishStage("artifact-generation");
             for (const auto &diagnostic : artifacts_.generationDiagnostics)
                 Note(RuntimeLogLevel::Debug, diagnostic);
             if (artifacts_.status == ParseStatus::Failed)

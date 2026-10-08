@@ -10,7 +10,7 @@
 
 [中文文档](README_zh.md)
 
-AndUEFker discovers Unreal Engine runtime structures from a live Android process, validates the discovered object and name stores, resolves the engine reflection schema, and generates a compact C++ SDK together with machine-readable diagnostics.
+AndUEFker discovers Unreal Engine runtime structures from a live Android process, validates the object and name stores, resolves the reflection schema, and generates C++ descriptions and machine-readable reflection metadata for developers and reverse engineering tools.
 
 Rather than relying on a single hardcoded layout, it combines binary analysis, runtime probing, cross-validation, and reflection data to establish verified runtime bindings prior to reading the object graph.
 
@@ -25,6 +25,8 @@ Build the tool with the ABI matching the target process: use the `arm64-v8a` bin
 - **Common class addresses** — records useful `UClass` objects such as `World`, `Engine`, `GameInstance`, and `PlayerController`.
 - **Reproducible artifacts** — writes generated headers, JSON metadata, diagnostics, and runtime binding details as one artifact directory.
 - **Fail-closed validation** — invalid candidates and inconsistent layouts are rejected rather than silently treated as valid.
+- **Bounded capture** — rechecks consumed bytes and covers object-array growth through limited tail enumeration.
+- **Progress and timing** — records elapsed time and memory counters per stage, with throttled instruction and reflection progress.
 
 ## Pipeline
 
@@ -46,9 +48,11 @@ The runtime session follows these stages:
 1. Attach to the target process and discover the Unreal module.
 2. Analyze the module and collect candidate object/name roots.
 3. Validate object container and name store layouts.
-4. Resolve the engine reflection schema from live objects.
+4. Probe engine schema profiles and validate the runtime reflection layout.
 5. Collect selected common `UClass` object addresses.
-6. Read reflection data and generate the SDK artifact.
+6. Read and validate reflection data, analyze layouts, and generate the SDK artifact.
+
+Schema profiles cover UE 4.23–4.27 and 5.0–5.6 layout families. Selection records the validated runtime layout, compatible profiles, and engine-version confidence.
 
 ## Build
 
@@ -159,16 +163,18 @@ The output directory also receives the session log:
 
 | File | Purpose |
 | --- | --- |
-| `BasicTypes.hpp` | Generated SDK primitives and container helpers. |
-| `Types.hpp` | Reflected Unreal classes and structs with forward declarations and layout information. |
+| `BasicTypes.hpp` | Generated SDK primitives and container descriptions. |
+| `Types.hpp` | Reflected Unreal classes and structs with identities and target layout information. |
 | `Enums.hpp` | Reflected enum declarations and values. |
-| `Functions.hpp` | Reflected function declarations and callable metadata. |
+| `Functions.hpp` | Native function addresses and reflected parameter layouts. |
 | `reflection.json` | Detailed reflection IR, including properties, functions, enums, inheritance, and addresses. |
 | `manifest.json` | Artifact status and parsing statistics. |
 | `diagnostics.json` | Reflection diagnostics, conflicts, and failure counters. |
 | `runtime.json` | Runtime module, binding layout, schema offsets, and common object addresses. |
 
-The generated headers use the `AndUE` namespace.
+The generated headers use the `AndUE` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
+
+JSON schema versions are `4` for `reflection.json` and `3` for the other JSON files.
 
 ## Common object addresses
 
@@ -207,7 +213,11 @@ The generated `manifest.json` reports one of the following artifact states:
 
 The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
 
-`manifest.json` records `reflection_status` and `sdk_status` separately. Opaque containers are intentional descriptions of known fields whose internal implementation is not expanded; they do not by themselves make the SDK description partial. Omitted fields and description layout warnings do. Capture consistency covers only observed and rechecked bytes, with at most one retry; `capture.atomic_snapshot` is always `false`.
+`manifest.json` records `reflection_status` and `sdk_status` separately. Opaque containers are intentional descriptions of known fields whose internal implementation is not expanded; they do not by themselves make the SDK description partial. Omitted fields and description layout warnings do.
+
+Capture validates observed bytes and enumeration coverage, with bounded tail reads for chunked object-array growth and at most one full retry. Data changes, unreadable ranges, or exhausted budgets can make reflection partial. `capture.atomic_snapshot` is always `false`; `capture.attempt_history` records each attempt's counts, changes, and failure reasons.
+
+`AndUEFker.log` is written during the session and includes stage progress, elapsed time, and memory read statistics.
 
 ## Issues
 

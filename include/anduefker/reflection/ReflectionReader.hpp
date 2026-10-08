@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <unordered_set>
 
 #include "anduefker/ir/ReflectionIR.hpp"
@@ -45,7 +46,8 @@ namespace anduefker::reflection
                          const RuntimeBinding &binding,
                          const EngineSchema &schema,
                          uintptr_t moduleBase,
-                         uintptr_t moduleEnd);
+                         uintptr_t moduleEnd,
+                         std::function<void(const std::string &)> progress = {});
 
         [[nodiscard]] ReflectionIR Read();
 
@@ -68,7 +70,8 @@ namespace anduefker::reflection
         void ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const;
         void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
         [[nodiscard]] std::optional<TypeIR> ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const;
-        [[nodiscard]] ReflectionIR ReadAttempt();
+        [[nodiscard]] ReflectionIR ReadAttempt(::anduefker::memory::CaptureValidation &validation,
+                                               ::anduefker::ir::CaptureInfo::Attempt &details);
         [[nodiscard]] EnumIR ReadEnum(uintptr_t object, ReflectionStats &stats) const;
 
         ::anduefker::memory::CaptureMemorySource memory_;
@@ -76,5 +79,6 @@ namespace anduefker::reflection
         uintptr_t moduleBase_ = 0;
         uintptr_t moduleEnd_ = 0;
         ObjectModelReader objects_;
+        std::function<void(const std::string &)> progress_;
     };
 } // namespace anduefker::reflection

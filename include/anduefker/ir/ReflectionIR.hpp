@@ -330,6 +330,41 @@ namespace anduefker::ir
         };
         size_t readFailures = 0;
         std::vector<ReadFailure> readFailureSamples;
+        struct Change
+        {
+            uintptr_t address = 0;
+            size_t size = 0;
+            int32_t readError = 0;
+            size_t transferred = 0;
+            std::vector<uint8_t> before;
+            std::vector<uint8_t> after;
+        };
+        struct Attempt
+        {
+            uint32_t number = 0;
+            uint64_t elapsedMs = 0;
+            size_t observedRanges = 0;
+            size_t changedRanges = 0;
+            size_t unreadableRanges = 0;
+            bool limitExceeded = false;
+            bool generationChanged = false;
+            size_t readFailures = 0;
+            std::vector<ReadFailure> readFailureSamples;
+            int32_t failures = 0;
+            int32_t identityFailures = 0;
+            std::vector<std::string> diagnostics;
+            int32_t initialCount = 0;
+            int32_t enumeratedCount = 0;
+            int32_t finalCount = -1;
+            uint32_t tailRounds = 0;
+            int32_t additionalTypes = 0;
+            int32_t additionalEnums = 0;
+            uintptr_t countAddress = 0;
+            bool coverageComplete = false;
+            std::string reason;
+            std::vector<Change> changes;
+        };
+        std::vector<Attempt> history;
     };
 
     struct ReflectionIR

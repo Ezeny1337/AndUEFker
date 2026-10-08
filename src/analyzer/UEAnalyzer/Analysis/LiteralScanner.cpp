@@ -131,12 +131,13 @@ namespace anduefker::analyzer
 			{
 				const size_t Want = std::min<size_t>(kChunkBytes, static_cast<size_t>(SubEnd - Cursor));
 				Buffer.resize(Want);
-				if (!Memory->ReadBytes(Cursor, Buffer.data(), Want))
+				const size_t Received = Memory->ReadBytes(Cursor, Buffer.data(), Want);
+				if (Received == 0 || Received > Want)
 					break; // readable content ended early; the rest of this range is not ours
 
-				const bool bLast = Want <= Overlap || (Cursor + Want) >= SubEnd;
-				const size_t Advance = bLast ? Want : Want - Overlap;
-				MatchChunk(Buffer.data(), Want, bLast ? Want : Advance, static_cast<uint64_t>(Cursor), FoundPerNeedle, Out);
+				const bool bLast = Received < Want || Received <= Overlap || Received == SubEnd - Cursor;
+				const size_t Advance = bLast ? Received : Received - Overlap;
+				MatchChunk(Buffer.data(), Received, Advance, static_cast<uint64_t>(Cursor), FoundPerNeedle, Out);
 
 				if (bLast)
 					break;

@@ -19,7 +19,8 @@ namespace anduefker::binding
         GlobalLocator(RemoteMemorySource &memory, const ModuleImage &module) : memory_(memory), module_(module) {}
 
         [[nodiscard]] BindingCandidates Locate(const std::vector<std::string> &objectSymbols,
-                                               const std::vector<std::string> &nameSymbols) const;
+                                               const std::vector<std::string> &nameSymbols,
+                                               const std::function<void(const std::string &)> &progress = {}) const;
 
     private:
         [[nodiscard]] std::vector<LocatedAddress> SymbolCandidates(const std::string &symbol) const;

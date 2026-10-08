@@ -1,6 +1,7 @@
 #include "GlobalAccessHarvester.h"
 
 #include <vector>
+#include <chrono>
 
 #include "../../Architecture/IArchDecoder.h"
 #include "../../Memory/IMemory.h"
@@ -183,9 +184,15 @@ namespace anduefker::analyzer
 		NormalizedInsn Insn;
 		size_t Cursor = 0;
 		uint64_t Index = 0;
+		auto LastProgress = std::chrono::steady_clock::now();
 
 		while (Cursor + 4 <= Total)
 		{
+			if (Options.Progress && Index % 65536 == 0 && std::chrono::steady_clock::now() - LastProgress >= std::chrono::seconds(1))
+			{
+				Options.Progress("analyzer: instruction bytes=" + std::to_string(Cursor) + "/" + std::to_string(Total));
+				LastProgress = std::chrono::steady_clock::now();
+			}
 			const uint64_t Addr = Start + Cursor;
 
 			// A failed window read means the readable bytes ended here - the end of a
@@ -264,7 +271,7 @@ namespace anduefker::analyzer
 				if (Dest >= 0)
 				{
 					uintptr_t Word = 0;
-					if (Memory->ReadBytes(static_cast<uintptr_t>(Insn.Value), &Word, sizeof(Word)))
+					if (Memory->ReadBytes(static_cast<uintptr_t>(Insn.Value), &Word, sizeof(Word)) == sizeof(Word))
 					{
 						Regs[Dest].Value = static_cast<uint64_t>(Word);
 						Regs[Dest].bKnown = true;

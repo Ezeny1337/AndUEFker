@@ -163,11 +163,14 @@ namespace anduefker::binding
             const auto objectSlot = Add(item, static_cast<uintptr_t>(layout.itemObjectOffset));
             if (!objectSlot || !ReadPointer(memory_, *objectSlot, rawObject))
                 return;
-            const uintptr_t object = decode.objectPointer(rawObject, *objectSlot);
+            const uintptr_t object = decode.objectPointer(UnpackObjectItemPointer(rawObject, layout.packedPointers), *objectSlot);
 
             // 允许存在空槽，这不违背容器的布局规则
             if (object == 0)
+            {
+                ++report.empty;
                 return;
+            }
             if (!IsLikelyObject(object))
                 return;
 
@@ -187,10 +190,13 @@ namespace anduefker::binding
         for (int32_t index = 0; index < count && report.tested < maxSamples; index += stride)
             validateIndex(index);
 
-        report.confidence = report.tested > 0 ? static_cast<double>(report.valid) / report.tested : 0.0;
+        const int32_t nonEmpty = report.tested - report.empty;
+        report.confidence = nonEmpty > 0 ? static_cast<double>(report.valid) / nonEmpty : 0.0;
         report.accepted = report.valid >= 5 && report.confidence >= 0.80;
         report.evidence.push_back("empty object slots were treated as holes, not layout failures");
         report.evidence.push_back("validated non-empty slots through UObject internal index");
+        report.evidence.push_back("object probe empty=" + std::to_string(report.empty) +
+                                  " failed=" + std::to_string(nonEmpty - report.valid));
         if (!report.accepted)
             report.failures.push_back("insufficient self-consistent UObject samples");
         return report;
@@ -237,22 +243,22 @@ namespace anduefker::binding
         if (layout.kind == NameContainerKind::Array)
         {
             uint32_t rawIndex = 0;
-            const uintptr_t indexAddress = entry + static_cast<uintptr_t>(layout.array.entryIndexOffset);
-            const uintptr_t stringAddress = entry + static_cast<uintptr_t>(layout.array.entryStringOffset);
-            if (!memory_.Read(indexAddress, rawIndex))
+            const auto indexAddress = Add(entry, static_cast<uintptr_t>(layout.array.entryIndexOffset));
+            const auto stringAddress = Add(entry, static_cast<uintptr_t>(layout.array.entryStringOffset));
+            if (!indexAddress || !stringAddress || !memory_.Read(*indexAddress, rawIndex))
                 return false;
-            const uint32_t index = decode.nameEntryIndex(rawIndex, indexAddress);
-            return ReadString(stringAddress, 4, (index & 1u) != 0, out);
+            const uint32_t index = decode.nameEntryIndex(rawIndex, *indexAddress);
+            return ReadString(*stringAddress, 4, (index & 1u) != 0, out);
         }
 
-        const uintptr_t headerAddress = entry + static_cast<uintptr_t>(layout.pool.entryHeaderOffset);
-        const uintptr_t stringAddress = entry + static_cast<uintptr_t>(layout.pool.entryStringOffset);
-        if (!memory_.Read(headerAddress, rawHeader))
+        const auto headerAddress = Add(entry, static_cast<uintptr_t>(layout.pool.entryHeaderOffset));
+        const auto stringAddress = Add(entry, static_cast<uintptr_t>(layout.pool.entryStringOffset));
+        if (!headerAddress || !stringAddress || !memory_.Read(*headerAddress, rawHeader))
             return false;
-        const uint16_t header = decode.nameHeader(rawHeader, headerAddress);
+        const uint16_t header = decode.nameHeader(rawHeader, *headerAddress);
         const int32_t length = static_cast<int32_t>(header >> layout.pool.entryLengthShift);
         const bool wide = (header & layout.pool.entryWideMask) != 0;
-        return ReadString(stringAddress, length, wide, out);
+        return ReadString(*stringAddress, length, wide, out);
     }
 
     LayoutProbeReport NameLayoutProbe::Validate(uintptr_t root,
@@ -269,14 +275,14 @@ namespace anduefker::binding
         uintptr_t entry0 = 0;
         if (layout.kind == NameContainerKind::Array)
         {
-            const uintptr_t chunks = root + static_cast<uintptr_t>(layout.array.chunksOffset);
+            const auto chunks = Add(root, static_cast<uintptr_t>(layout.array.chunksOffset));
             uintptr_t rawChunk = 0;
-            if (!memory_.Read(chunks, rawChunk))
+            if (!chunks || !memory_.Read(*chunks, rawChunk))
             {
                 report.failures.push_back("name array chunk table is unreadable");
                 return report;
             }
-            const uintptr_t chunk = decode.nameChunks(rawChunk, chunks);
+            const uintptr_t chunk = decode.nameChunks(rawChunk, *chunks);
             if (!memory_.Read(chunk, entry0))
             {
                 report.failures.push_back("name array entry zero is unreadable");
@@ -286,14 +292,14 @@ namespace anduefker::binding
         }
         else
         {
-            const uintptr_t blocks = root + static_cast<uintptr_t>(layout.pool.blocksOffset);
+            const auto blocks = Add(root, static_cast<uintptr_t>(layout.pool.blocksOffset));
             uintptr_t rawBlock = 0;
-            if (!memory_.Read(blocks, rawBlock))
+            if (!blocks || !memory_.Read(*blocks, rawBlock))
             {
                 report.failures.push_back("name pool block table is unreadable");
                 return report;
             }
-            const uintptr_t block = decode.nameBlocks(rawBlock, blocks);
+            const uintptr_t block = decode.nameBlocks(rawBlock, *blocks);
             entry0 = decode.nameEntry(block, block);
         }
 
@@ -309,6 +315,55 @@ namespace anduefker::binding
         report.confidence = 1.0;
         report.accepted = true;
         report.evidence.push_back("name entry zero decoded to None");
+        if (layout.kind == NameContainerKind::Pool)
+        {
+            uintptr_t entry = entry0;
+            size_t consumed = 0;
+            int knownNames = 0;
+            const size_t blockSize = (size_t{1} << layout.pool.blocksBit) * static_cast<size_t>(layout.pool.entryStride);
+            constexpr std::array<const char *, 8> known = {"None", "ByteProperty", "IntProperty", "BoolProperty",
+                                                           "FloatProperty", "ObjectProperty", "NameProperty", "DelegateProperty"};
+            report.accepted = false;
+            report.tested = 0;
+            report.valid = 0;
+            for (int sample = 0; sample < 16; ++sample)
+            {
+                ++report.tested;
+                const auto headerAddress = Add(entry, static_cast<uintptr_t>(layout.pool.entryHeaderOffset));
+                uint16_t header = 0;
+                if (!headerAddress || !memory_.Read(*headerAddress, header))
+                    break;
+                header = decode.nameHeader(header, *headerAddress);
+                const size_t length = header >> layout.pool.entryLengthShift;
+                const size_t width = (header & layout.pool.entryWideMask) != 0 ? 2 : 1;
+                if (length == 0 || length > 1024)
+                    break;
+                const size_t extent = static_cast<size_t>(layout.pool.entryStringOffset) + length * width;
+                const size_t stride = static_cast<size_t>(layout.pool.entryStride);
+                const size_t advance = (extent + stride - 1) / stride * stride;
+                if (consumed > blockSize || advance > blockSize - consumed)
+                    break;
+                std::string text;
+                if (!ReadEntry(entry, layout, decode, text) || text.empty() ||
+                    !std::all_of(text.begin(), text.end(), [](unsigned char c)
+                                 { return c >= 0x20 && c <= 0x7E; }))
+                    break;
+                ++report.valid;
+                knownNames += std::find(known.begin(), known.end(), text) != known.end() ? 1 : 0;
+                const auto next = Add(entry, advance);
+                if (!next)
+                    break;
+                entry = decode.nameEntry(*next, *next);
+                consumed += advance;
+            }
+            report.confidence = report.tested > 0 ? static_cast<double>(report.valid) / report.tested : 0;
+            report.accepted = report.valid >= 8 && knownNames >= 3 && report.confidence == 1.0;
+            report.evidence.push_back("name pool sequential entries=" + std::to_string(report.valid) +
+                                      " known_names=" + std::to_string(knownNames) +
+                                      " stride=" + std::to_string(layout.pool.entryStride));
+            if (!report.accepted)
+                report.failures.push_back("name pool stride/header failed sequential name validation");
+        }
         return report;
     }
 } // namespace anduefker::binding

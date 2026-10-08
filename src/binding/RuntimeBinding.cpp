@@ -4,7 +4,10 @@ namespace anduefker::binding
 {
     bool ObjectContainerLayout::IsValid() const
     {
-        if (objectsOffset < 0 || numElementsOffset < 0 || itemObjectOffset < 0 || itemStride <= 0 || itemIndexOffset < 0)
+        if (packedPointers && sizeof(uintptr_t) != 8)
+            return false;
+        if (objectsOffset < 0 || numElementsOffset < 0 || itemObjectOffset < 0 || itemStride <= 0 || itemIndexOffset < 0 ||
+            itemObjectOffset > itemStride || sizeof(uintptr_t) > static_cast<size_t>(itemStride - itemObjectOffset))
             return false;
         if (kind == ObjectContainerKind::Chunked)
             return elementsPerChunk > 0;
@@ -18,8 +21,9 @@ namespace anduefker::binding
 
     bool NamePoolLayout::IsValid() const
     {
-        return blocksOffset >= 0 && blocksBit >= 1 && blocksBit < 31 && entryStride > 0 &&
-               entryHeaderOffset >= 0 && entryStringOffset >= 0 && entryLengthShift >= 0 && entryLengthShift < 16;
+        return blocksOffset >= 0 && blocksBit >= 1 && blocksBit <= 16 && (entryStride == 2 || entryStride == 4) &&
+               entryHeaderOffset >= 0 && entryHeaderOffset <= 64 && entryStringOffset >= entryHeaderOffset + 2 &&
+               entryStringOffset <= 64 && entryLengthShift >= 0 && entryLengthShift < 16 && entryWideMask != 0;
     }
 
     bool NameContainerLayout::IsValid() const

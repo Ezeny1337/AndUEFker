@@ -23,8 +23,6 @@ namespace anduefker::binding
         [[nodiscard]] std::vector<CommonObjectInfo> Collect();
 
     private:
-        [[nodiscard]] bool IsClassObject(uintptr_t object, const std::string &expectedName) const;
-
         ObjectModelReader objects_;
     };
 } // namespace anduefker::binding

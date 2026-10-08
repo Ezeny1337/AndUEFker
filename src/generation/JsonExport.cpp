@@ -153,6 +153,13 @@ namespace anduefker::generation
             stream << "{\"address\":\"" << Hex(property.address) << "\",\"name\":\"" << EscapeJson(property.name)
                    << "\",\"class\":\"" << EscapeJson(property.reflectedClass) << "\",\"offset\":" << property.offset
                    << ",\"element_size\":" << property.elementSize << ",\"array_dim\":" << property.arrayDim
+                   << ",\"storage_size\":" << static_cast<int64_t>(property.elementSize) * property.arrayDim
+                   << ",\"offset_origin\":\"" << (property.isParameter ? "parameter-buffer" : "owner-start") << "\""
+                   << ",\"is_parameter\":" << (property.isParameter ? "true" : "false")
+                   << ",\"is_return_parameter\":" << (property.isReturnParameter ? "true" : "false")
+                   << ",\"is_out_parameter\":" << (property.isOutParameter ? "true" : "false")
+                   << ",\"is_reference_parameter\":" << (property.isReferenceParameter ? "true" : "false")
+                   << ",\"is_const_parameter\":" << (property.isConstParameter ? "true" : "false")
                    << ",\"flags\":\"" << Hex(property.flags) << "\",\"kind\":\"" << KindName(property.type.kind)
                    << "\",\"referenced_object\":\"" << Hex(property.type.referencedObject)
                    << "\",\"secondary_object\":\"" << Hex(property.type.secondaryObject)
@@ -236,7 +243,7 @@ namespace anduefker::generation
                << ",\"changed_ranges\":" << capture.changedRanges << ",\"unreadable_ranges\":" << capture.unreadableRanges
                << ",\"attempts\":" << capture.attempts
                << ",\"read_failures\":" << capture.readFailures
-               << ",\"read_failure_samples_omitted\":" << (capture.readFailures - capture.readFailureSamples.size())
+               << ",\"read_failure_samples_omitted\":" << (capture.readFailures > capture.readFailureSamples.size() ? capture.readFailures - capture.readFailureSamples.size() : 0)
                << ",\"read_failure_samples\":[";
         for (size_t index = 0; index < capture.readFailureSamples.size(); ++index)
         {
@@ -245,6 +252,59 @@ namespace anduefker::generation
             const auto &failure = capture.readFailureSamples[index];
             stream << "{\"address\":\"" << Hex(failure.address) << "\",\"read_error\":" << failure.error
                    << ",\"requested\":" << failure.requested << ",\"transferred\":" << failure.transferred << '}';
+        }
+        stream << "],\"attempt_history\":[";
+        for (size_t index = 0; index < capture.history.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const auto &attempt = capture.history[index];
+            stream << "{\"attempt\":" << attempt.number << ",\"elapsed_ms\":" << attempt.elapsedMs
+                   << ",\"observed_ranges\":" << attempt.observedRanges << ",\"changed_ranges\":" << attempt.changedRanges
+                   << ",\"unreadable_ranges\":" << attempt.unreadableRanges
+                   << ",\"limit_exceeded\":" << (attempt.limitExceeded ? "true" : "false")
+                   << ",\"generation_changed\":" << (attempt.generationChanged ? "true" : "false")
+                   << ",\"count_address\":\"" << Hex(attempt.countAddress) << "\",\"initial_count\":" << attempt.initialCount
+                   << ",\"enumerated_count\":" << attempt.enumeratedCount << ",\"final_count\":" << attempt.finalCount
+                   << ",\"count_delta\":" << (attempt.finalCount < 0 ? 0 : static_cast<int64_t>(attempt.finalCount) - attempt.initialCount)
+                   << ",\"remaining_slots\":" << (attempt.finalCount > attempt.enumeratedCount ? attempt.finalCount - attempt.enumeratedCount : 0)
+                   << ",\"tail_rounds\":" << attempt.tailRounds
+                   << ",\"additional_types\":" << attempt.additionalTypes << ",\"additional_enums\":" << attempt.additionalEnums
+                   << ",\"read_failures\":" << attempt.readFailures
+                   << ",\"failures\":" << attempt.failures << ",\"identity_failures\":" << attempt.identityFailures
+                   << ",\"coverage_complete\":" << (attempt.coverageComplete ? "true" : "false")
+                   << ",\"reason\":\"" << EscapeJson(attempt.reason) << "\",\"changes\":[";
+            for (size_t sample = 0; sample < attempt.changes.size(); ++sample)
+            {
+                if (sample != 0)
+                    stream << ',';
+                const auto &change = attempt.changes[sample];
+                stream << "{\"address\":\"" << Hex(change.address) << "\",\"size\":" << change.size
+                       << ",\"read_error\":" << change.readError << ",\"transferred\":" << change.transferred;
+                const auto bytes = [&](const char *name, const std::vector<uint8_t> &value)
+                {
+                    static constexpr char hex[] = "0123456789ABCDEF";
+                    stream << ",\"" << name << "\":\"";
+                    for (uint8_t byte : value)
+                        stream << hex[byte >> 4] << hex[byte & 15];
+                    stream << '"';
+                };
+                bytes("before_hex", change.before);
+                bytes("after_hex", change.after);
+                stream << '}';
+            }
+            stream << "],\"read_failure_samples\":[";
+            for (size_t sample = 0; sample < attempt.readFailureSamples.size(); ++sample)
+            {
+                if (sample != 0)
+                    stream << ',';
+                const auto &failure = attempt.readFailureSamples[sample];
+                stream << "{\"address\":\"" << Hex(failure.address) << "\",\"read_error\":" << failure.error
+                       << ",\"requested\":" << failure.requested << ",\"transferred\":" << failure.transferred << '}';
+            }
+            stream << "],\"diagnostics\":";
+            Strings(stream, attempt.diagnostics);
+            stream << '}';
         }
         stream << "]}";
     }
@@ -350,7 +410,7 @@ namespace anduefker::generation
 
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
     {
-        stream << "{\n\"schema_version\":3,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":4,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"}";

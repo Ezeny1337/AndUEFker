@@ -1,6 +1,7 @@
 #include "StringAnchors.h"
 
 #include <algorithm>
+#include <stdexcept>
 
 #include "../../Memory/IMemory.h"
 
@@ -31,61 +32,65 @@ namespace anduefker::analyzer
 
 	void StringAnchors::Run(const IMemory *Memory, const ModuleInfo &Module, std::span<const AnchorString> Anchors)
 	{
-		AnchorAddrs_.clear();
-		FoundNames_.clear();
-		PerAnchor_.assign(Anchors.size(), WeightedSites{});
-		for (size_t i = 0; i < Anchors.size(); ++i)
-			PerAnchor_[i].Weight = Anchors[i].Weight;
-		Hits_ = {};
+		StringAnchors *Output = this;
+		RunBatch(Memory, Module, std::span<StringAnchors *const>(&Output, 1), {Anchors});
+	}
 
-		// Cap per anchor per encoding: a short literal like "None" occurs everywhere,
-		// and only enough occurrences to correlate with code are wanted.
-		constexpr size_t kMaxHitsPerEncoding = 24;
-
-		// Every anchor, in all three encodings, queued as needles and matched in one
-		// walk of the module. Searching them one at a time meant a pass over the
-		// whole image per anchor per encoding - tolerable against a mapped file,
-		// ruinous against a live process, where each pass is the module pulled
-		// through the transport again.
-		//
-		// All three encodings are always searched: which one a build uses cannot be
-		// derived from its engine version, so it is counted here and reported by
-		// DetectedTCharWidth().
+	void StringAnchors::RunBatch(const IMemory *Memory, const ModuleInfo &Module,
+								 std::span<StringAnchors *const> Outputs, const std::vector<std::span<const AnchorString>> &Groups)
+	{
+		if (Outputs.size() != Groups.size() || std::any_of(Outputs.begin(), Outputs.end(),
+														   [](const StringAnchors *Output)
+														   { return Output == nullptr; }))
+			throw std::invalid_argument("anchor output groups are inconsistent");
 		LiteralScanner Scanner;
-		for (const AnchorString &A : Anchors)
-			Scanner.AddLiteral(A.Text, kMaxHitsPerEncoding);
-
-		std::vector<bool> AnchorFound(Anchors.size(), false);
+		std::vector<std::pair<size_t, size_t>> Owners;
+		std::vector<std::vector<bool>> Found;
+		for (size_t group = 0; group < Groups.size(); ++group)
+		{
+			auto &Output = *Outputs[group];
+			Output.AnchorAddrs_.clear();
+			Output.FoundNames_.clear();
+			Output.Hits_ = {};
+			Output.PerAnchor_.assign(Groups[group].size(), WeightedSites{});
+			Found.emplace_back(Groups[group].size(), false);
+			for (size_t item = 0; item < Groups[group].size(); ++item)
+			{
+				Output.PerAnchor_[item].Weight = Groups[group][item].Weight;
+				Scanner.AddLiteral(Groups[group][item].Text, 24);
+				Owners.emplace_back(group, item);
+			}
+		}
 		for (const LiteralScanner::Hit &H : Scanner.Scan(Memory, Module))
 		{
 			const LiteralScanner::Needle &N = Scanner.GetNeedles()[H.NeedleIndex];
-			AnchorAddrs_.push_back(H.Address);
-			if (N.OwnerIndex < AnchorFound.size())
-			{
-				AnchorFound[N.OwnerIndex] = true;
-				PerAnchor_[N.OwnerIndex].Sites.push_back(H.Address);
-			}
-
+			const auto [group, item] = Owners[N.OwnerIndex];
+			auto &Output = *Outputs[group];
+			Output.AnchorAddrs_.push_back(H.Address);
+			Found[group][item] = true;
+			Output.PerAnchor_[item].Sites.push_back(H.Address);
 			switch (N.Encoding)
 			{
 			case 1:
-				++Hits_.Narrow;
+				++Output.Hits_.Narrow;
 				break;
 			case 2:
-				++Hits_.Utf16;
+				++Output.Hits_.Utf16;
 				break;
 			default:
-				++Hits_.Utf32;
+				++Output.Hits_.Utf32;
 				break;
 			}
 		}
-
-		for (size_t i = 0; i < Anchors.size(); ++i)
-			if (AnchorFound[i])
-				FoundNames_.emplace_back(Anchors[i].Text);
-
-		std::sort(AnchorAddrs_.begin(), AnchorAddrs_.end());
-		AnchorAddrs_.erase(std::unique(AnchorAddrs_.begin(), AnchorAddrs_.end()), AnchorAddrs_.end());
+		for (size_t group = 0; group < Groups.size(); ++group)
+		{
+			auto &Output = *Outputs[group];
+			for (size_t item = 0; item < Groups[group].size(); ++item)
+				if (Found[group][item])
+					Output.FoundNames_.emplace_back(Groups[group][item].Text);
+			std::sort(Output.AnchorAddrs_.begin(), Output.AnchorAddrs_.end());
+			Output.AnchorAddrs_.erase(std::unique(Output.AnchorAddrs_.begin(), Output.AnchorAddrs_.end()), Output.AnchorAddrs_.end());
+		}
 	}
 
 	std::vector<StringAnchors::WeightedSites> StringAnchors::CollectAnchorSitesByAnchor(

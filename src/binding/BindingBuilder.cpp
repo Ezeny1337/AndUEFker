@@ -23,9 +23,11 @@ namespace anduefker::binding
                    " count_offset=" + std::to_string(layout.numElementsOffset) +
                    " max_elements_offset=" + std::to_string(layout.maxElementsOffset) +
                    " max_chunks_offset=" + std::to_string(layout.maxChunksOffset) +
+                   " num_chunks_offset=" + std::to_string(layout.numChunksOffset) +
                    " elements_per_chunk=" + std::to_string(layout.elementsPerChunk) +
                    " item_object_offset=" + std::to_string(layout.itemObjectOffset) +
                    " item_stride=" + std::to_string(layout.itemStride) +
+                   " packed_pointers=" + std::to_string(layout.packedPointers) +
                    " item_index_offset=" + std::to_string(layout.itemIndexOffset);
         }
 
@@ -42,6 +44,8 @@ namespace anduefker::binding
 
             return "kind=" + std::string(NameKindName(layout.kind)) +
                    " blocks_offset=" + std::to_string(layout.pool.blocksOffset) +
+                   " current_block_offset=" + std::to_string(layout.pool.maxChunkIndexOffset) +
+                   " byte_cursor_offset=" + std::to_string(layout.pool.byteCursorOffset) +
                    " blocks_bit=" + std::to_string(layout.pool.blocksBit) +
                    " entry_stride=" + std::to_string(layout.pool.entryStride) +
                    " entry_header_offset=" + std::to_string(layout.pool.entryHeaderOffset) +
@@ -80,7 +84,8 @@ namespace anduefker::binding
     }
 
     std::optional<RuntimeBinding> BindingBuilder::Build(const BindingCandidates &candidates,
-                                                        const DecodePlan &decode) const
+                                                        const DecodePlan &decode,
+                                                        const std::function<void(const std::string &)> &progress) const
     {
         const auto objectRoots = ResolveRoots(candidates.objectRoots);
         const auto nameRoots = ResolveRoots(candidates.nameRoots);
@@ -95,8 +100,43 @@ namespace anduefker::binding
         double bestObjectScore = -1.0;
         double bestNameScore = -1.0;
 
+        struct NameCandidates
+        {
+            uintptr_t root;
+            std::vector<std::pair<NameContainerLayout, double>> layouts;
+            std::vector<LayoutProbeReport> reports;
+        };
+        std::vector<NameCandidates> discoveredNames;
+        for (uintptr_t nameRoot : nameRoots)
+        {
+            if (progress)
+                progress("binding: probing name root=" + std::to_string(nameRoot));
+            NameCandidates group{nameRoot, nameDiscovery.Discover(nameRoot, decode), {}};
+            for (const auto &[layout, score] : group.layouts)
+            {
+                (void)score;
+                group.reports.push_back(nameProbe.Validate(nameRoot, layout, decode));
+            }
+            const size_t accepted = static_cast<size_t>(std::count_if(group.reports.begin(), group.reports.end(),
+                                                                      [](const LayoutProbeReport &report)
+                                                                      { return report.accepted; }));
+            if (accepted > 1)
+            {
+                if (progress)
+                    progress("binding: ambiguous name layout at root=" + std::to_string(nameRoot));
+                for (auto &report : group.reports)
+                {
+                    report.accepted = false;
+                    report.failures.push_back("multiple distinct name layouts passed validation");
+                }
+            }
+            discoveredNames.push_back(std::move(group));
+        }
+
         for (uintptr_t objectRoot : objectRoots)
         {
+            if (progress)
+                progress("binding: probing object root=" + std::to_string(objectRoot));
             const auto objectLayouts = objectDiscovery.Discover(objectRoot, decode);
             for (const auto &[objectLayout, objectScore] : objectLayouts)
             {
@@ -104,12 +144,14 @@ namespace anduefker::binding
                 if (!objectReport.accepted)
                     continue;
 
-                for (uintptr_t nameRoot : nameRoots)
+                for (const auto &group : discoveredNames)
                 {
-                    const auto nameLayouts = nameDiscovery.Discover(nameRoot, decode);
-                    for (const auto &[nameLayout, nameScore] : nameLayouts)
+                    const uintptr_t nameRoot = group.root;
+                    const auto &nameLayouts = group.layouts;
+                    for (size_t nameIndex = 0; nameIndex < nameLayouts.size(); ++nameIndex)
                     {
-                        const LayoutProbeReport nameReport = nameProbe.Validate(nameRoot, nameLayout, decode);
+                        const auto &[nameLayout, nameScore] = nameLayouts[nameIndex];
+                        const auto &nameReport = group.reports[nameIndex];
                         if (!nameReport.accepted)
                             continue;
 

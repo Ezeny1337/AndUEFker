@@ -181,10 +181,11 @@ namespace anduefker::ue
         [[nodiscard]] int32_t Count() const { return objects_.Count(); }
         [[nodiscard]] const ObjectStoreReader &Objects() const { return objects_; }
         [[nodiscard]] const NameStoreReader &Names() const { return names_; }
+        [[nodiscard]] ObjectStoreBoundary RefreshObjectCount() { return objects_.RefreshCount(); }
 
-        [[nodiscard]] std::optional<uintptr_t> Class(uintptr_t object) const;
+        [[nodiscard]] std::optional<uintptr_t> Class(uintptr_t object, bool fresh = false) const;
         [[nodiscard]] std::optional<uintptr_t> Outer(uintptr_t object) const;
-        [[nodiscard]] std::optional<int32_t> InternalIndex(uintptr_t object) const;
+        [[nodiscard]] std::optional<int32_t> InternalIndex(uintptr_t object, bool fresh = false) const;
         [[nodiscard]] std::optional<uint32_t> Flags(uintptr_t object) const;
         [[nodiscard]] std::optional<std::string> Name(uintptr_t object) const;
         [[nodiscard]] std::optional<std::string> ClassName(uintptr_t object) const;

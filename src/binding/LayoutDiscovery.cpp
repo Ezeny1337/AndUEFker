@@ -6,6 +6,8 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <map>
+#include <tuple>
 
 namespace anduefker::binding
 {
@@ -59,7 +61,7 @@ namespace anduefker::binding
                 if (existing.kind == layout.kind && existing.objectsOffset == layout.objectsOffset &&
                     existing.numElementsOffset == layout.numElementsOffset && existing.elementsPerChunk == layout.elementsPerChunk &&
                     existing.itemObjectOffset == layout.itemObjectOffset && existing.itemStride == layout.itemStride &&
-                    existing.itemIndexOffset == layout.itemIndexOffset)
+                    existing.itemIndexOffset == layout.itemIndexOffset && existing.packedPointers == layout.packedPointers)
                     return;
             }
             out.emplace_back(std::move(layout), confidence);
@@ -77,18 +79,20 @@ namespace anduefker::binding
 
     bool ObjectLayoutDiscovery::ReadItemObject(uintptr_t item,
                                                int32_t objectOffset,
+                                               bool packed,
                                                const DecodePlan &decode,
                                                uintptr_t &object) const
     {
         const auto slot = Add(item, static_cast<uintptr_t>(objectOffset));
         if (!slot || !ReadPointer(*slot, object))
             return false;
-        object = decode.objectPointer(object, *slot);
+        object = decode.objectPointer(UnpackObjectItemPointer(object, packed), *slot);
         return object == 0 || IsLikelyObject(memory_, object);
     }
 
     bool ObjectLayoutDiscovery::DiscoverItemShape(uintptr_t storage,
                                                   bool chunked,
+                                                  bool packed,
                                                   int32_t elementsPerChunk,
                                                   const DecodePlan &decode,
                                                   int32_t &objectOffset,
@@ -121,7 +125,7 @@ namespace anduefker::binding
                     if (!item)
                         continue;
                     uintptr_t object = 0;
-                    if (!ReadItemObject(*item, candidateObjectOffset, decode, object) || object == 0)
+                    if (!ReadItemObject(*item, candidateObjectOffset, packed, decode, object) || object == 0)
                         continue;
                     objects.emplace_back(index, object);
                 }
@@ -163,14 +167,29 @@ namespace anduefker::binding
         if (root == 0 || maxCandidates <= 0 || !memory_.IsReadable(root, 0x40))
             return result;
 
-        std::array<uintptr_t, 8> pointers{};
-        std::array<int32_t, 16> integers{};
-        for (size_t index = 0; index < pointers.size(); ++index)
-            (void)ReadPointer(root + index * sizeof(uintptr_t), pointers[index]);
-        for (size_t index = 0; index < integers.size(); ++index)
-            ReadInt32(memory_, root + index * sizeof(int32_t), integers[index]);
+        constexpr int32_t headerBytes = 0x40;
 
-        for (int32_t pointerOffset = 0; pointerOffset < static_cast<int32_t>(pointers.size() * sizeof(uintptr_t)); pointerOffset += 4)
+        struct Shape
+        {
+            bool valid = false;
+            int32_t objectOffset = -1;
+            int32_t stride = -1;
+            int32_t indexOffset = -1;
+            double confidence = 0;
+        };
+        std::map<std::tuple<uintptr_t, bool, bool, int32_t>, Shape> shapes;
+        const auto shapeFor = [&](uintptr_t storage, bool chunked, bool packed, int32_t elementsPerChunk) -> const Shape &
+        {
+            const auto key = std::make_tuple(storage, chunked, packed, elementsPerChunk);
+            auto [at, inserted] = shapes.try_emplace(key);
+            if (inserted)
+                at->second.valid = DiscoverItemShape(storage, chunked, packed, elementsPerChunk, decode,
+                                                     at->second.objectOffset, at->second.stride,
+                                                     at->second.indexOffset, at->second.confidence);
+            return at->second;
+        };
+
+        for (int32_t pointerOffset = 0; pointerOffset <= headerBytes - static_cast<int32_t>(sizeof(uintptr_t)); pointerOffset += 4)
         {
             uintptr_t rawStorage = 0;
             if (!ReadPointer(root + static_cast<uintptr_t>(pointerOffset), rawStorage))
@@ -179,7 +198,7 @@ namespace anduefker::binding
             if (!IsReadablePointer(memory_, storage))
                 continue;
 
-            for (int32_t countOffset = 0; countOffset < static_cast<int32_t>(integers.size() * sizeof(int32_t)); countOffset += 4)
+            for (int32_t countOffset = 0; countOffset <= headerBytes - static_cast<int32_t>(sizeof(int32_t)); countOffset += 4)
             {
                 int32_t count = 0;
                 if (!ReadInt32(memory_, root + static_cast<uintptr_t>(countOffset), count))
@@ -188,23 +207,20 @@ namespace anduefker::binding
                 if (count < 64 || count > 0x08000000)
                     continue;
 
-                int32_t objectOffset = -1;
-                int32_t itemStride = -1;
-                int32_t indexOffset = -1;
-                double shapeConfidence = 0.0;
-                if (DiscoverItemShape(storage, false, 0, decode, objectOffset, itemStride, indexOffset, shapeConfidence))
+                const auto &fixedShape = shapeFor(storage, false, false, 0);
+                if (fixedShape.valid)
                 {
                     ObjectContainerLayout layout;
                     layout.kind = ObjectContainerKind::Fixed;
                     layout.objectsOffset = pointerOffset;
                     layout.numElementsOffset = countOffset;
-                    layout.itemObjectOffset = objectOffset;
-                    layout.itemStride = itemStride;
-                    layout.itemIndexOffset = indexOffset;
-                    AddUniqueObjectCandidate(result, std::move(layout), 0.30 + 0.70 * shapeConfidence, maxCandidates);
+                    layout.itemObjectOffset = fixedShape.objectOffset;
+                    layout.itemStride = fixedShape.stride;
+                    layout.itemIndexOffset = fixedShape.indexOffset;
+                    AddUniqueObjectCandidate(result, std::move(layout), 0.30 + 0.70 * fixedShape.confidence, maxCandidates);
                 }
 
-                for (int32_t maxElementsOffset = 0; maxElementsOffset < static_cast<int32_t>(integers.size() * sizeof(int32_t)); maxElementsOffset += 4)
+                for (int32_t maxElementsOffset = 0; maxElementsOffset <= headerBytes - static_cast<int32_t>(sizeof(int32_t)); maxElementsOffset += 4)
                 {
                     int32_t maxElements = 0;
                     if (!ReadInt32(memory_, root + static_cast<uintptr_t>(maxElementsOffset), maxElements))
@@ -213,7 +229,7 @@ namespace anduefker::binding
                     if (maxElements <= count || maxElements > 0x08000000 || maxElements % 0x1000 != 0)
                         continue;
 
-                    for (int32_t maxChunksOffset = 0; maxChunksOffset < static_cast<int32_t>(integers.size() * sizeof(int32_t)); maxChunksOffset += 4)
+                    for (int32_t maxChunksOffset = 0; maxChunksOffset <= headerBytes - 2 * static_cast<int32_t>(sizeof(int32_t)); maxChunksOffset += 4)
                     {
                         int32_t maxChunks = 0;
                         if (!ReadInt32(memory_, root + static_cast<uintptr_t>(maxChunksOffset), maxChunks))
@@ -221,24 +237,26 @@ namespace anduefker::binding
                         if (maxChunks <= 0 || maxChunks > 0x1000 || maxElements % maxChunks != 0)
                             continue;
                         const int32_t elementsPerChunk = maxElements / maxChunks;
-                        int32_t chunkObjectOffset = -1;
-                        int32_t chunkStride = -1;
-                        int32_t chunkIndexOffset = -1;
-                        double chunkConfidence = 0.0;
-                        if (!DiscoverItemShape(storage, true, elementsPerChunk, decode, chunkObjectOffset, chunkStride, chunkIndexOffset, chunkConfidence))
-                            continue;
+                        for (int packed = 0; packed <= (sizeof(uintptr_t) == 8 ? 1 : 0); ++packed)
+                        {
+                            const auto &chunkShape = shapeFor(storage, true, packed != 0, elementsPerChunk);
+                            if (!chunkShape.valid)
+                                continue;
 
-                        ObjectContainerLayout layout;
-                        layout.kind = ObjectContainerKind::Chunked;
-                        layout.objectsOffset = pointerOffset;
-                        layout.numElementsOffset = countOffset;
-                        layout.maxElementsOffset = maxElementsOffset;
-                        layout.maxChunksOffset = maxChunksOffset;
-                        layout.elementsPerChunk = elementsPerChunk;
-                        layout.itemObjectOffset = chunkObjectOffset;
-                        layout.itemStride = chunkStride;
-                        layout.itemIndexOffset = chunkIndexOffset;
-                        AddUniqueObjectCandidate(result, std::move(layout), 0.35 + 0.65 * chunkConfidence, maxCandidates);
+                            ObjectContainerLayout layout;
+                            layout.kind = ObjectContainerKind::Chunked;
+                            layout.objectsOffset = pointerOffset;
+                            layout.numElementsOffset = countOffset;
+                            layout.maxElementsOffset = maxElementsOffset;
+                            layout.maxChunksOffset = maxChunksOffset;
+                            layout.elementsPerChunk = elementsPerChunk;
+                            layout.itemObjectOffset = chunkShape.objectOffset;
+                            layout.itemStride = chunkShape.stride;
+                            layout.itemIndexOffset = chunkShape.indexOffset;
+                            layout.packedPointers = packed != 0;
+                            layout.numChunksOffset = maxChunksOffset + static_cast<int32_t>(sizeof(int32_t));
+                            AddUniqueObjectCandidate(result, std::move(layout), 0.35 + 0.65 * chunkShape.confidence, maxCandidates);
+                        }
                     }
                 }
             }
@@ -249,22 +267,6 @@ namespace anduefker::binding
     bool NameLayoutDiscovery::ReadPointer(uintptr_t address, uintptr_t &value) const
     {
         return memory_.Read(address, value);
-    }
-
-    bool NameLayoutDiscovery::ReadArrayEntry(uintptr_t entry,
-                                             const NameArrayLayout &layout,
-                                             const DecodePlan &decode,
-                                             std::string &name) const
-    {
-        uint32_t index = 0;
-        if (!memory_.Read(entry + static_cast<uintptr_t>(layout.entryIndexOffset), index))
-            return false;
-        index = decode.nameEntryIndex(index, entry + static_cast<uintptr_t>(layout.entryIndexOffset));
-        if ((index & 1u) != 0)
-            return false;
-        std::array<char, 5> text{};
-        return memory_.ReadBytes(entry + static_cast<uintptr_t>(layout.entryStringOffset), text.data(), 4).Ok() &&
-               (name.assign(text.data(), 4), true);
     }
 
     bool NameLayoutDiscovery::ReadPoolEntry(uintptr_t entry,
@@ -316,7 +318,7 @@ namespace anduefker::binding
                     {
                         if ((static_cast<uint16_t>(4) << shift) == 0)
                             continue;
-                        for (int32_t stride : {1, 2, 4})
+                        for (int32_t stride : {2, 4})
                         {
                             NamePoolLayout pool;
                             pool.blocksOffset = pointerOffset;
@@ -326,13 +328,26 @@ namespace anduefker::binding
                             pool.entryStringOffset = stringOffset;
                             pool.entryLengthShift = shift;
                             pool.entryWideMask = 1;
+                            if (pointerOffset >= 8)
+                            {
+                                uint32_t block = 0;
+                                uint32_t cursor = 0;
+                                const size_t blockSize = (size_t{1} << pool.blocksBit) * stride;
+                                if (memory_.Read(root + static_cast<uintptr_t>(pointerOffset - 8), block) &&
+                                    memory_.Read(root + static_cast<uintptr_t>(pointerOffset - 4), cursor) &&
+                                    block < 8192 && cursor <= blockSize && cursor % static_cast<uint32_t>(stride) == 0)
+                                {
+                                    pool.maxChunkIndexOffset = pointerOffset - 8;
+                                    pool.byteCursorOffset = pointerOffset - 4;
+                                }
+                            }
                             std::string name;
                             if (!ReadPoolEntry(target, pool, decode, name) || name != "None")
                                 continue;
                             NameContainerLayout layout;
                             layout.kind = NameContainerKind::Pool;
                             layout.pool = pool;
-                            result.emplace_back(std::move(layout), stride == 2 ? 0.95 : 0.75);
+                            result.emplace_back(std::move(layout), 0.90);
                             if (static_cast<int32_t>(result.size()) >= maxCandidates)
                                 return result;
                         }

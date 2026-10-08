@@ -1,5 +1,7 @@
 #include "anduefker/binding/CommonObjectCollector.hpp"
 
+#include <algorithm>
+
 namespace anduefker::binding
 {
     CommonObjectCollector::CommonObjectCollector(const IMemorySource &memory,
@@ -7,26 +9,6 @@ namespace anduefker::binding
                                                  const EngineSchema &schema)
         : objects_(memory, binding, schema)
     {
-    }
-
-    bool CommonObjectCollector::IsClassObject(uintptr_t object, const std::string &expectedName) const
-    {
-        if (object == 0)
-            return false;
-
-        const auto classAddress = objects_.Class(object);
-        if (!classAddress)
-            return false;
-
-        const auto className = objects_.Name(*classAddress);
-        if (!className || *className != "Class")
-            return false;
-
-        const auto objectName = objects_.Name(object);
-        if (!objectName)
-            return false;
-
-        return *objectName == expectedName;
     }
 
     std::vector<CommonObjectInfo> CommonObjectCollector::Collect()
@@ -53,18 +35,12 @@ namespace anduefker::binding
             if (!object.IsValid())
                 continue;
 
-            for (const std::string &targetName : commonClasses)
-            {
-                if (IsClassObject(object.address, targetName))
-                {
-                    CommonObjectInfo info;
-                    info.name = targetName;
-                    info.address = object.address;
-                    info.index = index;
-                    result.push_back(info);
-                    break;
-                }
-            }
+            const auto className = objects_.ClassName(object.address);
+            if (!className || *className != "Class")
+                continue;
+            const auto name = objects_.Name(object.address);
+            if (name && std::find(commonClasses.begin(), commonClasses.end(), *name) != commonClasses.end())
+                result.push_back({*name, object.address, index});
         }
 
         return result;

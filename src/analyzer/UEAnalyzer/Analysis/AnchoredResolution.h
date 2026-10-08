@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -58,6 +60,9 @@ namespace anduefker::analyzer
 	class AnchoredResolution
 	{
 	public:
+		using AnchorSites = std::map<std::pair<std::string, EAnchorMatch>, std::vector<uint64_t>>;
+		static AnchorSites ScanAnchorSites(const IMemory *Memory, const ModuleInfo &Module,
+										   const GlobalAccessHarvester &Harvester, std::span<const Anchor *const> Anchors);
 		/**
 		 * @param Memory     Backend to read code and strings from.
 		 * @param Module    The caller's own GetUnrealModule() result - fetched once and
@@ -67,12 +72,13 @@ namespace anduefker::analyzer
 		 * @param Calls     Optional call graph; without it the rules that resolve
 		 *                  through callers cannot run.
 		 */
-		AnchoredResolution(IMemory *Memory, const ModuleInfo &Module, const GlobalAccessHarvester &Harvester, const IArchDecoder &Arch, const CallGraph *Calls = nullptr)
+		AnchoredResolution(IMemory *Memory, const ModuleInfo &Module, const GlobalAccessHarvester &Harvester, const IArchDecoder &Arch, const CallGraph *Calls = nullptr, const AnchorSites *Sites = nullptr)
 			: Memory_(Memory),
 			  Module_(Module),
 			  Harvester_(Harvester),
 			  Arch_(Arch),
-			  Calls_(Calls)
+			  Calls_(Calls),
+			  SharedSites_(Sites)
 		{
 		}
 
@@ -162,7 +168,7 @@ namespace anduefker::analyzer
 		 *        nothing - and can exhaust the per-segment hit cap before the real
 		 *        literal is reached.
 		 */
-		std::vector<uint64_t> FindAnchorSites(const char *Text, EAnchorMatch Match = EAnchorMatch::Substring) const;
+		const std::vector<uint64_t> &FindAnchorSites(const char *Text, EAnchorMatch Match = EAnchorMatch::Substring) const;
 
 		/**
 		 * @brief Applies an anchor's pick rule at one site.
@@ -219,6 +225,8 @@ namespace anduefker::analyzer
 		const GlobalAccessHarvester &Harvester_;
 		const IArchDecoder &Arch_;
 		const CallGraph *Calls_ = nullptr;
+		const AnchorSites *SharedSites_ = nullptr;
+		mutable AnchorSites LocalSites_;
 		mutable std::vector<AnchorHit> Hits_;
 		mutable std::vector<AnchorTrace> Traces_;
 	};

@@ -76,7 +76,7 @@ namespace anduefker::ue
 
         int32_t rawCount = 0;
         uintptr_t rawStorage = 0;
-        if (!memory_.Read(*countAddress, rawCount) || !memory_.Read(*storageAddress, rawStorage))
+        if (!memory_.ReadFreshBytes(*countAddress, &rawCount, sizeof(rawCount)).Ok() || !memory_.Read(*storageAddress, rawStorage))
             return false;
 
         count_ = decode_.objectCount(rawCount, *countAddress);
@@ -88,10 +88,75 @@ namespace anduefker::ue
             return false;
 
         initialized_ = true;
-        return true;
+        const auto boundary = RefreshCount();
+        initialized_ = boundary.valid;
+        return initialized_;
     }
 
-    ObjectReadResult ObjectStoreReader::ReadObject(int32_t index) const
+    ObjectStoreBoundary ObjectStoreReader::RefreshCount()
+    {
+        ObjectStoreBoundary result;
+        const auto countAddress = AddOffset(root_, static_cast<uintptr_t>(layout_.numElementsOffset));
+        const auto storageAddress = AddOffset(root_, static_cast<uintptr_t>(layout_.objectsOffset));
+        if (!initialized_ || !countAddress || !storageAddress)
+        {
+            result.reason = "object-store-unavailable";
+            return result;
+        }
+        result.countAddress = *countAddress;
+        int32_t rawCount = 0;
+        uintptr_t rawStorage = 0;
+        if (!memory_.ReadFreshBytes(*countAddress, &rawCount, sizeof(rawCount)).Ok() ||
+            !memory_.ReadFreshBytes(*storageAddress, &rawStorage, sizeof(rawStorage)).Ok())
+        {
+            result.reason = "object-boundary-unreadable";
+            return result;
+        }
+        result.count = decode_.objectCount(rawCount, *countAddress);
+        if (result.count <= 0 || result.count > 0x08000000 || result.count < count_ ||
+            decode_.objectStorage(rawStorage, *storageAddress) != storage_)
+        {
+            result.reason = "object-count-decreased-invalid-or-storage-changed";
+            return result;
+        }
+        const auto readCapacity = [&](int32_t offset, int32_t minimum, bool decodeCount)
+        {
+            if (offset < 0)
+                return true;
+            const auto address = AddOffset(root_, static_cast<uintptr_t>(offset));
+            int32_t value = 0;
+            if (!address || !memory_.ReadFreshBytes(*address, &value, sizeof(value)).Ok())
+                return false;
+            if (decodeCount)
+                value = decode_.objectCount(value, *address);
+            return value >= minimum && value <= 0x08000000;
+        };
+        if (!readCapacity(layout_.maxElementsOffset, result.count, true))
+        {
+            result.reason = "object-capacity-invalid-or-unreadable";
+            return result;
+        }
+        if (layout_.kind == ObjectContainerKind::Chunked)
+        {
+            const int32_t chunks = (result.count - 1) / layout_.elementsPerChunk + 1;
+            if (!readCapacity(layout_.numChunksOffset, chunks, false) || !readCapacity(layout_.maxChunksOffset, chunks, false))
+            {
+                result.reason = "object-chunk-capacity-invalid-or-unreadable";
+                return result;
+            }
+        }
+        else if (result.count != count_)
+        {
+            result.reason = "fixed-object-count-changed";
+            return result;
+        }
+        count_ = result.count;
+        result.valid = true;
+        result.reason = "object-boundary-valid";
+        return result;
+    }
+
+    ObjectReadResult ObjectStoreReader::ReadObject(int32_t index, bool fresh) const
     {
         if (!initialized_)
             return {};
@@ -112,7 +177,8 @@ namespace anduefker::ue
                 return {ObjectReadStatus::AddressOverflow};
 
             uintptr_t rawChunk = 0;
-            const auto read = memory_.ReadBytes(*chunkSlot, &rawChunk, sizeof(rawChunk));
+            const auto read = fresh ? memory_.ReadFreshBytes(*chunkSlot, &rawChunk, sizeof(rawChunk))
+                                    : memory_.ReadBytes(*chunkSlot, &rawChunk, sizeof(rawChunk));
             if (!read.Ok())
                 return {ObjectReadStatus::UnreadableChunk, 0, *chunkSlot, read.error};
             const uintptr_t chunk = decode_.objectChunk(rawChunk, *chunkSlot);
@@ -128,9 +194,11 @@ namespace anduefker::ue
             return {ObjectReadStatus::AddressOverflow};
 
         uintptr_t rawObject = 0;
-        const auto read = memory_.ReadBytes(*objectSlot, &rawObject, sizeof(rawObject));
+        const auto read = fresh ? memory_.ReadFreshBytes(*objectSlot, &rawObject, sizeof(rawObject))
+                                : memory_.ReadBytes(*objectSlot, &rawObject, sizeof(rawObject));
         if (!read.Ok())
             return {ObjectReadStatus::UnreadableObject, 0, *objectSlot, read.error};
+        rawObject = ::anduefker::binding::UnpackObjectItemPointer(rawObject, layout_.packedPointers);
         if (rawObject == 0)
             return {ObjectReadStatus::Empty, 0, *objectSlot};
 
@@ -138,5 +206,19 @@ namespace anduefker::ue
         if (object == 0 || !memory_.IsReadable(object, sizeof(uintptr_t)))
             return {ObjectReadStatus::InvalidObject, object, *objectSlot};
         return {ObjectReadStatus::Valid, object, *objectSlot};
+    }
+
+    std::optional<uint32_t> ObjectStoreReader::ReadInternalFlags(const ObjectReadResult &object) const
+    {
+        // Supported FUObjectItem layouts place internal flags after Object/ObjectPtrLow.
+        const size_t pointerSize = layout_.packedPointers ? sizeof(uint32_t) : sizeof(uintptr_t);
+        if (!object.IsValid() || layout_.itemObjectOffset != 0 ||
+            static_cast<size_t>(layout_.itemStride) < pointerSize + sizeof(uint32_t))
+            return std::nullopt;
+        const auto address = AddOffset(object.readAddress, pointerSize);
+        uint32_t flags = 0;
+        if (!address || !memory_.ReadFreshBytes(*address, &flags, sizeof(flags)).Ok())
+            return std::nullopt;
+        return flags;
     }
 } // namespace anduefker::ue

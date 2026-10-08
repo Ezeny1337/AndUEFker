@@ -32,77 +32,53 @@ namespace anduefker::analyzer
 
 	} // namespace
 
-	std::vector<uint64_t> AnchoredResolution::FindAnchorSites(const char *Text,
-															  EAnchorMatch Match) const
+	AnchoredResolution::AnchorSites AnchoredResolution::ScanAnchorSites(
+		const IMemory *Memory, const ModuleInfo &Module, const GlobalAccessHarvester &Harvester,
+		std::span<const Anchor *const> Anchors)
 	{
-		// Locate the literal in every encoding, then ask the harvester which code
-		// computed each of those addresses. The harvester already records string
-		// addresses as address-taken globals, so no extra scan is needed.
-		std::vector<uint64_t> Sites;
-		std::vector<uint64_t> StringAddrs;
-
-		// Per-segment cap, the same 64 the cursor loop this replaced enforced by hand.
-		constexpr size_t kMaxHitsPerSegment = 64;
-
-		// All three encodings are matched in one walk of the module. Searching them
-		// one at a time meant three passes over the image per anchor, which against a
-		// live process is three more copies of the module through the transport.
-		//
-		// String encoding varies even between builds of the same engine version, so
-		// which one a given build uses cannot be assumed and all three are searched.
+		AnchorSites Result;
+		for (const Anchor *A : Anchors)
+			if (A && A->Text && *A->Text)
+				Result.try_emplace({A->Text, A->Match});
 		LiteralScanner Scanner;
-
-		// When whole-string matching is on, the needle is wrapped in terminators and
-		// the recorded address is shifted past the leading one, so the address handed
-		// to the harvester is still the string itself. Skips are indexed by needle
-		// because each encoding's terminator is a different width.
-		std::vector<size_t> SkipPerNeedle;
-		auto Add = [&](const std::vector<uint8_t> &Bytes, int Encoding, size_t Skip)
+		std::vector<std::vector<uint64_t> *> Owners;
+		for (auto &[Key, Sites] : Result)
 		{
-			if (Bytes.empty())
-				return;
-			SkipPerNeedle.push_back(Skip);
-			Scanner.AddRaw(Bytes.data(), Bytes.size(), 0, Encoding, kMaxHitsPerSegment);
-		};
-
-		const std::vector<uint8_t> Ascii(Text, Text + std::strlen(Text));
-		const std::vector<uint8_t> W16 = LiteralScanner::Widen<uint16_t>(Text);
-		const std::vector<uint8_t> W32 = LiteralScanner::Widen<uint32_t>(Text);
-
-		if (Match == EAnchorMatch::Terminated)
-		{
-			// Trailing NUL only, and the recorded address is the literal's own start,
-			// so no skip is needed.
-			auto Terminate = [](const std::vector<uint8_t> &Body, size_t Unit)
+			const std::string &Text = Key.first;
+			const EAnchorMatch Match = Key.second;
+			const size_t Owner = Owners.size();
+			Owners.push_back(&Sites);
+			const auto add = [&](std::vector<uint8_t> Bytes, int Encoding)
 			{
-				std::vector<uint8_t> Out(Body);
-				Out.insert(Out.end(), Unit, 0);
-				return Out;
+				if (Match == EAnchorMatch::Terminated)
+					Bytes.insert(Bytes.end(), static_cast<size_t>(Encoding), 0);
+				Scanner.AddRaw(Bytes.data(), Bytes.size(), Owner, Encoding, 64);
 			};
-			Add(Terminate(Ascii, 1), 1, 0);
-			Add(Terminate(W16, 2), 2, 0);
-			Add(Terminate(W32, 4), 4, 0);
+			add(std::vector<uint8_t>(Text.begin(), Text.end()), 1);
+			add(LiteralScanner::Widen<uint16_t>(Text.c_str()), 2);
+			add(LiteralScanner::Widen<uint32_t>(Text.c_str()), 4);
 		}
-		else
+		for (const auto &Hit : Scanner.ScanPerSegment(Memory, Module))
 		{
-			Add(Ascii, 1, 0);
-			Add(W16, 2, 0);
-			Add(W32, 4, 0);
+			auto &Sites = *Owners[Scanner.GetNeedles()[Hit.NeedleIndex].OwnerIndex];
+			if (const AccessInfo *Info = Harvester.Find(Hit.Address))
+				Sites.insert(Sites.end(), Info->Sites.begin(), Info->Sites.end());
 		}
-
-		for (const LiteralScanner::Hit &H : Scanner.ScanPerSegment(Memory_, Module_))
-			StringAddrs.push_back(H.Address + SkipPerNeedle[H.NeedleIndex]);
-
-		for (uint64_t SA : StringAddrs)
+		for (auto &[Key, Sites] : Result)
 		{
-			if (const AccessInfo *Info = Harvester_.Find(SA))
-				for (uint64_t Site : Info->Sites)
-					Sites.push_back(Site);
+			(void)Key;
+			std::sort(Sites.begin(), Sites.end());
+			Sites.erase(std::unique(Sites.begin(), Sites.end()), Sites.end());
 		}
+		return Result;
+	}
 
-		std::sort(Sites.begin(), Sites.end());
-		Sites.erase(std::unique(Sites.begin(), Sites.end()), Sites.end());
-		return Sites;
+	const std::vector<uint64_t> &AnchoredResolution::FindAnchorSites(const char *Text, EAnchorMatch Match) const
+	{
+		static const std::vector<uint64_t> Empty;
+		const AnchorSites &Sites = SharedSites_ ? *SharedSites_ : LocalSites_;
+		const auto found = Sites.find({Text ? Text : "", Match});
+		return found == Sites.end() ? Empty : found->second;
 	}
 
 	bool AnchoredResolution::DeriveMember(uint64_t Container, const AccessMap &Local, uint64_t &OutMember, int64_t &OutOffset) const
@@ -546,7 +522,7 @@ namespace anduefker::analyzer
 				uintptr_t Word = 0;
 				if (D >= 0 && D < NumRegs)
 				{
-					const bool bRead = Memory_ && Memory_->ReadBytes(static_cast<uintptr_t>(Insn.Value), &Word, sizeof(Word));
+					const bool bRead = Memory_ && Memory_->ReadBytes(static_cast<uintptr_t>(Insn.Value), &Word, sizeof(Word)) == sizeof(Word);
 					Bases[D] = bRead ? static_cast<uint64_t>(Word) : 0;
 					HoldsGlobal[D] = 0;
 					Displacement[D] = 0;
@@ -876,6 +852,13 @@ namespace anduefker::analyzer
 		Hits_.clear();
 		Traces_.clear();
 		BoundsCache_.clear();
+		if (!SharedSites_)
+		{
+			std::vector<const Anchor *> Anchors;
+			for (const Anchor &A : Strategy.ResolutionAnchors())
+				Anchors.push_back(&A);
+			LocalSites_ = ScanAnchorSites(Memory_, Module_, Harvester_, Anchors);
+		}
 		BuildAnchorCluster(Strategy);
 
 		// address -> (accumulated trust, contributing anchors)
@@ -895,7 +878,7 @@ namespace anduefker::analyzer
 			AnchorTrace Trace;
 			Trace.Which = A;
 
-			const auto Sites = FindAnchorSites(A->Text, A->Match);
+			const auto &Sites = FindAnchorSites(A->Text, A->Match);
 			Trace.Sites = Sites.size();
 
 			// A literal referenced from hundreds of places is not identifying a single

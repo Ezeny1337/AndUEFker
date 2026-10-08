@@ -158,6 +158,7 @@ namespace anduefker::analyzer
 		/// Follow `LDR Xt,[Xn,#off]` through relocated pointer slots. Without this
 		/// the most common real-world access form cannot be resolved statically.
 		bool FollowIndirect = true;
+		std::function<void(const std::string &)> Progress;
 	};
 
 	/**

@@ -137,25 +137,25 @@ namespace anduefker::generation
         };
         struct FieldGenerationPlan
         {
-            LayoutRepresentation representation = LayoutRepresentation::SequentialMembers;
+            bool forceOffsetDescription = false;
             int32_t initialOffset = 0;
             int32_t size = 0;
             std::vector<FieldGenerationEntry> fields;
         };
         [[nodiscard]] std::string ManifestJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string DiagnosticsJson(const GenerationReport &report, ParseStatus status) const;
-        [[nodiscard]] std::string ReflectionJson() const;
+        void ReflectionJson(std::ostream &stream) const;
         [[nodiscard]] std::string RuntimeJson() const;
-        [[nodiscard]] std::string BasicTypes() const;
-        [[nodiscard]] std::string Types(const CppSymbols &symbols, GenerationReport &report) const;
-        [[nodiscard]] std::string Enums(const CppSymbols &symbols) const;
-        [[nodiscard]] std::string Functions(const CppSymbols &symbols, GenerationReport &report) const;
+        void BasicTypes(std::ostream &stream) const;
+        void Types(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;
+        void Enums(std::ostream &stream, const CppSymbols &symbols) const;
+        void Functions(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;
         [[nodiscard]] FieldGenerationPlan BuildFieldGenerationPlan(const TypeIR &owner,
                                                                    const FunctionIR *function,
                                                                    const std::vector<PropertyIR> &properties,
                                                                    int32_t size,
                                                                    const CppSymbols &symbols) const;
-        void WriteFields(std::ostringstream &stream,
+        void WriteFields(std::ostream &stream,
                          const TypeIR &owner,
                          const FunctionIR *function,
                          const FieldGenerationPlan &plan,

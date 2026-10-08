@@ -3,15 +3,13 @@
 
 #include <algorithm>
 #include <fstream>
-#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <array>
 #include <chrono>
 #include <cstdio>
-#include <string_view>
+#include <queue>
 
 namespace anduefker::generation
 {
@@ -80,9 +78,8 @@ namespace anduefker::generation
     {
     }
 
-    std::string ArtifactWriter::BasicTypes() const
+    void ArtifactWriter::BasicTypes(std::ostream &stream) const
     {
-        std::ostringstream stream;
         const auto &identity = context_.Schema().identity;
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n\n";
         stream << "// For inspection and analysis; reflected offsets and sizes are authoritative.\n";
@@ -103,14 +100,15 @@ namespace anduefker::generation
         stream << "// Target pointer width: " << static_cast<unsigned int>(context_.Module().pointerWidth) << " bytes.\n";
         stream << "namespace AndUE\n{\n";
         stream << "struct FName { std::uint8_t Data[" << context_.Schema().fname.size << "]; };\n";
-        stream << "struct FString { std::uintptr_t Data; std::int32_t Num; std::int32_t Max; };\n";
-        stream << "template <typename ElementType> struct TArray { std::uintptr_t Data; std::int32_t Num; std::int32_t Max; };\n";
-        stream << "struct FScriptInterface { std::uintptr_t ObjectPointer; std::uintptr_t InterfacePointer; };\n";
+        const char *targetPointer = context_.Module().pointerWidth == 8 ? "std::uint64_t" : "std::uint32_t";
+        stream << "using TargetAddress = " << targetPointer << ";\n";
+        stream << "struct FString { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "template <typename ElementType> struct TArray { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "struct FScriptInterface { TargetAddress ObjectPointer; TargetAddress InterfacePointer; };\n";
         stream << "// Opaque container storage; StorageSize comes from the reflected field.\n";
         stream << "template <typename ElementType, std::size_t StorageSize> struct TSet { std::uint8_t Data[StorageSize]; };\n";
         stream << "template <typename KeyType, typename ValueType, std::size_t StorageSize> struct TMap { std::uint8_t Data[StorageSize]; };\n";
         stream << "}\n";
-        return stream.str();
     }
 
     std::string ArtifactWriter::ManifestJson(const GenerationReport &report, ParseStatus status) const
@@ -118,7 +116,7 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 2,\n";
+        stream << "  \"schema_version\": 3,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
@@ -168,7 +166,7 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 2,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 3,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
@@ -306,7 +304,6 @@ namespace anduefker::generation
     {
         const auto &analysis = function ? function->layout : owner.layout;
         FieldGenerationPlan plan;
-        plan.representation = analysis.representation;
         plan.initialOffset = analysis.baseExtentKnown ? analysis.baseExtent : 0;
         plan.size = size;
         plan.fields.reserve(properties.size());
@@ -327,7 +324,7 @@ namespace anduefker::generation
         return plan;
     }
 
-    void ArtifactWriter::WriteFields(std::ostringstream &stream,
+    void ArtifactWriter::WriteFields(std::ostream &stream,
                                      const TypeIR &owner,
                                      const FunctionIR *function,
                                      const FieldGenerationPlan &plan,
@@ -339,6 +336,25 @@ namespace anduefker::generation
         const int32_t initialOffset = plan.initialOffset;
         const auto &analysis = function ? function->layout : owner.layout;
         const std::string scope = function ? "function-parameters" : "type-fields";
+        const auto describe = [&](const FieldGenerationEntry &entry)
+        {
+            const auto &property = *entry.property;
+            const char *opaqueReason = !entry.validBounds ? "invalid-bounds" : !property.typeDetailsResolved                                                      ? "unresolved-type-details"
+                                                                           : (property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map) ? "container-internals-not-expanded"
+                                                                           : (entry.cppType.empty() && property.type.kind != PropertyKind::Bool)                  ? "no-sized-cpp-representation"
+                                                                                                                                                                  : "none";
+            stream << "    // Field name=" << EscapeJson(property.name) << " class=" << EscapeJson(property.reflectedClass)
+                   << " metadata=" << Hex(property.address) << " target_offset=" << property.offset
+                   << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim
+                   << " flags=" << Hex(property.flags) << " referenced_object=" << Hex(property.type.referencedObject)
+                   << " secondary_object=" << Hex(property.type.secondaryObject)
+                   << " status=" << ParseStatusName(property.status) << " opaque_reason=" << opaqueReason;
+            if (function)
+                stream << " parameter=" << property.isParameter << " return=" << property.isReturnParameter
+                       << " out=" << property.isOutParameter << " reference=" << property.isReferenceParameter
+                       << " const=" << property.isConstParameter;
+            stream << '\n';
+        };
         for (const auto &issue : analysis.issues)
         {
             LayoutEvent event;
@@ -381,7 +397,7 @@ namespace anduefker::generation
             else
                 report.Warn(std::move(event));
         }
-        if (analysis.representation == LayoutRepresentation::OffsetDescription)
+        if (plan.forceOffsetDescription || analysis.representation == LayoutRepresentation::OffsetDescription)
         {
             LayoutEvent event;
             event.category = "offset-description";
@@ -399,18 +415,19 @@ namespace anduefker::generation
             size_t ordinal = 0;
             for (const FieldGenerationEntry &entry : plan.fields)
             {
+                describe(entry);
                 const PropertyIR &property = *entry.property;
                 const std::string member = SanitizeIdentifier(property.name, "Member_") + "_" + std::to_string(ordinal++);
                 const std::string typeName = entry.cppType.empty() ? property.reflectedClass : entry.cppType;
                 if (!entry.validBounds)
                 {
-                    stream << "    // Invalid offset description: name=" << property.name << " symbol=" << member << " type=" << typeName
+                    stream << "    // Invalid offset description: name=" << EscapeJson(property.name) << " symbol=" << member << " type=" << EscapeJson(typeName)
                            << " offset=" << property.offset << " element_size=" << property.elementSize
                            << " array_dim=" << property.arrayDim << "\n";
                     ++opaqueFields;
                     continue;
                 }
-                stream << "    // OffsetDescription name=" << property.name << " symbol=" << member << " type=" << typeName
+                stream << "    // OffsetDescription name=" << EscapeJson(property.name) << " symbol=" << member << " type=" << EscapeJson(typeName)
                        << " offset=" << Hex(static_cast<uint64_t>(property.offset))
                        << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim << "\n";
                 stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
@@ -421,6 +438,8 @@ namespace anduefker::generation
                     ++opaqueFields;
                 if (entry.boolLayout)
                 {
+                    stream << "    static constexpr std::uint8_t " << member << "_FieldSize = "
+                           << static_cast<unsigned int>(property.boolean.fieldSize) << ";\n";
                     stream << "    static constexpr std::uint8_t " << member << "_ByteOffset = "
                            << static_cast<unsigned int>(property.boolean.byteOffset) << ";\n";
                     stream << "    static constexpr std::uint8_t " << member << "_ByteMask = "
@@ -429,6 +448,7 @@ namespace anduefker::generation
                            << Hex(property.boolean.fieldMask) << ";\n";
                 }
             }
+            stream << "};\n\n";
             return;
         }
 
@@ -436,7 +456,6 @@ namespace anduefker::generation
         {
             int32_t end = 0;
             uint64_t masks = 0;
-            const PropertyIR *firstProperty = nullptr;
         };
         std::unordered_map<int32_t, BoolStorage> boolStorage;
         std::vector<const FieldGenerationEntry *> ordered;
@@ -450,6 +469,7 @@ namespace anduefker::generation
         size_t ordinal = 0;
         for (const FieldGenerationEntry *entry : ordered)
         {
+            describe(*entry);
             const PropertyIR &property = *entry->property;
             const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
             const int64_t end = static_cast<int64_t>(property.offset) + total;
@@ -465,7 +485,7 @@ namespace anduefker::generation
             const bool boolLayout = entry->boolLayout;
             if (boolLayout)
             {
-                // ByteOffset 是存储内部的字节位置，不能加到存储起点后再占用整个 FieldSize。
+                // ByteOffset 是存储内部的字节位置，不能加到存储起点后再占用整个 FieldSize
                 const uint64_t mask = static_cast<uint64_t>(property.boolean.fieldMask) << (property.boolean.byteOffset * 8);
                 auto existing = boolStorage.find(property.offset);
                 if (existing != boolStorage.end())
@@ -487,11 +507,14 @@ namespace anduefker::generation
                     const std::string storageName = "BoolStorage_" + std::to_string(ordinal++);
                     stream << "    std::uint8_t " << storageName << "[" << Hex(static_cast<uint64_t>(total)) << "]; // "
                            << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
-                    boolStorage.emplace(property.offset, BoolStorage{static_cast<int32_t>(end), mask, &property});
+                    boolStorage.emplace(property.offset, BoolStorage{static_cast<int32_t>(end), mask});
                     cursor = std::max(cursor, static_cast<int32_t>(end));
                 }
                 stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
                 stream << "    static constexpr std::size_t " << member << "_ElementSize = " << property.elementSize << ";\n";
+                stream << "    static constexpr std::size_t " << member << "_ArrayDim = " << property.arrayDim << ";\n";
+                stream << "    static constexpr std::uint8_t " << member << "_FieldSize = "
+                       << static_cast<unsigned int>(property.boolean.fieldSize) << ";\n";
                 stream << "    static constexpr std::uint8_t " << member << "_ByteOffset = "
                        << static_cast<unsigned int>(property.boolean.byteOffset) << ";\n";
                 stream << "    static constexpr std::uint8_t " << member << "_ByteMask = "
@@ -521,6 +544,8 @@ namespace anduefker::generation
                     ++opaqueFields;
             }
             stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
+            stream << "    static constexpr std::size_t " << member << "_ElementSize = " << property.elementSize << ";\n";
+            stream << "    static constexpr std::size_t " << member << "_ArrayDim = " << property.arrayDim << ";\n";
             cursor = std::max(cursor, static_cast<int32_t>(end));
         }
         if (cursor < size)
@@ -529,11 +554,10 @@ namespace anduefker::generation
         stream << '\n';
     }
 
-    std::string ArtifactWriter::Types(const CppSymbols &symbols, GenerationReport &report) const
+    void ArtifactWriter::Types(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const
     {
         const auto &types = symbols.types;
 
-        std::ostringstream stream;
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include \"BasicTypes.hpp\"\n#include \"Enums.hpp\"\n\n";
         stream << "// Sizes and offsets describe target memory, not native C++ layout.\n";
         stream << "namespace AndUE\n{\n";
@@ -542,47 +566,52 @@ namespace anduefker::generation
         if (!reflection_.types.empty())
             stream << "\n";
         std::vector<size_t> order;
-        std::unordered_set<uintptr_t> emitted;
-        while (order.size() < reflection_.types.size())
+        const size_t count = reflection_.types.size();
+        std::unordered_map<uintptr_t, size_t> byAddress;
+        for (size_t index = 0; index < count; ++index)
+            byAddress.emplace(reflection_.types[index].address, index);
+        std::vector<size_t> pending(count, 0);
+        std::vector<std::vector<size_t>> dependents(count);
+        std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> ready;
+        for (size_t index = 0; index < count; ++index)
         {
-            bool progress = false;
-            for (size_t index = 0; index < reflection_.types.size(); ++index)
+            const TypeIR &type = reflection_.types[index];
+            std::unordered_set<size_t> dependencies;
+            const auto addDependency = [&](uintptr_t address)
             {
-                const TypeIR &candidate = reflection_.types[index];
-                if (emitted.contains(candidate.address))
-                    continue;
-                if (candidate.superAddress != 0 && !emitted.contains(candidate.superAddress) &&
-                    types.contains(candidate.superAddress))
-                    continue;
-                bool valueDependencyPending = false;
-                for (const PropertyIR &property : candidate.properties)
-                {
-                    if (property.type.kind != PropertyKind::Struct || property.type.referencedObject == 0 ||
-                        property.type.referencedObject == candidate.address)
-                        continue;
-                    if (types.contains(property.type.referencedObject) &&
-                        !emitted.contains(property.type.referencedObject))
-                    {
-                        valueDependencyPending = true;
-                        break;
-                    }
-                }
-                if (valueDependencyPending)
-                    continue;
-                order.push_back(index);
-                emitted.insert(candidate.address);
-                progress = true;
-            }
-            if (!progress)
+                const auto found = byAddress.find(address);
+                if (found != byAddress.end())
+                    dependencies.insert(found->second);
+            };
+            addDependency(type.superAddress);
+            for (const auto &property : type.properties)
+                if (property.type.kind == PropertyKind::Struct)
+                    addDependency(property.type.referencedObject);
+            pending[index] = dependencies.size();
+            for (size_t dependency : dependencies)
+                dependents[dependency].push_back(index);
+            if (dependencies.empty())
+                ready.push(index);
+        }
+        while (!ready.empty())
+        {
+            const size_t index = ready.top();
+            ready.pop();
+            order.push_back(index);
+            for (size_t dependent : dependents[index])
+                if (--pending[dependent] == 0)
+                    ready.push(dependent);
+        }
+        std::unordered_set<size_t> cyclic;
+        if (order.size() != count)
+        {
+            report.Warn("declaration-dependency", "cyclic declaration dependencies use offset descriptions");
+            for (size_t index = 0; index < count; ++index)
             {
-                report.Warn("declaration-dependency", "cyclic or unresolved declaration dependencies");
-                for (size_t index = 0; index < reflection_.types.size(); ++index)
+                if (pending[index] != 0)
                 {
-                    if (!emitted.contains(reflection_.types[index].address))
-                    {
-                        order.push_back(index);
-                        emitted.insert(reflection_.types[index].address);
-                    }
+                    order.push_back(index);
+                    cyclic.insert(index);
                 }
             }
         }
@@ -612,21 +641,22 @@ namespace anduefker::generation
                 report.Warn(std::move(event));
                 stream << "// Base extent is unavailable or inconsistent; fields use explicit target offsets where required.\n";
             }
+            stream << "// " << EscapeJson(type.fullName) << " address=" << Hex(type.address) << " status=" << ParseStatusName(type.status) << "\n";
             stream << "// Reflected size: " << Hex(static_cast<uint32_t>(type.size)) << "\n";
             stream << "struct " << typeName;
-            if (base != types.end())
+            if (base != types.end() && !cyclic.contains(typeIndex))
                 stream << " : public " << base->second.name;
             stream << "\n{\n";
-            const FieldGenerationPlan plan = BuildFieldGenerationPlan(type, nullptr, type.properties, type.size, symbols);
+            stream << "    static constexpr std::size_t ReflectedSize = " << type.size << ";\n";
+            FieldGenerationPlan plan = BuildFieldGenerationPlan(type, nullptr, type.properties, type.size, symbols);
+            plan.forceOffsetDescription = cyclic.contains(typeIndex);
             WriteFields(stream, type, nullptr, plan, symbols, report);
         }
         stream << "}\n";
-        return stream.str();
     }
 
-    std::string ArtifactWriter::Functions(const CppSymbols &symbols, GenerationReport &report) const
+    void ArtifactWriter::Functions(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const
     {
-        std::ostringstream stream;
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include \"Types.hpp\"\n\n";
         stream << "namespace AndUE\n{\n";
         if (reflection_.stats.parsedFunctions == 0)
@@ -636,29 +666,32 @@ namespace anduefker::generation
             for (const FunctionIR &function : type.functions)
             {
                 const std::string &functionName = symbols.functions.at({type.address, function.address});
-                stream << "// " << function.fullName << "\n";
+                stream << "// " << EscapeJson(function.fullName) << " address=" << Hex(function.address)
+                       << " native_address=" << Hex(function.nativeAddress) << " flags=" << Hex(function.flags)
+                       << " status=" << ParseStatusName(function.status) << "\n";
                 stream << "inline constexpr std::uintptr_t " << functionName
                        << "_NativeRva = " << Hex(function.nativeRva) << ";\n";
                 stream << "inline constexpr std::size_t " << functionName << "_ParamsSize = " << function.paramSize << ";\n";
                 stream << "struct " << functionName << "_Params\n{\n";
+                stream << "    static constexpr std::size_t ReflectedSize = " << function.paramSize << ";\n";
                 const FieldGenerationPlan plan = BuildFieldGenerationPlan(type, &function, function.parameters,
                                                                           function.paramSize, symbols);
                 WriteFields(stream, type, &function, plan, symbols, report);
             }
         }
         stream << "}\n";
-        return stream.str();
     }
 
-    std::string ArtifactWriter::Enums(const CppSymbols &symbols) const
+    void ArtifactWriter::Enums(std::ostream &stream, const CppSymbols &symbols) const
     {
-        std::ostringstream stream;
         stream << "#pragma once\n#include <cstdint>\n\nnamespace AndUE\n{\n";
         if (reflection_.enums.empty())
             stream << "// No UEnum metadata was resolved in this dump.\n";
         for (const EnumIR &enumeration : reflection_.enums)
         {
             const CppEnumInfo &info = symbols.enums.at(enumeration.address);
+            stream << "// " << EscapeJson(enumeration.fullName) << " address=" << Hex(enumeration.address)
+                   << " status=" << ParseStatusName(enumeration.status) << "\n";
             stream << "enum class " << info.name << " : "
                    << EnumUnderlyingName(info.underlyingType) << "\n{\n";
             for (size_t index = 0; index < enumeration.values.size(); ++index)
@@ -673,7 +706,6 @@ namespace anduefker::generation
             stream << "};\n\n";
         }
         stream << "}\n";
-        return stream.str();
     }
 
     std::string ArtifactWriter::RuntimeJson() const
@@ -681,7 +713,7 @@ namespace anduefker::generation
         const RuntimeBinding &binding = context_.Binding();
         const EngineSchema &schema = context_.Schema();
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 2,\n";
+        stream << "{\n  \"schema_version\": 3,\n";
         stream << "  \"engine\": \"" << EscapeJson(schema.identity.canonicalVersionRange.empty() ? schema.validation.familyEvidence : schema.identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\"" << EscapeJson(schema.validation.profileId)
                << "\",\"label\":\"" << EscapeJson(schema.validation.profileLabel)
@@ -718,16 +750,20 @@ namespace anduefker::generation
                << "\",\"objects_offset\":" << binding.objects.objectsOffset
                << ",\"num_elements_offset\":" << binding.objects.numElementsOffset
                << ",\"max_elements_offset\":" << binding.objects.maxElementsOffset
+               << ",\"num_chunks_offset\":" << binding.objects.numChunksOffset
                << ",\"max_chunks_offset\":" << binding.objects.maxChunksOffset
                << ",\"elements_per_chunk\":" << binding.objects.elementsPerChunk
                << ",\"item_object_offset\":" << binding.objects.itemObjectOffset
                << ",\"item_stride\":" << binding.objects.itemStride
+               << ",\"packed_pointers\":" << (binding.objects.packedPointers ? "true" : "false")
                << ",\"item_index_offset\":" << binding.objects.itemIndexOffset << "},\n";
         stream << "    \"names\": {\"kind\":\""
                << (binding.names.kind == NameContainerKind::Pool ? "pool" : "array") << "\"";
         if (binding.names.kind == NameContainerKind::Pool)
         {
             stream << ",\"blocks_offset\":" << binding.names.pool.blocksOffset
+                   << ",\"current_block_offset\":" << binding.names.pool.maxChunkIndexOffset
+                   << ",\"byte_cursor_offset\":" << binding.names.pool.byteCursorOffset
                    << ",\"blocks_bit\":" << binding.names.pool.blocksBit
                    << ",\"entry_stride\":" << binding.names.pool.entryStride
                    << ",\"entry_header_offset\":" << binding.names.pool.entryHeaderOffset
@@ -837,12 +873,10 @@ namespace anduefker::generation
         return stream.str();
     }
 
-    std::string ArtifactWriter::ReflectionJson() const
+    void ArtifactWriter::ReflectionJson(std::ostream &stream) const
     {
-        std::ostringstream stream;
         const auto &validation = context_.Schema().validation;
         WriteReflectionJson(stream, reflection_, {context_.Schema().identity.canonicalVersionRange.empty() ? validation.familyEvidence : context_.Schema().identity.canonicalVersionRange, validation.profileId, validation.profileLabel, validation.profileVersionRange, &context_.Schema().identity});
-        return stream.str();
     }
 
     ArtifactResult ArtifactWriter::Write() const
@@ -881,10 +915,61 @@ namespace anduefker::generation
         const std::string packageStem = SanitizeIdentifier(packageName_, "Package");
         GenerationReport report;
         const CppSymbols symbols = BuildCppSymbols(reflection_);
-        const std::string basicTypes = BasicTypes();
-        const std::string types = Types(symbols, report);
-        const std::string enums = Enums(symbols);
-        const std::string functions = Functions(symbols, report);
+        TemporaryDirectory transaction;
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (int attempt = 0; attempt < 16; ++attempt)
+        {
+            const auto candidate = outputRoot_ / ("." + packageStem + ".tmp." + std::to_string(stamp) + "." + std::to_string(attempt));
+            if (std::filesystem::create_directory(candidate, error))
+            {
+                transaction.path = candidate;
+                break;
+            }
+            if (error == std::errc::file_exists)
+                error.clear();
+            else if (error)
+                break;
+        }
+        if (transaction.path.empty())
+        {
+            result.error = "temporary output directory creation failed";
+            return result;
+        }
+        const auto writeFile = [&](const char *name, const auto &emit)
+        {
+            std::ofstream stream(transaction.path / name, std::ios::binary | std::ios::trunc);
+            if (!stream.is_open())
+            {
+                result.error = "output file open failed: " + std::string(name);
+                return false;
+            }
+            emit(stream);
+            stream.flush();
+            if (!stream.good())
+            {
+                result.error = "output file write or flush failed: " + std::string(name);
+                return false;
+            }
+            stream.close();
+            if (stream.fail())
+            {
+                result.error = "output file close failed: " + std::string(name);
+                return false;
+            }
+            ++result.filesWritten;
+            return true;
+        };
+        if (!writeFile("BasicTypes.hpp", [&](std::ostream &stream)
+                       { BasicTypes(stream); }) ||
+            !writeFile("Types.hpp", [&](std::ostream &stream)
+                       { Types(stream, symbols, report); }) ||
+            !writeFile("Enums.hpp", [&](std::ostream &stream)
+                       { Enums(stream, symbols); }) ||
+            !writeFile("Functions.hpp", [&](std::ostream &stream)
+                       { Functions(stream, symbols, report); }) ||
+            !writeFile("reflection.json", [&](std::ostream &stream)
+                       { ReflectionJson(stream); }))
+            return result;
         const ParseStatus status = reflection_.status == ParseStatus::Partial || report.Status() == ParseStatus::Partial
                                        ? ParseStatus::Partial
                                        : ParseStatus::Complete;
@@ -920,71 +1005,14 @@ namespace anduefker::generation
             result.error = "output directory check failed: " + error.message();
             return result;
         }
-        TemporaryDirectory transaction;
-        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        for (int attempt = 0; attempt < 16; ++attempt)
-        {
-            const auto candidate = outputRoot_ / ("." + artifactStem + ".tmp." + std::to_string(stamp) + "." + std::to_string(attempt));
-            if (std::filesystem::create_directory(candidate, error))
-            {
-                transaction.path = candidate;
-                break;
-            }
-            if (error == std::errc::file_exists)
-                error.clear();
-            else if (error)
-                break;
-        }
-        if (transaction.path.empty())
-        {
-            result.error = "temporary output directory creation failed";
+        if (!writeFile("manifest.json", [&](std::ostream &stream)
+                       { stream << ManifestJson(report, status); }) ||
+            !writeFile("diagnostics.json", [&](std::ostream &stream)
+                       { stream << DiagnosticsJson(report, status); }) ||
+            !writeFile("runtime.json", [&](std::ostream &stream)
+                       { stream << RuntimeJson(); }))
             return result;
-        }
-        const std::filesystem::path &temporary = transaction.path;
-        const std::string reflectionJson = ReflectionJson();
-        const std::string manifestJson = ManifestJson(report, status);
-        const std::string diagnosticsJson = DiagnosticsJson(report, status);
-        const std::string runtimeJson = RuntimeJson();
-        // 视图引用本次调用持有的字符串，避免再复制整份大型反射 JSON。
-        const std::array<std::pair<std::string_view, std::string_view>, 8> files = {{
-            {"BasicTypes.hpp", basicTypes},
-            {"Types.hpp", types},
-            {"Enums.hpp", enums},
-            {"Functions.hpp", functions},
-            {"reflection.json", reflectionJson},
-            {"manifest.json", manifestJson},
-            {"diagnostics.json", diagnosticsJson},
-            {"runtime.json", runtimeJson},
-        }};
-        for (const auto &[name, content] : files)
-        {
-            std::ofstream stream(temporary / name, std::ios::binary | std::ios::trunc);
-            if (!stream.is_open())
-            {
-                result.error = "output file open failed: " + std::string(name);
-                return result;
-            }
-            if (content.size() > static_cast<size_t>(std::numeric_limits<std::streamsize>::max()))
-            {
-                result.error = "output file size exceeds stream limit: " + std::string(name);
-                return result;
-            }
-            stream.write(content.data(), static_cast<std::streamsize>(content.size()));
-            stream.flush();
-            if (!stream.good())
-            {
-                result.error = "output file write or flush failed: " + std::string(name);
-                return result;
-            }
-            stream.close();
-            if (stream.fail())
-            {
-                result.error = "output file close failed: " + std::string(name);
-                return result;
-            }
-            ++result.filesWritten;
-        }
-        std::filesystem::rename(temporary, finalPath, error);
+        std::filesystem::rename(transaction.path, finalPath, error);
         if (error)
         {
             result.error = "output directory commit failed";

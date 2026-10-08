@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <optional>
 
 #include "anduefker/ue/EngineSchema.hpp"
 #include "anduefker/memory/MemorySource.hpp"
@@ -39,6 +41,14 @@ namespace anduefker::ue
         [[nodiscard]] bool IsValid() const { return status == ObjectReadStatus::Valid; }
     };
 
+    struct ObjectStoreBoundary
+    {
+        uintptr_t countAddress = 0;
+        int32_t count = -1;
+        bool valid = false;
+        std::string reason;
+    };
+
     class ObjectStoreReader
     {
     public:
@@ -50,7 +60,9 @@ namespace anduefker::ue
         [[nodiscard]] bool Initialize();
         [[nodiscard]] bool IsInitialized() const { return initialized_; }
         [[nodiscard]] int32_t Count() const { return count_; }
-        [[nodiscard]] ObjectReadResult ReadObject(int32_t index) const;
+        [[nodiscard]] ObjectReadResult ReadObject(int32_t index, bool fresh = false) const;
+        [[nodiscard]] ObjectStoreBoundary RefreshCount();
+        [[nodiscard]] std::optional<uint32_t> ReadInternalFlags(const ObjectReadResult &object) const;
 
     private:
         const IMemorySource &memory_;

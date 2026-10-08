@@ -17,6 +17,7 @@ namespace anduefker::binding
         double confidence = 0.0;
         int32_t tested = 0;
         int32_t valid = 0;
+        int32_t empty = 0;
         std::vector<std::string> evidence;
         std::vector<std::string> failures;
     };
