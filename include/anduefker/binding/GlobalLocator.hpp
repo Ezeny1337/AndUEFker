@@ -7,6 +7,8 @@
 #include "anduefker/binding/BindingBuilder.hpp"
 #include "anduefker/binding/RuntimeBinding.hpp"
 
+class ElfScanner;
+
 namespace anduefker::binding
 {
     using ::anduefker::app::ModuleArchitecture;
@@ -23,7 +25,8 @@ namespace anduefker::binding
                                                const std::function<void(const std::string &)> &progress = {}) const;
 
     private:
-        [[nodiscard]] std::vector<LocatedAddress> SymbolCandidates(const std::string &symbol) const;
+        [[nodiscard]] std::vector<LocatedAddress> SymbolCandidates(ElfScanner &elf,
+                                                                   const std::string &symbol) const;
 
         RemoteMemorySource &memory_;
         const ModuleImage &module_;

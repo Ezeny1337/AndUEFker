@@ -216,6 +216,8 @@ namespace anduefker::analyzer
 		// at all is what let the Targets bug sit here unnoticed.
 		if (Out.Options_.ThreadMode == EThreadMode::Two)
 		{
+			if (Out.Options_.Progress)
+				Out.Options_.Progress("analyzer: literal scan started");
 			// The scan goes to the second thread and the harvest stays here, so a
 			// failure to spawn is the only thing that could differ - and that throws
 			// rather than silently running half the work.
@@ -268,7 +270,7 @@ namespace anduefker::analyzer
 		{
 			bHarvested = Harvest_();
 			if (Out.Options_.Progress)
-				Out.Options_.Progress("analyzer: instruction harvest complete; scanning literals");
+				Out.Options_.Progress("analyzer: instruction harvest complete; literal scan started");
 			ScanLiterals();
 		}
 
@@ -277,6 +279,9 @@ namespace anduefker::analyzer
 			Out.Error_ = "harvest failed";
 			return Out;
 		}
+
+		if (Out.Options_.Progress)
+			Out.Options_.Progress("analyzer: literal scan complete; ranking global accesses");
 
 		// Needs both phases: the sites come from the harvester, the strings from the
 		// scan, so this is the join point rather than part of either.
@@ -288,9 +293,9 @@ namespace anduefker::analyzer
 			T.AnchorSitesByAnchor = T.Anchors.CollectAnchorSitesByAnchor(State->Harvester);
 		}
 
-		if (Out.Options_.Progress)
-			Out.Options_.Progress("analyzer: literals complete; ranking global accesses");
 		State->BuildRanking();
+		if (Out.Options_.Progress)
+			Out.Options_.Progress("analyzer: global ranking complete; resolution anchor scan started");
 		std::vector<const Anchor *> ResolutionAnchors;
 		for (const auto &Target : State->Targets)
 			for (const Anchor &A : Target.Strategy->ResolutionAnchors())
@@ -298,6 +303,9 @@ namespace anduefker::analyzer
 		if (Out.Options_.Progress)
 			Out.Options_.Progress("analyzer: batch scanning resolution anchors");
 		State->ResolutionSites = AnchoredResolution::ScanAnchorSites(Memory, State->Module, State->Harvester, ResolutionAnchors);
+
+		if (Out.Options_.Progress)
+			Out.Options_.Progress("analyzer: resolution anchor scan complete");
 
 		Out.State_ = std::move(State);
 		return Out;

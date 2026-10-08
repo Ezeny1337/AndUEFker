@@ -227,6 +227,11 @@ namespace anduefker::app
                  " operations=" + std::to_string(stats.operations - stageStats.operations) +
                  " requested_bytes=" + std::to_string(stats.requestedBytes - stageStats.requestedBytes) +
                  " transferred_bytes=" + std::to_string(stats.transferredBytes - stageStats.transferredBytes) +
+                 " cache_hits=" + std::to_string(stats.cacheHits - stageStats.cacheHits) +
+                 " cache_misses=" + std::to_string(stats.cacheMisses - stageStats.cacheMisses) +
+                 " backend_operations=" + std::to_string(stats.backendOperations - stageStats.backendOperations) +
+                 " backend_requested_bytes=" + std::to_string(stats.backendRequestedBytes - stageStats.backendRequestedBytes) +
+                 " backend_transferred_bytes=" + std::to_string(stats.backendTransferredBytes - stageStats.backendTransferredBytes) +
                  " failures=" + std::to_string(stats.failures - stageStats.failures));
             stageStart = now;
             stageStats = stats;
@@ -326,9 +331,26 @@ namespace anduefker::app
             {
                 Note("schema: probing profile=" + profile.id);
                 EngineSchema candidateSchema;
+                const auto profileStart = std::chrono::steady_clock::now();
+                const ReadStats profileStatsBefore = memory_->Stats();
                 SchemaResolver resolver(*memory_, context_.Binding(), profile, {},
                                         context_.Module().base, context_.Module().end, schemaBootstrap);
                 SchemaCandidateSummary candidateReport = resolver.Resolve(candidateSchema);
+                const ReadStats profileStatsAfter = memory_->Stats();
+                Note(RuntimeLogLevel::Debug, "schema_profile id=" + profile.id +
+                                                 " elapsed_ms=" +
+                                                 std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                                    std::chrono::steady_clock::now() - profileStart)
+                                                                    .count()) +
+                                                 " operations=" + std::to_string(profileStatsAfter.operations - profileStatsBefore.operations) +
+                                                 " requested_bytes=" + std::to_string(profileStatsAfter.requestedBytes - profileStatsBefore.requestedBytes) +
+                                                 " transferred_bytes=" + std::to_string(profileStatsAfter.transferredBytes - profileStatsBefore.transferredBytes) +
+                                                 " cache_hits=" + std::to_string(profileStatsAfter.cacheHits - profileStatsBefore.cacheHits) +
+                                                 " cache_misses=" + std::to_string(profileStatsAfter.cacheMisses - profileStatsBefore.cacheMisses) +
+                                                 " backend_operations=" + std::to_string(profileStatsAfter.backendOperations - profileStatsBefore.backendOperations) +
+                                                 " backend_requested_bytes=" + std::to_string(profileStatsAfter.backendRequestedBytes - profileStatsBefore.backendRequestedBytes) +
+                                                 " backend_transferred_bytes=" + std::to_string(profileStatsAfter.backendTransferredBytes - profileStatsBefore.backendTransferredBytes) +
+                                                 " failures=" + std::to_string(profileStatsAfter.failures - profileStatsBefore.failures));
                 const std::string reason = candidateReport.failures.empty()
                                                ? (candidateReport.evidence.empty() ? "none" : candidateReport.evidence.front())
                                                : candidateReport.failures.front();
@@ -465,6 +487,11 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Debug, "memory stats operations=" + std::to_string(memoryStats.operations) +
                                          " requested_bytes=" + std::to_string(memoryStats.requestedBytes) +
                                          " transferred_bytes=" + std::to_string(memoryStats.transferredBytes) +
+                                         " cache_hits=" + std::to_string(memoryStats.cacheHits) +
+                                         " cache_misses=" + std::to_string(memoryStats.cacheMisses) +
+                                         " backend_operations=" + std::to_string(memoryStats.backendOperations) +
+                                         " backend_requested_bytes=" + std::to_string(memoryStats.backendRequestedBytes) +
+                                         " backend_transferred_bytes=" + std::to_string(memoryStats.backendTransferredBytes) +
                                          " failures=" + std::to_string(memoryStats.failures));
         if (!schemaAccepted)
         {
@@ -507,6 +534,11 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Debug, "memory stats stage=reflection operations=" + std::to_string(afterReflection.operations - beforeReflection.operations) +
                                          " requested_bytes=" + std::to_string(afterReflection.requestedBytes - beforeReflection.requestedBytes) +
                                          " transferred_bytes=" + std::to_string(afterReflection.transferredBytes - beforeReflection.transferredBytes) +
+                                         " cache_hits=" + std::to_string(afterReflection.cacheHits - beforeReflection.cacheHits) +
+                                         " cache_misses=" + std::to_string(afterReflection.cacheMisses - beforeReflection.cacheMisses) +
+                                         " backend_operations=" + std::to_string(afterReflection.backendOperations - beforeReflection.backendOperations) +
+                                         " backend_requested_bytes=" + std::to_string(afterReflection.backendRequestedBytes - beforeReflection.backendRequestedBytes) +
+                                         " backend_transferred_bytes=" + std::to_string(afterReflection.backendTransferredBytes - beforeReflection.backendTransferredBytes) +
                                          " failures=" + std::to_string(afterReflection.failures - beforeReflection.failures));
         Note(RuntimeLogLevel::Info, "Capture observations_stable=" + std::to_string(reflection_.capture.observationsStable) +
                                         " attempts=" + std::to_string(reflection_.capture.attempts) +

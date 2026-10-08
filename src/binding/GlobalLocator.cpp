@@ -27,12 +27,10 @@ namespace anduefker::binding
         }
     } // namespace
 
-    std::vector<LocatedAddress> GlobalLocator::SymbolCandidates(const std::string &symbol) const
+    std::vector<LocatedAddress> GlobalLocator::SymbolCandidates(ElfScanner &elf,
+                                                                const std::string &symbol) const
     {
         std::vector<LocatedAddress> result;
-        auto elf = memory_.Manager().elfScanner.findElf(module_.name);
-        if (!elf.isValid())
-            return result;
         uintptr_t address = elf.findSymbol(symbol);
         if (address == 0)
             address = elf.findDebugSymbol(symbol);
@@ -59,15 +57,23 @@ namespace anduefker::binding
         BindingCandidates result;
         if (progress)
             progress("locator: resolving exported and debug symbols");
-        for (const std::string &symbol : objectSymbols)
+        auto elf = memory_.Manager().elfScanner.findElf(module_.name);
+        if (elf.isValid())
         {
-            const std::vector<LocatedAddress> candidates = SymbolCandidates(symbol);
-            result.objectRoots.insert(result.objectRoots.end(), candidates.begin(), candidates.end());
-        }
-        for (const std::string &symbol : nameSymbols)
-        {
-            const std::vector<LocatedAddress> candidates = SymbolCandidates(symbol);
-            result.nameRoots.insert(result.nameRoots.end(), candidates.begin(), candidates.end());
+            if (progress)
+                progress("locator: resolving module symbols from one ELF scan");
+            for (const std::string &symbol : objectSymbols)
+            {
+                const std::vector<LocatedAddress> candidates = SymbolCandidates(elf, symbol);
+                result.objectRoots.insert(result.objectRoots.end(), candidates.begin(), candidates.end());
+            }
+            for (const std::string &symbol : nameSymbols)
+            {
+                const std::vector<LocatedAddress> candidates = SymbolCandidates(elf, symbol);
+                result.nameRoots.insert(result.nameRoots.end(), candidates.begin(), candidates.end());
+            }
+            if (progress)
+                progress("locator: module symbol resolution complete");
         }
 
         AnalyzerMemoryAdapter adapter(memory_, module_);

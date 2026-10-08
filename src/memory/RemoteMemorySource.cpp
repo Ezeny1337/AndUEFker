@@ -24,8 +24,13 @@ namespace anduefker::memory
         }
     } // namespace
 
-    RemoteMemorySource::RemoteMemorySource(size_t cacheSize) : maxCacheSize_(cacheSize)
+    RemoteMemorySource::RemoteMemorySource(size_t cacheSize)
     {
+        // Cache pages are indivisible. A sub-page limit cannot hold a cache page
+        // and must disable caching instead of reaching an unsigned underflow in
+        // EvictIfNeeded().
+        maxCacheSize_ = (cacheSize / kPageSize) * kPageSize;
+        cacheEnabled_ = maxCacheSize_ >= kPageSize;
     }
 
     bool RemoteMemorySource::Initialize(pid_t pid)
@@ -195,13 +200,20 @@ namespace anduefker::memory
 
         if (const uint8_t *cached = useCache ? GetCached(address, size) : nullptr)
         {
+            ++stats_.cacheHits;
             std::memcpy(buffer, cached, size);
             result.transferred = size;
             stats_.transferredBytes += size;
             return result;
         }
 
+        if (useCache)
+            ++stats_.cacheMisses;
+
+        ++stats_.backendOperations;
+        stats_.backendRequestedBytes += size;
         result.transferred = manager_.readMem(address, buffer, size);
+        stats_.backendTransferredBytes += result.transferred;
         stats_.transferredBytes += result.transferred;
         if (result.transferred != size)
         {

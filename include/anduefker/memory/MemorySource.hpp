@@ -32,6 +32,11 @@ namespace anduefker::memory
         uint64_t operations = 0;
         uint64_t requestedBytes = 0;
         uint64_t transferredBytes = 0;
+        uint64_t cacheHits = 0;
+        uint64_t cacheMisses = 0;
+        uint64_t backendOperations = 0;
+        uint64_t backendRequestedBytes = 0;
+        uint64_t backendTransferredBytes = 0;
         uint64_t failures = 0;
     };
 
