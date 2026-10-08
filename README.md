@@ -25,8 +25,6 @@ Build the tool with the ABI matching the target process: use the `arm64-v8a` bin
 - **Common class addresses** — records useful `UClass` objects such as `World`, `Engine`, `GameInstance`, and `PlayerController`.
 - **Reproducible artifacts** — writes generated headers, JSON metadata, diagnostics, and runtime binding details as one artifact directory.
 - **Fail-closed validation** — invalid candidates and inconsistent layouts are rejected rather than silently treated as valid.
-- **Bounded capture** — rechecks consumed bytes and covers object-array growth through limited tail enumeration.
-- **Progress and timing** — records elapsed time and memory counters per stage, with throttled instruction and reflection progress.
 
 ## Pipeline
 
@@ -214,10 +212,6 @@ The generated `manifest.json` reports one of the following artifact states:
 The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
 
 `manifest.json` records `reflection_status` and `sdk_status` separately. Opaque containers are intentional descriptions of known fields whose internal implementation is not expanded; they do not by themselves make the SDK description partial. Omitted fields and description layout warnings do.
-
-Capture validates observed bytes and enumeration coverage, with bounded tail reads for chunked object-array growth and at most one full retry. Data changes, unreadable ranges, or exhausted budgets can make reflection partial. `capture.atomic_snapshot` is always `false`; `capture.attempt_history` records each attempt's counts, changes, and failure reasons.
-
-`AndUEFker.log` is written during the session and includes stage progress, elapsed time, and memory read statistics.
 
 ## Issues
 
