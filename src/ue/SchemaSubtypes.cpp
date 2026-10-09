@@ -19,7 +19,6 @@ namespace anduefker::ue::schema_probe
         constexpr size_t kMaxDepth = 32;
         constexpr size_t kMaxFrontier = 1024;
         constexpr size_t kMaxReads = 65536;
-        constexpr int32_t kMaxObjectSlots = 1048576;
 
         // 所有读取器共用此视图，连名称与父类链验证也计入预算
         class ProbeMemory final : public IMemorySource
@@ -42,13 +41,13 @@ namespace anduefker::ue::schema_probe
             [[nodiscard]] ::anduefker::memory::ReadResult ReadBytes(uintptr_t address, void *buffer, size_t size) const override
             {
                 if (!Consume())
-                    return {::anduefker::memory::ReadError::BackendFailure, address, size, 0};
+                    return {::anduefker::memory::ReadError::ProbeLimit, address, size, 0};
                 return source_.ReadBytes(address, buffer, size);
             }
             [[nodiscard]] ::anduefker::memory::ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const override
             {
                 if (!Consume())
-                    return {::anduefker::memory::ReadError::BackendFailure, address, size, 0};
+                    return {::anduefker::memory::ReadError::ProbeLimit, address, size, 0};
                 return source_.ReadFreshBytes(address, buffer, size);
             }
 
@@ -234,30 +233,25 @@ namespace anduefker::ue::schema_probe
                    metadata.elementSize <= 0x10000000 && metadata.offset >= 0;
         }
 
-        SampleSet CollectSamples(ObjectModelReader &model, ProbeMemory &memory, const EngineSchema &schema, SchemaResolutionReport &report)
+        SampleSet CollectSamples(ObjectModelReader &model, ProbeMemory &memory, const EngineSchema &schema,
+                                 SchemaProbeSession &session, SchemaResolutionReport &report)
         {
             SampleSet result;
             std::unordered_map<uintptr_t, std::optional<DefinitionKind>> classifications;
-            const int32_t slots = std::min(model.Count(), kMaxObjectSlots);
-            result.collectionLimit = slots != model.Count();
-            for (int32_t index = 0; index < slots && result.visited.size() < kMaxProperties && !memory.Exhausted(); ++index)
+            const auto &objects = session.Objects(schema);
+            result.collectionLimit = session.indexLimited;
+            for (const auto &object : objects)
             {
-                const auto object = model.Objects().ReadObject(index);
-                if (!object.IsValid())
-                    continue;
-                const auto classAddress = model.Class(object.address);
-                const auto className = model.ClassName(object.address);
-                if (!classAddress || !className)
-                    continue;
-                auto classification = classifications.find(*classAddress);
+                if (result.visited.size() >= kMaxProperties || memory.Exhausted())
+                    break;
+                auto classification = classifications.find(object.classAddress);
                 if (classification == classifications.end())
-                    classification = classifications.emplace(*classAddress, model.DefinitionKindForClass(*classAddress)).first;
-                const bool function = IsFunctionFieldKind(FieldKindFromRuntimeName(*className, false));
+                    classification = classifications.emplace(object.classAddress, model.DefinitionKindForClass(object.classAddress)).first;
+                const bool function = IsFunctionFieldKind(FieldKindFromRuntimeName(object.className, false));
                 if (!function && (!classification->second || (*classification->second != DefinitionKind::Class &&
                                                               *classification->second != DefinitionKind::Struct)))
                     continue;
-                const auto flags = model.Flags(object.address);
-                if (!flags || (*flags & (kRFClassDefaultObject | kRFUnavailableDefinition)) != 0)
+                if ((object.flags & (kRFClassDefaultObject | kRFUnavailableDefinition)) != 0)
                     continue;
                 const auto first = model.StructProperties(object.address);
                 if (!first)
@@ -269,6 +263,7 @@ namespace anduefker::ue::schema_probe
                 const auto chain = model.FieldsWithStatus(*first, 4096);
                 if (!chain.Complete())
                 {
+                    result.collectionLimit = result.collectionLimit || chain.status == FieldChainStatus::LimitExceeded;
                     ++result.incompleteChains;
                     continue;
                 }
@@ -294,7 +289,7 @@ namespace anduefker::ue::schema_probe
                     result.Add(*property, object.address, 0, function ? "function-fields" : "type-fields");
                 }
             }
-            result.collectionLimit = result.collectionLimit || result.visited.size() >= kMaxProperties;
+            result.collectionLimit = result.collectionLimit || result.visited.size() >= kMaxProperties || memory.Exhausted();
             report.evidence.push_back("property subtype samples: roots=" + std::to_string(result.roots) +
                                       " unique_properties=" + std::to_string(result.visited.size()) +
                                       " unreadable=" + std::to_string(result.unreadable) +
@@ -953,7 +948,7 @@ namespace anduefker::ue::schema_probe
         void ExpandChildren(ObjectModelReader &model, const EngineSchema &schema, Budget &budget,
                             const std::vector<PropertyTailCandidate> &tails, SampleSet &samples)
         {
-            // 先验证候选父子关系再采样，不使用尚未提交的 subtype 偏移。
+            // 先验证候选父子关系再采样，不使用尚未提交的 subtype 偏移
             for (size_t index = 0; index < samples.containers.size() && !budget.exhausted && !budget.memory.Exhausted(); ++index)
             {
                 const auto [payload, sample] = samples.containers[index];
@@ -1001,12 +996,18 @@ namespace anduefker::ue::schema_probe
         ObjectModelReader model(probeMemory, binding_, schema);
         if (!model.Initialize())
         {
+            report.probeLimited = true;
+            report.evidenceComplete = false;
+            report.searchComplete = false;
             report.evidence.push_back("property subtype result: reason=object-model-initialization-failed");
             return true;
         }
-        auto samples = CollectSamples(model, probeMemory, schema, report);
+        auto samples = CollectSamples(model, probeMemory, schema, session_, report);
         if (probeMemory.Exhausted())
         {
+            report.probeLimited = true;
+            report.budgetExhausted = true;
+            report.searchComplete = false;
             report.evidence.push_back("property subtype result: reason=collection-read-budget-exhausted");
             return true;
         }
@@ -1025,6 +1026,9 @@ namespace anduefker::ue::schema_probe
         }
         if (budget.exhausted || probeMemory.Exhausted())
         {
+            report.probeLimited = true;
+            report.budgetExhausted = true;
+            report.searchComplete = false;
             report.evidence.push_back("property subtype result: reason=tail-read-budget-exhausted");
             return true;
         }
@@ -1060,6 +1064,16 @@ namespace anduefker::ue::schema_probe
             validationLimit = validationLimit || validationBudget.exhausted || probeMemory.Exhausted();
         }
         schema.propertySubtypes = resolved;
+        // 收集上限限制的是覆盖率范围，而非限定那些已被验证过的有效偏移量
+        // 未被观测到的类型保留为 -1，因此数据共享绝不会凭空制造缺失证据
+        report.sampleTruncated = samples.collectionLimit || session_.indexLimited;
+        report.budgetExhausted = validationLimit;
+        report.evidenceComplete = samples.unreadable == 0 && samples.incompleteChains == 0;
+        report.searchComplete = !report.sampleTruncated && !validationLimit && report.evidenceComplete;
+        report.probeLimited = report.probeLimited || !report.searchComplete;
+        if (report.sampleTruncated && !report.budgetExhausted && report.evidenceComplete &&
+            schema.optionalPropertySupport.sampleCount == 0 && schema.optionalPropertySupport.selectedOffset < 0)
+            schema.optionalPropertySupport.reason = "not-observed-within-sample-budget";
         report.evidence.push_back("property subtype sampling summary: roots=" + std::to_string(samples.roots) +
                                   " unique_properties=" + std::to_string(samples.visited.size()) +
                                   " unreadable=" + std::to_string(samples.unreadable) +

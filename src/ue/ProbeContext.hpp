@@ -1,11 +1,12 @@
 #pragma once
 
 #include "ProbeSupport.hpp"
+#include "ProbeSession.hpp"
 
 namespace anduefker::ue::schema_probe
 {
-    // 上下文仅借用本次 Resolve 的输入；生命周期不超过 SchemaResolver::Resolve
-    // 每个阶段即时创建读取器，保留原有读取时机，不跨阶段缓存远程对象或名称
+    // 各个 Stages 共享借用同一个选择会话
+    // 所有的 Readers 其生命周期绝不可超越该会话
     struct SchemaProbeContext
     {
         const IMemorySource &memory_;
@@ -15,6 +16,7 @@ namespace anduefker::ue::schema_probe
         const uintptr_t moduleBase_;
         const uintptr_t moduleEnd_;
         const std::shared_ptr<const SchemaProbeBootstrap> &bootstrap_;
+        SchemaProbeSession &session_;
 
         [[nodiscard]] std::optional<uintptr_t> FindObjectByName(const EngineSchema &schema,
                                                                 const std::string &name) const;

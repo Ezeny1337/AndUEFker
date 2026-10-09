@@ -23,6 +23,7 @@ namespace anduefker::analyzer
 
 	class GlobalAccessHarvester;
 	class IStrategy;
+	class LiteralScanBatch;
 
 	/**
 	 * @brief One anchored resolution, kept for explainability and cross-checking.
@@ -63,6 +64,9 @@ namespace anduefker::analyzer
 		using AnchorSites = std::map<std::pair<std::string, EAnchorMatch>, std::vector<uint64_t>>;
 		static AnchorSites ScanAnchorSites(const IMemory *Memory, const ModuleInfo &Module,
 										   const GlobalAccessHarvester &Harvester, std::span<const Anchor *const> Anchors);
+		/// Copies needles and keys; only the output Literals is borrowed until Batch.Run().
+		static void QueueAnchorLiterals(LiteralScanBatch &Batch, std::span<const Anchor *const> Anchors, AnchorSites &Literals);
+		static AnchorSites MapAnchorSites(const AnchorSites &Literals, const GlobalAccessHarvester &Harvester);
 		/**
 		 * @param Memory     Backend to read code and strings from.
 		 * @param Module    The caller's own GetUnrealModule() result - fetched once and

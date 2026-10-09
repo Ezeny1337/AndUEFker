@@ -23,7 +23,32 @@ namespace anduefker::binding
     {
         return blocksOffset >= 0 && blocksBit >= 1 && blocksBit <= 16 && (entryStride == 2 || entryStride == 4) &&
                entryHeaderOffset >= 0 && entryHeaderOffset <= 64 && entryStringOffset >= entryHeaderOffset + 2 &&
-               entryStringOffset <= 64 && entryLengthShift >= 0 && entryLengthShift < 16 && entryWideMask != 0;
+               entryStringOffset <= 64 && entryLengthShift >= 0 && entryLengthShift < 16 && entryWideMask != 0 &&
+               currentBlockFromBlocks.has_value() == byteCursorFromBlocks.has_value();
+    }
+
+    std::optional<NamePoolAddresses> NamePoolLayout::Locate(uintptr_t root) const
+    {
+        if (root == 0 || !IsValid() || root > UINTPTR_MAX - static_cast<uintptr_t>(blocksOffset))
+            return std::nullopt;
+        NamePoolAddresses addresses{root + static_cast<uintptr_t>(blocksOffset), 0, 0};
+        const auto relative = [&](int32_t offset) -> std::optional<uintptr_t>
+        {
+            const uint64_t magnitude = offset < 0 ? static_cast<uint64_t>(-int64_t{offset}) : static_cast<uint64_t>(offset);
+            if (offset < 0)
+                return magnitude <= addresses.blocks ? std::optional<uintptr_t>(addresses.blocks - magnitude) : std::nullopt;
+            return magnitude <= UINTPTR_MAX - addresses.blocks ? std::optional<uintptr_t>(addresses.blocks + magnitude) : std::nullopt;
+        };
+        if (HasPublicationBoundary())
+        {
+            const auto current = relative(*currentBlockFromBlocks);
+            const auto cursor = relative(*byteCursorFromBlocks);
+            if (!current || !cursor || *current == 0 || *cursor == 0)
+                return std::nullopt;
+            addresses.currentBlock = *current;
+            addresses.byteCursor = *cursor;
+        }
+        return addresses;
     }
 
     bool NameContainerLayout::IsValid() const

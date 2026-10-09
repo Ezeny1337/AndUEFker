@@ -320,6 +320,7 @@ namespace anduefker::binding
             uintptr_t entry = entry0;
             size_t consumed = 0;
             int knownNames = 0;
+            const char *stopReason = "sample-limit";
             const size_t blockSize = (size_t{1} << layout.pool.blocksBit) * static_cast<size_t>(layout.pool.entryStride);
             constexpr std::array<const char *, 8> known = {"None", "ByteProperty", "IntProperty", "BoolProperty",
                                                            "FloatProperty", "ObjectProperty", "NameProperty", "DelegateProperty"};
@@ -332,36 +333,83 @@ namespace anduefker::binding
                 const auto headerAddress = Add(entry, static_cast<uintptr_t>(layout.pool.entryHeaderOffset));
                 uint16_t header = 0;
                 if (!headerAddress || !memory_.Read(*headerAddress, header))
+                {
+                    stopReason = "header-unreadable";
                     break;
+                }
                 header = decode.nameHeader(header, *headerAddress);
                 const size_t length = header >> layout.pool.entryLengthShift;
                 const size_t width = (header & layout.pool.entryWideMask) != 0 ? 2 : 1;
                 if (length == 0 || length > 1024)
+                {
+                    stopReason = "invalid-length";
                     break;
+                }
                 const size_t extent = static_cast<size_t>(layout.pool.entryStringOffset) + length * width;
                 const size_t stride = static_cast<size_t>(layout.pool.entryStride);
                 const size_t advance = (extent + stride - 1) / stride * stride;
                 if (consumed > blockSize || advance > blockSize - consumed)
+                {
+                    stopReason = "block-boundary";
                     break;
+                }
                 std::string text;
                 if (!ReadEntry(entry, layout, decode, text) || text.empty() ||
                     !std::all_of(text.begin(), text.end(), [](unsigned char c)
                                  { return c >= 0x20 && c <= 0x7E; }))
+                {
+                    stopReason = "entry-unreadable-or-invalid-text";
                     break;
+                }
                 ++report.valid;
                 knownNames += std::find(known.begin(), known.end(), text) != known.end() ? 1 : 0;
                 const auto next = Add(entry, advance);
                 if (!next)
+                {
+                    stopReason = "address-overflow";
                     break;
+                }
                 entry = decode.nameEntry(*next, *next);
                 consumed += advance;
             }
             report.confidence = report.tested > 0 ? static_cast<double>(report.valid) / report.tested : 0;
             report.accepted = report.valid >= 8 && knownNames >= 3 && report.confidence == 1.0;
+            if (report.accepted && layout.pool.HasPublicationBoundary())
+            {
+                const auto addresses = layout.pool.Locate(root);
+                uint32_t current = 0;
+                uint32_t cursor = 0;
+                const bool readable = addresses && memory_.ReadFreshBytes(addresses->currentBlock, &current, sizeof(current)).Ok() &&
+                                      memory_.ReadFreshBytes(addresses->byteCursor, &cursor, sizeof(cursor)).Ok();
+                report.accepted = readable && current < 8192 && cursor <= blockSize &&
+                                  cursor % static_cast<uint32_t>(layout.pool.entryStride) == 0 &&
+                                  (current != 0 || cursor >= consumed);
+                uintptr_t publishedBlock = 0;
+                if (report.accepted)
+                {
+                    const auto table = Add(root, static_cast<uintptr_t>(layout.pool.blocksOffset));
+                    const auto slot = table ? Add(*table, static_cast<uintptr_t>(current) * sizeof(uintptr_t)) : std::nullopt;
+                    report.accepted = slot && memory_.ReadFreshBytes(*slot, &publishedBlock, sizeof(publishedBlock)).Ok();
+                    if (report.accepted)
+                    {
+                        publishedBlock = decode.nameBlocks(publishedBlock, *slot);
+                        report.accepted = publishedBlock != 0 && memory_.IsReadable(publishedBlock, sizeof(uint16_t));
+                    }
+                }
+                report.evidence.push_back("name pool publication boundary current_block=" + std::to_string(current) +
+                                          " byte_cursor=" + std::to_string(cursor) +
+                                          " published_block=" + std::to_string(publishedBlock) +
+                                          " readable=" + std::to_string(readable) +
+                                          " validated=" + std::to_string(report.accepted));
+                if (!report.accepted)
+                    report.failures.push_back("name pool publication boundary failed validation");
+            }
             report.evidence.push_back("name pool sequential entries=" + std::to_string(report.valid) +
                                       " known_names=" + std::to_string(knownNames) +
-                                      " stride=" + std::to_string(layout.pool.entryStride));
-            if (!report.accepted)
+                                      " stride=" + std::to_string(layout.pool.entryStride) +
+                                      " consumed_bytes=" + std::to_string(consumed) +
+                                      " stop_reason=" + stopReason);
+            if (!report.accepted && report.failures.empty())
                 report.failures.push_back("name pool stride/header failed sequential name validation");
         }
         return report;

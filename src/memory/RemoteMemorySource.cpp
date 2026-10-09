@@ -183,18 +183,21 @@ namespace anduefker::memory
         {
             result.error = ReadError::NotInitialized;
             ++stats_.failures;
+            ++stats_.notInitialized;
             return result;
         }
         if (buffer == nullptr || address == 0 || IsOverflow(address, size))
         {
             result.error = ReadError::InvalidArgument;
             ++stats_.failures;
+            ++stats_.invalidArguments;
             return result;
         }
         if (!IsReadable(address, size))
         {
             result.error = ReadError::UnreadableRange;
             ++stats_.failures;
+            ++stats_.unreadableRanges;
             return result;
         }
 
@@ -219,6 +222,10 @@ namespace anduefker::memory
         {
             result.error = result.transferred == 0 ? ReadError::BackendFailure : ReadError::PartialRead;
             ++stats_.failures;
+            if (result.error == ReadError::PartialRead)
+                ++stats_.partialReads;
+            else
+                ++stats_.backendFailures;
             return result;
         }
 

@@ -7,8 +7,6 @@
 #include "anduefker/binding/BindingBuilder.hpp"
 #include "anduefker/binding/RuntimeBinding.hpp"
 
-class ElfScanner;
-
 namespace anduefker::binding
 {
     using ::anduefker::app::ModuleArchitecture;
@@ -20,12 +18,14 @@ namespace anduefker::binding
     public:
         GlobalLocator(RemoteMemorySource &memory, const ModuleImage &module) : memory_(memory), module_(module) {}
 
-        [[nodiscard]] BindingCandidates Locate(const std::vector<std::string> &objectSymbols,
-                                               const std::vector<std::string> &nameSymbols,
-                                               const std::function<void(const std::string &)> &progress = {}) const;
+        [[nodiscard]] BindingCandidates LocateSymbols(const std::vector<std::string> &objectSymbols,
+                                                      const std::vector<std::string> &nameSymbols,
+                                                      const std::function<void(const std::string &)> &progress = {}) const;
+        [[nodiscard]] BindingCandidates LocateAnalysis(const BindingCandidates &existing,
+                                                       const std::function<void(const std::string &)> &progress = {}) const;
 
     private:
-        [[nodiscard]] std::vector<LocatedAddress> SymbolCandidates(ElfScanner &elf,
+        [[nodiscard]] std::vector<LocatedAddress> SymbolCandidates(uintptr_t address,
                                                                    const std::string &symbol) const;
 
         RemoteMemorySource &memory_;

@@ -84,6 +84,8 @@ namespace anduefker::generation
             size_t omittedFields = 0;
             size_t layoutWarnings = 0;
             size_t layoutEvents = 0;
+            std::map<std::string, size_t> opaqueReasons;
+            std::map<std::pair<std::string, std::string>, size_t> cppRepresentationFailures;
             std::vector<std::string> diagnostics;
             std::map<std::string, size_t> counts;
             std::vector<LayoutEvent> events;
@@ -132,6 +134,7 @@ namespace anduefker::generation
         {
             const PropertyIR *property = nullptr;
             std::string cppType;
+            std::string cppTypeFailure;
             bool validBounds = false;
             bool boolLayout = false;
         };

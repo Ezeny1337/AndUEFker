@@ -1,6 +1,9 @@
 #include "TCharDetect.h"
 
+#include <array>
 #include <cstdint>
+#include <iterator>
+#include <utility>
 #include <vector>
 
 #include "LiteralScanner.h"
@@ -37,6 +40,8 @@ namespace anduefker::analyzer
 			"Transient",
 			"bHidden",
 		};
+		constexpr size_t kMaxPerSegment = 8;
+		constexpr size_t kDecisiveHits = 16;
 
 	} // namespace
 
@@ -53,6 +58,41 @@ namespace anduefker::analyzer
 		}
 	}
 
+	void QueueTCharDetection(LiteralScanBatch &Batch, ETCharKind &Kind, size_t &Utf16, size_t &Utf32)
+	{
+		LiteralScanner Scanner;
+		// The matcher shares patterns with all other consumers. Absence of an encoding
+		// is established after all ranges; premature prefix decisions could miss a
+		// conflicting encoding in a later segment. Preserve the reference probe order.
+		for (size_t i = 0; i < std::size(kTCharProbes); ++i)
+		{
+			const auto W16 = LiteralScanner::Widen<uint16_t>(kTCharProbes[i]);
+			const auto W32 = LiteralScanner::Widen<uint32_t>(kTCharProbes[i]);
+			Scanner.AddRaw(W16.data(), W16.size(), i, 2, kMaxPerSegment);
+			Scanner.AddRaw(W32.data(), W32.size(), i, 4, kMaxPerSegment);
+		}
+		Batch.Add(std::move(Scanner), true, [&](const LiteralScanner &Scanned, const std::vector<LiteralScanner::Hit> &Hits)
+		{
+			std::array<std::array<size_t, 2>, std::size(kTCharProbes)> Counts{};
+			for (const auto &H : Hits)
+			{
+				const auto &N = Scanned.GetNeedles()[H.NeedleIndex];
+				++Counts[N.OwnerIndex][N.Encoding == 2 ? 0 : 1];
+			}
+			Utf16 = 0;
+			Utf32 = 0;
+			for (const auto &C : Counts)
+			{
+				Utf16 += C[0];
+				Utf32 += C[1];
+				if ((Utf16 >= kDecisiveHits && Utf32 == 0) || (Utf32 >= kDecisiveHits && Utf16 == 0))
+					break;
+			}
+			const int Width = StringAnchors::DecideTCharWidth(Utf16, Utf32);
+			Kind = Width == 2 ? ETCharKind::Char16 : Width == 4 ? ETCharKind::Char32 : ETCharKind::Unknown;
+		});
+	}
+
 	ETCharKind DetectTCharKind(const IMemory *Memory, size_t *OutUtf16, size_t *OutUtf32)
 	{
 		if (!Memory)
@@ -63,62 +103,18 @@ namespace anduefker::analyzer
 		const ModuleInfo Module = const_cast<IMemory *>(Memory)->GetUnrealModule();
 
 		size_t Utf16 = 0, Utf32 = 0;
-		constexpr size_t kMaxPerSegment = 8;
 
-		// Enough hits in one encoding, none in the other, is as settled as this
-		// question gets in practice: a real build shows a landslide in its actual
-		// encoding and nothing in the other, so a decisive lead lets the scan stop
-		// after one or two probes instead of all of them.
-		constexpr size_t kDecisiveHits = 16;
-
-		for (const char *Probe : kTCharProbes)
-		{
-			// Both encodings of a probe are matched in one walk of the module rather
-			// than one walk each. The early exit above is why the probes are not all
-			// batched together: it usually settles the question on the first probe,
-			// and batching would trade two passes for one at the cost of always
-			// scanning for all twelve.
-			//
-			// Executable segments are included deliberately: a typical Android .so has
-			// two PT_LOADs, so .rodata - and every string literal with it - lives
-			// inside the r-x segment.
-			LiteralScanner Scanner;
-			const std::vector<uint8_t> W16 = LiteralScanner::Widen<uint16_t>(Probe);
-			const std::vector<uint8_t> W32 = LiteralScanner::Widen<uint32_t>(Probe);
-			Scanner.AddRaw(W16.data(), W16.size(), 0, 2, kMaxPerSegment);
-			Scanner.AddRaw(W32.data(), W32.size(), 0, 4, kMaxPerSegment);
-
-			for (const LiteralScanner::Hit &H : Scanner.ScanPerSegment(Memory, Module))
-			{
-				if (Scanner.GetNeedles()[H.NeedleIndex].Encoding == 2)
-					++Utf16;
-				else
-					++Utf32;
-			}
-
-			if ((Utf16 >= kDecisiveHits && Utf32 == 0) || (Utf32 >= kDecisiveHits && Utf16 == 0))
-				break;
-		}
+		LiteralScanBatch Batch;
+		ETCharKind Kind = ETCharKind::Unknown;
+		QueueTCharDetection(Batch, Kind, Utf16, Utf32);
+		Batch.Run(Memory, Module);
 
 		if (OutUtf16)
 			*OutUtf16 = Utf16;
 		if (OutUtf32)
 			*OutUtf32 = Utf32;
 
-		// A UTF-32 literal contains its own UTF-16 form: "None" as UTF-32 is
-		// 4E 00 00 00 6F 00 00 00 ..., whose first bytes read as UTF-16 "N\0o\0" is
-		// not a match, but shorter overlaps do occur. The shared majority rule
-		// handles that the same way it handles stray hits from padding: a clear
-		// majority is required, otherwise the answer is "undetermined".
-		switch (StringAnchors::DecideTCharWidth(Utf16, Utf32))
-		{
-		case 2:
-			return ETCharKind::Char16;
-		case 4:
-			return ETCharKind::Char32;
-		default:
-			return ETCharKind::Unknown;
-		}
+		return Kind;
 	}
 
 } // namespace anduefker::analyzer

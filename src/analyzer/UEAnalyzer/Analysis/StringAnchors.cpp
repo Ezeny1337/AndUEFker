@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
 
 #include "../../Memory/IMemory.h"
 
@@ -37,7 +38,8 @@ namespace anduefker::analyzer
 	}
 
 	void StringAnchors::RunBatch(const IMemory *Memory, const ModuleInfo &Module,
-								 std::span<StringAnchors *const> Outputs, const std::vector<std::span<const AnchorString>> &Groups)
+								 std::span<StringAnchors *const> Outputs, const std::vector<std::span<const AnchorString>> &Groups,
+								 LiteralScanBatch *Batch)
 	{
 		if (Outputs.size() != Groups.size() || std::any_of(Outputs.begin(), Outputs.end(),
 														   [](const StringAnchors *Output)
@@ -61,36 +63,45 @@ namespace anduefker::analyzer
 				Owners.emplace_back(group, item);
 			}
 		}
-		for (const LiteralScanner::Hit &H : Scanner.Scan(Memory, Module))
+		auto Complete = [Outputs = std::vector<StringAnchors *>(Outputs.begin(), Outputs.end()), Groups,
+						 Owners = std::move(Owners), Found = std::move(Found)]
+			(const LiteralScanner &Scanner, const std::vector<LiteralScanner::Hit> &Hits) mutable
 		{
-			const LiteralScanner::Needle &N = Scanner.GetNeedles()[H.NeedleIndex];
-			const auto [group, item] = Owners[N.OwnerIndex];
-			auto &Output = *Outputs[group];
-			Output.AnchorAddrs_.push_back(H.Address);
-			Found[group][item] = true;
-			Output.PerAnchor_[item].Sites.push_back(H.Address);
-			switch (N.Encoding)
+			for (const LiteralScanner::Hit &H : Hits)
 			{
-			case 1:
-				++Output.Hits_.Narrow;
-				break;
-			case 2:
-				++Output.Hits_.Utf16;
-				break;
-			default:
-				++Output.Hits_.Utf32;
-				break;
+				const LiteralScanner::Needle &N = Scanner.GetNeedles()[H.NeedleIndex];
+				const auto [group, item] = Owners[N.OwnerIndex];
+				auto &Output = *Outputs[group];
+				Output.AnchorAddrs_.push_back(H.Address);
+				Found[group][item] = true;
+				Output.PerAnchor_[item].Sites.push_back(H.Address);
+				switch (N.Encoding)
+				{
+				case 1:
+					++Output.Hits_.Narrow;
+					break;
+				case 2:
+					++Output.Hits_.Utf16;
+					break;
+				default:
+					++Output.Hits_.Utf32;
+					break;
+				}
 			}
-		}
-		for (size_t group = 0; group < Groups.size(); ++group)
-		{
-			auto &Output = *Outputs[group];
-			for (size_t item = 0; item < Groups[group].size(); ++item)
-				if (Found[group][item])
-					Output.FoundNames_.emplace_back(Groups[group][item].Text);
-			std::sort(Output.AnchorAddrs_.begin(), Output.AnchorAddrs_.end());
-			Output.AnchorAddrs_.erase(std::unique(Output.AnchorAddrs_.begin(), Output.AnchorAddrs_.end()), Output.AnchorAddrs_.end());
-		}
+			for (size_t group = 0; group < Groups.size(); ++group)
+			{
+				auto &Output = *Outputs[group];
+				for (size_t item = 0; item < Groups[group].size(); ++item)
+					if (Found[group][item])
+						Output.FoundNames_.emplace_back(Groups[group][item].Text);
+				std::sort(Output.AnchorAddrs_.begin(), Output.AnchorAddrs_.end());
+				Output.AnchorAddrs_.erase(std::unique(Output.AnchorAddrs_.begin(), Output.AnchorAddrs_.end()), Output.AnchorAddrs_.end());
+			}
+		};
+		if (Batch)
+			Batch->Add(std::move(Scanner), false, std::move(Complete));
+		else
+			Complete(Scanner, Scanner.Scan(Memory, Module));
 	}
 
 	std::vector<StringAnchors::WeightedSites> StringAnchors::CollectAnchorSitesByAnchor(

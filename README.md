@@ -25,6 +25,7 @@ Build the tool with the ABI matching the target process: use the `arm64-v8a` bin
 - **Common class addresses** — records useful `UClass` objects such as `World`, `Engine`, `GameInstance`, and `PlayerController`.
 - **Reproducible artifacts** — writes generated headers, JSON metadata, diagnostics, and runtime binding details as one artifact directory.
 - **Fail-closed validation** — invalid candidates and inconsistent layouts are rejected rather than silently treated as valid.
+- **Bounded capture** — rechecks consumed bytes and covers object-array growth through limited tail enumeration.
 
 ## Pipeline
 

@@ -938,39 +938,98 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::symbols()
         _symbols_init = true;
 
         auto get_sym_address = [&](const KT_ElfW(Sym) * sym_ent) -> uintptr_t {
-            return sym_ent->st_value < _loadBias ? _loadBias + sym_ent->st_value : sym_ent->st_value;
+            return sym_ent->st_shndx == SHN_ABS ? sym_ent->st_value : _loadBias + sym_ent->st_value;
         };
 
-        size_t symtab_sz = ((_stringTable > _symbolTable) ? (_stringTable - _symbolTable)
-                                                          : (_symbolTable - _stringTable));
+        constexpr uint32_t maxSymbols = 4 * 1024 * 1024;
+        const auto inMapping = [&](uintptr_t address, size_t size) {
+            for (const auto &segment : _segments)
+                if (segment.readable && address >= segment.startAddress && address < segment.endAddress &&
+                    size <= segment.endAddress - address) return true;
+            return false;
+        };
+        const auto read = [&](uintptr_t base, uint64_t offset, auto &value) {
+            return offset <= UINTPTR_MAX && base <= UINTPTR_MAX - static_cast<uintptr_t>(offset) &&
+                   inMapping(base + static_cast<uintptr_t>(offset), sizeof(value)) &&
+                   _pMem->Read(base + static_cast<uintptr_t>(offset), &value, sizeof(value)) == sizeof(value);
+        };
+        uint32_t symbolCount = 0;
+        for (const auto &dynamic : _dynamics)
+        {
+            if (dynamic.d_tag != DT_HASH && dynamic.d_tag != DT_GNU_HASH) continue;
+            uintptr_t table = dynamic.d_un.d_ptr;
+            if (!inMapping(table, 4))
+            {
+                if (table > UINTPTR_MAX - _loadBias) continue;
+                table += _loadBias;
+            }
+            if (dynamic.d_tag == DT_HASH)
+            {
+                uint32_t buckets = 0, chains = 0;
+                if (read(table, 0, buckets) && read(table, 4, chains) && buckets && buckets <= maxSymbols &&
+                    chains && chains <= maxSymbols && inMapping(table, 8 + (uint64_t{buckets} + chains) * 4))
+                { symbolCount = chains; break; }
+            }
+            else
+            {
+                uint32_t buckets = 0, first = 0, words = 0, shift = 0;
+                if (!read(table, 0, buckets) || !read(table, 4, first) || !read(table, 8, words) || !read(table, 12, shift) ||
+                    !buckets || buckets > maxSymbols || first >= maxSymbols || !words || words > maxSymbols || shift >= 32) continue;
+                const uint64_t bucketOffset = 16 + uint64_t{words} * sizeof(uintptr_t);
+                uint32_t last = 0;
+                bool valid = true;
+                for (uint32_t i = 0; i < buckets; ++i)
+                {
+                    uint32_t index = 0;
+                    if (!read(table, bucketOffset + uint64_t{i} * 4, index) ||
+                        (index && (index < first || index >= maxSymbols))) { valid = false; break; }
+                    last = std::max(last, index);
+                }
+                if (!valid) continue;
+                if (!last) { symbolCount = first; break; }
+                const uint64_t chainOffset = bucketOffset + uint64_t{buckets} * 4;
+                for (; last < maxSymbols; ++last)
+                {
+                    uint32_t chain = 0;
+                    if (!read(table, chainOffset + uint64_t{last - first} * 4, chain)) break;
+                    if (chain & 1) { symbolCount = last + 1; break; }
+                }
+                if (symbolCount) break;
+            }
+        }
+        if (_syment != sizeof(KT_ElfW(Sym)) || !symbolCount || _strsz > 256 * 1024 * 1024 ||
+            !inMapping(_symbolTable, uint64_t{symbolCount} * sizeof(KT_ElfW(Sym))) || !inMapping(_stringTable, _strsz))
+        {
+            KITTY_LOGE("ELF dynamic symbols have invalid or unavailable bounded table metadata");
+            return _symbolsMap;
+        }
+        const size_t symtab_sz = static_cast<size_t>(symbolCount) * sizeof(KT_ElfW(Sym));
         std::vector<char> symtab_buff(symtab_sz, 0);
         std::vector<char> strtab_buff(_strsz, 0);
 
-        if (_pMem->Read(_symbolTable, symtab_buff.data(), symtab_buff.size()) &&
-            _pMem->Read(_stringTable, strtab_buff.data(), strtab_buff.size()))
+        if (_pMem->Read(_symbolTable, symtab_buff.data(), symtab_buff.size()) == symtab_buff.size() &&
+            _pMem->Read(_stringTable, strtab_buff.data(), strtab_buff.size()) == strtab_buff.size())
         {
-            uintptr_t sym_start = uintptr_t(symtab_buff.data());
-            uintptr_t sym_end = uintptr_t(symtab_buff.data() + symtab_buff.size());
-            uintptr_t sym_str_end = uintptr_t(strtab_buff.data() + strtab_buff.size());
-            for (auto sym_entry = sym_start; (sym_entry + _syment) < sym_end; sym_entry += _syment)
+            for (size_t index = 0; index < symbolCount; ++index)
             {
-                const KT_ElfW(Sym) *curr_sym = reinterpret_cast<KT_ElfW(Sym) *>(sym_entry);
+                KT_ElfW(Sym) value = {};
+                memcpy(&value, symtab_buff.data() + index * sizeof(value), sizeof(value));
+                const auto *curr_sym = &value;
 
                 if (curr_sym->st_name >= _strsz)
-                    break;
+                    continue;
 
-                if (intptr_t(curr_sym->st_name) <= 0 || intptr_t(curr_sym->st_value) <= 0 ||
-                    intptr_t(curr_sym->st_size) <= 0)
+                if (curr_sym->st_name == 0 || curr_sym->st_value == 0)
                     continue;
 
                 if (KT_ELF_ST_TYPE(curr_sym->st_info) != STT_OBJECT && KT_ELF_ST_TYPE(curr_sym->st_info) != STT_FUNC)
                     continue;
 
-                uintptr_t sym_str_addr = uintptr_t(strtab_buff.data() + curr_sym->st_name);
-                if (!sym_str_addr || sym_str_addr >= sym_str_end)
-                    continue;
-
-                std::string sym_str = std::string(reinterpret_cast<const char *>(sym_str_addr));
+                const char *text = strtab_buff.data() + curr_sym->st_name;
+                const auto *end = static_cast<const char *>(memchr(text, 0, _strsz - curr_sym->st_name));
+                if (!end || curr_sym->st_shndx == SHN_UNDEF ||
+                    (curr_sym->st_shndx != SHN_ABS && curr_sym->st_value > UINTPTR_MAX - _loadBias)) continue;
+                std::string sym_str(text, end);
                 if (!sym_str.empty() && sym_str.data())
                     _symbolsMap[sym_str] = get_sym_address(curr_sym);
             }
@@ -987,10 +1046,20 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
         _dsymbols_init = true;
 
         auto get_sym_address = [&](const KT_ElfW(Sym) * sym_ent) -> uintptr_t {
-            return sym_ent->st_value < _loadBias ? _loadBias + sym_ent->st_value : sym_ent->st_value;
+            return sym_ent->st_shndx == SHN_ABS ? sym_ent->st_value : _loadBias + sym_ent->st_value;
         };
 
         KittyUtils::Zip::ZipEntryMMap mmap_info = {};
+        struct MappingGuard
+        {
+            KittyUtils::Zip::ZipEntryMMap &mapping;
+            ~MappingGuard()
+            {
+                if (mapping.mappingBase && mapping.mappingBase != MAP_FAILED && mapping.mappingSize &&
+                    munmap(mapping.mappingBase, mapping.mappingSize) != 0)
+                    KITTY_LOGE("ELF debug symbol mapping cleanup failed: %s", strerror(errno));
+            }
+        } guard{mmap_info};
         if (isZipped())
         {
             if (!KittyUtils::Zip::mmapEntryByDataOffset(_filepath, _baseSegment.offset, &mmap_info))
@@ -1004,13 +1073,14 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
                 KITTY_LOGD("Failed to open file <%s> err(%s)", _filepath.c_str(), elfFile.lastStrError().c_str());
                 return _dsymbolsMap;
             }
-            size_t elfSize = elfFile.info().st_size;
-            if (elfSize <= 0)
+            const auto fileSize = elfFile.info().st_size;
+            if (fileSize <= 0 || static_cast<uint64_t>(fileSize) > 1024 * 1024 * 1024)
             {
                 elfFile.close();
                 KITTY_LOGD("stat failed for <%s>", _filepath.c_str());
                 return _dsymbolsMap;
             }
+            const size_t elfSize = static_cast<size_t>(fileSize);
             mmap_info.mappingBase = mmap(nullptr, elfSize, PROT_READ, MAP_PRIVATE, elfFile.fd(), 0);
             mmap_info.mappingSize = elfSize;
             mmap_info.data = reinterpret_cast<uint8_t *>(mmap_info.mappingBase);
@@ -1018,102 +1088,85 @@ std::unordered_map<std::string, uintptr_t> ElfScanner::dsymbols()
             elfFile.close();
         }
 
-        if (mmap_info.size == 0 || !mmap_info.data || mmap_info.data == ((void *)-1))
+        if (mmap_info.size == 0 || mmap_info.size > 1024 * 1024 * 1024 || !mmap_info.data || mmap_info.data == MAP_FAILED)
         {
             KITTY_LOGD("Failed to mmap <%s>", realPath().c_str());
             return _dsymbolsMap;
         }
 
-        auto cleanup = [&] { munmap(mmap_info.mappingBase, mmap_info.mappingSize); };
+        const auto contains = [&](uint64_t offset, uint64_t size) { return offset <= mmap_info.size && size <= mmap_info.size - offset; };
+        KT_ElfW(Ehdr) header = {};
+        if (!contains(0, sizeof(header))) return _dsymbolsMap;
+        memcpy(&header, mmap_info.data, sizeof(header));
+        const auto *ehdr = &header;
 
-        KT_ElfW(Ehdr) *ehdr = reinterpret_cast<KT_ElfW(Ehdr) *>(mmap_info.data);
-
-        if (memcmp(ehdr->e_ident, "\177ELF", 4) != 0)
+        if (memcmp(ehdr->e_ident, "\177ELF", 4) != 0 || ehdr->e_ident[EI_CLASS] != KT_ELF_EICLASS ||
+            ehdr->e_ident[EI_DATA] != ELFDATA2LSB)
         {
             KITTY_LOGD("<%s> is not a valid ELF", realPath().c_str());
-            cleanup();
             return _dsymbolsMap;
         }
 
-        if (ehdr->e_phoff == 0 || ehdr->e_phentsize == 0 || ehdr->e_phnum == 0 ||
-            ehdr->e_phoff + ehdr->e_phnum * sizeof(KT_ElfW(Phdr)) > mmap_info.size)
+        if (ehdr->e_phoff == 0 || ehdr->e_phentsize != sizeof(KT_ElfW(Phdr)) || ehdr->e_phnum == 0 ||
+            !contains(ehdr->e_phoff, uint64_t{ehdr->e_phnum} * sizeof(KT_ElfW(Phdr))))
         {
             KITTY_LOGD("Invalid program header table in <%s>", filePath().c_str());
-            cleanup();
             return _dsymbolsMap;
         }
 
-        if (ehdr->e_shoff == 0 || ehdr->e_shentsize == 0 || ehdr->e_shnum == 0 ||
-            ehdr->e_shoff + ehdr->e_shnum * sizeof(KT_ElfW(Shdr)) > mmap_info.size)
+        if (ehdr->e_shoff == 0 || ehdr->e_shentsize != sizeof(KT_ElfW(Shdr)) || ehdr->e_shnum == 0 ||
+            !contains(ehdr->e_shoff, uint64_t{ehdr->e_shnum} * sizeof(KT_ElfW(Shdr))))
         {
             KITTY_LOGD("Invalid section header table in <%s>", filePath().c_str());
-            cleanup();
             return _dsymbolsMap;
         }
 
-        if (ehdr->e_shstrndx >= ehdr->e_shnum)
-        {
-            KITTY_LOGD("Invalid section header string table index in <%s>", filePath().c_str());
-            cleanup();
-            return _dsymbolsMap;
-        }
-
-        const KT_ElfW(Shdr) *shdr = reinterpret_cast<KT_ElfW(Shdr) *>(reinterpret_cast<char *>(mmap_info.data) +
-                                                                      ehdr->e_shoff);
-        const KT_ElfW(Shdr) *shstrtab_shdr = shdr + ehdr->e_shstrndx;
-
-        if (shstrtab_shdr->sh_offset > mmap_info.size ||
-            mmap_info.size - shstrtab_shdr->sh_offset < shstrtab_shdr->sh_size)
-        {
-            KITTY_LOGD("Invalid section header string table in <%s>", filePath().c_str());
-            cleanup();
-            return _dsymbolsMap;
-        }
-
-        const char *sectionstr = reinterpret_cast<char *>(reinterpret_cast<char *>(mmap_info.data) +
-                                                          shstrtab_shdr->sh_offset);
+        std::vector<KT_ElfW(Shdr)> sections(ehdr->e_shnum);
+        memcpy(sections.data(), mmap_info.data + ehdr->e_shoff, sections.size() * sizeof(KT_ElfW(Shdr)));
+        const auto *shdr = sections.data();
+        size_t visited = 0;
         for (uint16_t i = 0; i < ehdr->e_shnum; ++i)
         {
             if (shdr[i].sh_type != SHT_SYMTAB)
                 continue;
 
-            if (shdr[i].sh_name >= shstrtab_shdr->sh_size)
-                continue;
-
-            std::string section_name = std::string(reinterpret_cast<const char *>(sectionstr + shdr[i].sh_name));
-            if (section_name.compare(".symtab") != 0)
-                continue;
-
-            if (shdr[i].sh_entsize == 0 || (shdr[i].sh_offset + shdr[i].sh_size) > mmap_info.size ||
+            if (shdr[i].sh_entsize != sizeof(KT_ElfW(Sym)) || shdr[i].sh_size % sizeof(KT_ElfW(Sym)) ||
+                !contains(shdr[i].sh_offset, shdr[i].sh_size) ||
                 shdr[i].sh_link >= ehdr->e_shnum ||
-                (shdr[shdr[i].sh_link].sh_offset + shdr[shdr[i].sh_link].sh_size) > mmap_info.size)
+                shdr[shdr[i].sh_link].sh_type != SHT_STRTAB ||
+                !contains(shdr[shdr[i].sh_link].sh_offset, shdr[shdr[i].sh_link].sh_size))
                 continue;
 
-            const KT_ElfW(Sym) *symtab = reinterpret_cast<KT_ElfW(Sym) *>(reinterpret_cast<char *>(mmap_info.data) +
-                                                                          shdr[i].sh_offset);
             const size_t symCount = shdr[i].sh_size / shdr[i].sh_entsize;
+            if (symCount > 4 * 1024 * 1024 - visited) return _dsymbolsMap;
+            visited += symCount;
             const KT_ElfW(Shdr) *strtabShdr = &shdr[shdr[i].sh_link];
             const char *strtab = reinterpret_cast<char *>(reinterpret_cast<char *>(mmap_info.data) +
                                                           strtabShdr->sh_offset);
 
             for (size_t j = 0; j < symCount; ++j)
             {
-                const KT_ElfW(Sym) *curr_sym = &symtab[j];
-                if (!curr_sym || curr_sym->st_name >= strtabShdr->sh_size)
+                KT_ElfW(Sym) value = {};
+                memcpy(&value, mmap_info.data + shdr[i].sh_offset + j * sizeof(value), sizeof(value));
+                const auto *curr_sym = &value;
+                if (curr_sym->st_name >= strtabShdr->sh_size || curr_sym->st_shndx == SHN_UNDEF ||
+                    (curr_sym->st_shndx != SHN_ABS && curr_sym->st_value > UINTPTR_MAX - _loadBias))
                     continue;
 
-                if (intptr_t(curr_sym->st_value) <= 0 || intptr_t(curr_sym->st_size) <= 0)
+                if (curr_sym->st_value == 0)
                     continue;
 
                 if (KT_ELF_ST_TYPE(curr_sym->st_info) != STT_OBJECT && KT_ELF_ST_TYPE(curr_sym->st_info) != STT_FUNC)
                     continue;
 
-                std::string sym_str = std::string(reinterpret_cast<const char *>(strtab + curr_sym->st_name));
+                const char *text = strtab + curr_sym->st_name;
+                const auto *end = static_cast<const char *>(memchr(text, 0, strtabShdr->sh_size - curr_sym->st_name));
+                if (!end) continue;
+                std::string sym_str(text, end);
                 if (!sym_str.empty() && sym_str.data())
                     _dsymbolsMap[sym_str] = get_sym_address(curr_sym);
             }
         }
-        cleanup();
     }
     return _dsymbolsMap;
 }

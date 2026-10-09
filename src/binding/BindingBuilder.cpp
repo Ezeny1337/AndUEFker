@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "anduefker/ue/SchemaResolver.hpp"
+
 namespace anduefker::binding
 {
     namespace
@@ -44,8 +46,9 @@ namespace anduefker::binding
 
             return "kind=" + std::string(NameKindName(layout.kind)) +
                    " blocks_offset=" + std::to_string(layout.pool.blocksOffset) +
-                   " current_block_offset=" + std::to_string(layout.pool.maxChunkIndexOffset) +
-                   " byte_cursor_offset=" + std::to_string(layout.pool.byteCursorOffset) +
+                   " current_block_from_blocks=" + (layout.pool.currentBlockFromBlocks ? std::to_string(*layout.pool.currentBlockFromBlocks) : "unknown") +
+                   " byte_cursor_from_blocks=" + (layout.pool.byteCursorFromBlocks ? std::to_string(*layout.pool.byteCursorFromBlocks) : "unknown") +
+                   " publication_boundary=" + std::to_string(layout.pool.HasPublicationBoundary()) +
                    " blocks_bit=" + std::to_string(layout.pool.blocksBit) +
                    " entry_stride=" + std::to_string(layout.pool.entryStride) +
                    " entry_header_offset=" + std::to_string(layout.pool.entryHeaderOffset) +
@@ -85,8 +88,10 @@ namespace anduefker::binding
 
     std::optional<RuntimeBinding> BindingBuilder::Build(const BindingCandidates &candidates,
                                                         const DecodePlan &decode,
-                                                        const std::function<void(const std::string &)> &progress) const
+                                                        const std::function<void(const std::string &)> &progress,
+                                                        bool detailedDiagnostics) const
     {
+        const uint64_t generation = memory_.AddressSpaceGeneration();
         const auto objectRoots = ResolveRoots(candidates.objectRoots);
         const auto nameRoots = ResolveRoots(candidates.nameRoots);
         if (objectRoots.empty() || nameRoots.empty())
@@ -99,6 +104,7 @@ namespace anduefker::binding
         std::optional<RuntimeBinding> bestBinding;
         double bestObjectScore = -1.0;
         double bestNameScore = -1.0;
+        size_t semanticRejections = 0;
 
         struct NameCandidates
         {
@@ -130,19 +136,57 @@ namespace anduefker::binding
                     report.failures.push_back("multiple distinct name layouts passed validation");
                 }
             }
+            if (progress)
+            {
+                progress("binding_name_root root=" + std::to_string(nameRoot) +
+                         " candidates=" + std::to_string(group.layouts.size()) +
+                         " validated=" + std::to_string(accepted) + " ambiguous=" + std::to_string(accepted > 1));
+                if (detailedDiagnostics)
+                    for (size_t index = 0; index < group.layouts.size(); ++index)
+                    {
+                        const auto &report = group.reports[index];
+                        progress("binding_name_candidate root=" + std::to_string(nameRoot) +
+                                 " index=" + std::to_string(index) + " " + DescribeNameLayout(group.layouts[index].first) +
+                                 " accepted=" + std::to_string(report.accepted) +
+                                 " tested=" + std::to_string(report.tested) + " valid=" + std::to_string(report.valid) +
+                                 " reason=" + (report.failures.empty() ? "validated" : report.failures.front()));
+                        for (const auto &evidence : report.evidence)
+                            progress("binding_name_evidence root=" + std::to_string(nameRoot) +
+                                     " index=" + std::to_string(index) + " " + evidence);
+                    }
+            }
             discoveredNames.push_back(std::move(group));
         }
+
+        // 等价根节点必须指代相同的 table slots，而不仅仅是相同的首个 block
+        // 解码器回调函数接收的是槽位地址，因此这种机制同样保证了其输入参数的稳定性
+        const auto samePool = [](uintptr_t leftRoot, const NamePoolLayout &left,
+                                 uintptr_t rightRoot, const NamePoolLayout &right)
+        {
+            const auto leftAddresses = left.Locate(leftRoot);
+            const auto rightAddresses = right.Locate(rightRoot);
+            if (!leftAddresses || !rightAddresses)
+                return false;
+            return leftAddresses->blocks == rightAddresses->blocks &&
+                   leftAddresses->currentBlock == rightAddresses->currentBlock &&
+                   leftAddresses->byteCursor == rightAddresses->byteCursor &&
+                   left.blocksBit == right.blocksBit && left.entryStride == right.entryStride &&
+                   left.entryHeaderOffset == right.entryHeaderOffset && left.entryStringOffset == right.entryStringOffset &&
+                   left.entryLengthShift == right.entryLengthShift && left.entryWideMask == right.entryWideMask;
+        };
 
         for (uintptr_t objectRoot : objectRoots)
         {
             if (progress)
                 progress("binding: probing object root=" + std::to_string(objectRoot));
             const auto objectLayouts = objectDiscovery.Discover(objectRoot, decode);
+            size_t acceptedObjectLayouts = 0;
             for (const auto &[objectLayout, objectScore] : objectLayouts)
             {
                 const LayoutProbeReport objectReport = objectProbe.Validate(objectRoot, objectLayout, decode);
                 if (!objectReport.accepted)
                     continue;
+                ++acceptedObjectLayouts;
 
                 for (const auto &group : discoveredNames)
                 {
@@ -154,6 +198,8 @@ namespace anduefker::binding
                         const auto &nameReport = group.reports[nameIndex];
                         if (!nameReport.accepted)
                             continue;
+                        if (nameLayout.kind == NameContainerKind::Pool && !nameLayout.pool.HasPublicationBoundary())
+                            continue;
 
                         RuntimeBinding binding;
                         binding.objectRoot = LocatedAddress{objectRoot, AddressMeaning::ResolvedValue, 90, "runtime-probe"};
@@ -164,7 +210,17 @@ namespace anduefker::binding
                         binding.report.staticCandidatesFound = true;
                         binding.report.objectContainerValidated = true;
                         binding.report.nameContainerValidated = true;
-                        binding.report.semanticValidationPassed = true;
+                        ue::SchemaResolutionReport semantics;
+                        binding.report.semanticValidationPassed = ue::ValidateBindingObjects(memory_, binding, semantics);
+                        if (!binding.report.semanticValidationPassed)
+                        {
+                            ++semanticRejections;
+                            if (progress)
+                                progress("binding_semantics status=rejected reason=" +
+                                         (semantics.failures.empty() ? std::string("insufficient-object-name-evidence") : semantics.failures.front()));
+                            continue;
+                        }
+                        binding.report.evidence.insert(binding.report.evidence.end(), semantics.evidence.begin(), semantics.evidence.end());
                         binding.report.evidence.push_back("object_root=" + std::to_string(objectRoot));
                         binding.report.evidence.push_back("name_root=" + std::to_string(nameRoot));
                         binding.report.evidence.push_back("object_layout_candidates=" + std::to_string(objectLayouts.size()));
@@ -188,9 +244,21 @@ namespace anduefker::binding
                                                           " confidence=" + std::to_string(nameReport.confidence));
                         binding.report.evidence.insert(binding.report.evidence.end(), objectReport.evidence.begin(), objectReport.evidence.end());
                         binding.report.evidence.insert(binding.report.evidence.end(), nameReport.evidence.begin(), nameReport.evidence.end());
+                        const bool equivalentPool = bestBinding && nameLayout.kind == NameContainerKind::Pool &&
+                                                    bestBinding->names.kind == NameContainerKind::Pool &&
+                                                    samePool(nameRoot, nameLayout.pool, bestBinding->nameRoot.address,
+                                                             bestBinding->names.pool);
+                        const bool fullerRoot = equivalentPool && nameLayout.pool.blocksOffset > 0 &&
+                                                bestBinding->names.pool.blocksOffset == 0;
+                        const bool aliasOfFullRoot = equivalentPool && nameLayout.pool.blocksOffset == 0 &&
+                                                     bestBinding->names.pool.blocksOffset > 0;
                         if (!bestBinding || objectScore > bestObjectScore ||
-                            (objectScore == bestObjectScore && nameScore > bestNameScore))
+                            (objectScore == bestObjectScore &&
+                             (fullerRoot || (!aliasOfFullRoot && nameScore > bestNameScore))))
                         {
+                            if (fullerRoot && progress)
+                                progress("binding_name_equivalent previous_root=" + std::to_string(bestBinding->nameRoot.address) +
+                                         " selected_root=" + std::to_string(nameRoot) + " reason=validated-full-root");
                             bestObjectScore = objectScore;
                             bestNameScore = nameScore;
                             bestBinding = std::move(binding);
@@ -198,7 +266,24 @@ namespace anduefker::binding
                     }
                 }
             }
+            if (progress)
+                progress("binding_object_root root=" + std::to_string(objectRoot) +
+                         " candidates=" + std::to_string(objectLayouts.size()) +
+                         " accepted=" + std::to_string(acceptedObjectLayouts) +
+                         " rejected=" + std::to_string(objectLayouts.size() - acceptedObjectLayouts));
         }
+        if (memory_.AddressSpaceGeneration() != generation)
+        {
+            if (progress)
+                progress("binding_validation accepted=0 reason=address-space-generation-changed");
+            return std::nullopt;
+        }
+        if (bestBinding && progress)
+            progress("binding_name_selected root=" + std::to_string(bestBinding->nameRoot.address) + " " +
+                     DescribeNameLayout(bestBinding->names));
+        if (progress)
+            progress("binding_validation accepted=" + std::to_string(bestBinding.has_value()) +
+                     " semantic_rejections=" + std::to_string(semanticRejections));
         return bestBinding;
     }
 } // namespace anduefker::binding

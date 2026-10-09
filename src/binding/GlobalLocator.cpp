@@ -1,15 +1,17 @@
 #include "anduefker/binding/GlobalLocator.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
+
+#include "anduefker/memory/ReadDiagnostics.hpp"
+#include "anduefker/module/ElfSymbols.hpp"
 
 #include "Architecture/IArchDecoder.h"
 #include "UEAnalyzer/UEAnalyzer.h"
 
 namespace anduefker::binding
 {
-    using ::anduefker::analyzer::AnalyzerMemoryAdapter;
-
     namespace
     {
         EArch ToAnalyzerArchitecture(ModuleArchitecture architecture)
@@ -21,105 +23,151 @@ namespace anduefker::binding
             case ModuleArchitecture::Arm64:
                 return EArch::Arm64;
             case ModuleArchitecture::Unknown:
-                break;
+                return EArch::Unknown;
             }
             return EArch::Unknown;
         }
+
+        class LocatorPhases
+        {
+        public:
+            LocatorPhases(const RemoteMemorySource &memory, const std::function<void(const std::string &)> &progress)
+                : memory_(memory), progress_(progress), stats_(memory.Stats()) {}
+            void Finish(const char *id)
+            {
+                const auto now = std::chrono::steady_clock::now();
+                const auto stats = memory_.Stats();
+                if (progress_)
+                    progress_("locator_phase id=" + std::string(id) + " elapsed_ms=" +
+                              std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - start_).count()) +
+                              memory::DescribeReadStats(stats, stats_));
+                start_ = std::chrono::steady_clock::now();
+                stats_ = stats;
+            }
+
+        private:
+            const RemoteMemorySource &memory_;
+            const std::function<void(const std::string &)> &progress_;
+            memory::ReadStats stats_;
+            std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
+        };
     } // namespace
 
-    std::vector<LocatedAddress> GlobalLocator::SymbolCandidates(ElfScanner &elf,
-                                                                const std::string &symbol) const
+    std::vector<LocatedAddress> GlobalLocator::SymbolCandidates(uintptr_t address, const std::string &symbol) const
     {
-        std::vector<LocatedAddress> result;
-        uintptr_t address = elf.findSymbol(symbol);
         if (address == 0)
-            address = elf.findDebugSymbol(symbol);
-        if (address == 0)
-            return result;
-
+            return {};
         if (symbol == "GUObjectArray" || symbol == "NamePoolData")
-        {
-            result.push_back({address, AddressMeaning::Direct, 80, "symbol:" + symbol});
-            return result;
-        }
+            return {{address, AddressMeaning::Direct, 80, "symbol:" + symbol}};
+        return {{address, AddressMeaning::Direct, 70, "symbol:" + symbol + ":direct"},
+                {address, AddressMeaning::PointerSlot, 70, "symbol:" + symbol + ":pointer-slot"}};
+    }
 
-        // 调试器辅助符号和旧别名在引擎分支和游戏版本之间有所不同
-        // 保留两种解释，并让经过验证的对象/名称布局探测选择可用的根
-        result.push_back({address, AddressMeaning::Direct, 70, "symbol:" + symbol + ":direct"});
-        result.push_back({address, AddressMeaning::PointerSlot, 70, "symbol:" + symbol + ":pointer-slot"});
+    BindingCandidates GlobalLocator::LocateSymbols(const std::vector<std::string> &objectSymbols,
+                                                   const std::vector<std::string> &nameSymbols,
+                                                   const std::function<void(const std::string &)> &progress) const
+    {
+        BindingCandidates result;
+        LocatorPhases phases(memory_, progress);
+        {
+            const auto elf = memory_.Manager().elfScanner.findElf(module_.name);
+            phases.Finish("find-elf");
+            if (elf.isValid())
+            {
+                std::vector<std::string> names = objectSymbols;
+                names.insert(names.end(), nameSymbols.begin(), nameSymbols.end());
+                const auto symbols = module::QueryElfSymbols(memory_, module_, elf, names);
+                const auto append = [&](const auto &requested, auto &out)
+                {
+                    for (const auto &name : requested)
+                    {
+                        uintptr_t address = 0;
+                        const char *source = "missing";
+                        if (const auto at = symbols.exported.find(name); at != symbols.exported.end())
+                        {
+                            address = at->second;
+                            source = "exported";
+                        }
+                        else if (const auto at = symbols.debug.find(name); at != symbols.debug.end())
+                        {
+                            address = at->second;
+                            source = "debug";
+                        }
+                        const auto candidates = SymbolCandidates(address, name);
+                        out.insert(out.end(), candidates.begin(), candidates.end());
+                        if (progress)
+                            progress("locator_symbol name=" + name + " source=" + source +
+                                     " status=" + (symbols.status.contains(name) ? module::SymbolStatusName(symbols.status.at(name)) : "incomplete") +
+                                     " address=" + std::to_string(address));
+                    }
+                };
+                append(objectSymbols, result.objectRoots);
+                append(nameSymbols, result.nameRoots);
+                if (progress)
+                    for (const auto &diagnostic : symbols.diagnostics)
+                        progress("locator_symbol_query status=limited reason=" + diagnostic);
+                phases.Finish("symbol-query");
+            }
+        }
+        phases.Finish("symbol-cleanup");
         return result;
     }
 
-    BindingCandidates GlobalLocator::Locate(const std::vector<std::string> &objectSymbols,
-                                            const std::vector<std::string> &nameSymbols,
-                                            const std::function<void(const std::string &)> &progress) const
+    BindingCandidates GlobalLocator::LocateAnalysis(const BindingCandidates &existing,
+                                                    const std::function<void(const std::string &)> &progress) const
     {
-        BindingCandidates result;
-        if (progress)
-            progress("locator: resolving exported and debug symbols");
-        auto elf = memory_.Manager().elfScanner.findElf(module_.name);
-        if (elf.isValid())
+        BindingCandidates result = existing;
+        LocatorPhases phases(memory_, progress);
+        const auto analyze = [&]
         {
-            if (progress)
-                progress("locator: resolving module symbols from one ELF scan");
-            for (const std::string &symbol : objectSymbols)
+            analyzer::AnalyzerMemoryAdapter adapter(memory_, module_);
+            if (!adapter.Initialize())
             {
-                const std::vector<LocatedAddress> candidates = SymbolCandidates(elf, symbol);
-                result.objectRoots.insert(result.objectRoots.end(), candidates.begin(), candidates.end());
+                phases.Finish("adapter-failed");
+                return;
             }
-            for (const std::string &symbol : nameSymbols)
+            const std::unique_ptr<IArchDecoder> decoder = CreateArchDecoder(ToAnalyzerArchitecture(module_.architecture));
+            if (!decoder)
             {
-                const std::vector<LocatedAddress> candidates = SymbolCandidates(elf, symbol);
-                result.nameRoots.insert(result.nameRoots.end(), candidates.begin(), candidates.end());
+                phases.Finish("decoder-failed");
+                return;
             }
-            if (progress)
-                progress("locator: module symbol resolution complete");
-        }
-
-        AnalyzerMemoryAdapter adapter(memory_, module_);
-        if (!adapter.Initialize())
-            return result;
-        const std::unique_ptr<IArchDecoder> decoder = CreateArchDecoder(ToAnalyzerArchitecture(module_.architecture));
-        if (!decoder)
-            return result;
-
-        anduefker::analyzer::AnalyzerOptions options;
-        options.ThreadMode = anduefker::analyzer::EThreadMode::Single;
-        options.Progress = progress;
-        options.Targets = {anduefker::analyzer::Targets::Names,
-                           anduefker::analyzer::Targets::GUObjectArray,
-                           anduefker::analyzer::Targets::ObjObjects};
-        anduefker::analyzer::UEAnalyzer analyzer = anduefker::analyzer::UEAnalyzer::Analyze(&adapter, decoder.get(), options);
-        if (!analyzer.IsValid())
-            return result;
-
-        auto add = [](std::vector<LocatedAddress> &out, const anduefker::analyzer::LocateResult &located,
-                      const char *label)
-        {
-            for (const anduefker::analyzer::Candidate &candidate : located.Candidates)
+            phases.Finish("analyzer-initialization");
+            analyzer::AnalyzerOptions options;
+            options.ThreadMode = analyzer::EThreadMode::Single;
+            options.Progress = progress;
+            options.PhaseCompleted = [&](const char *id)
+            { phases.Finish(id); };
+            options.Targets = {analyzer::Targets::Names, analyzer::Targets::GUObjectArray, analyzer::Targets::ObjObjects};
+            const auto analysis = analyzer::UEAnalyzer::Analyze(&adapter, decoder.get(), options);
+            if (!analysis.IsValid())
             {
-                if (candidate.Address == 0)
-                    continue;
-                if (std::any_of(out.begin(), out.end(), [&](const LocatedAddress &item)
-                                { return item.address == static_cast<uintptr_t>(candidate.Address); }))
-                    continue;
-                const float confidence = std::clamp(candidate.Confidence, 0.0f, 1.0f);
-                out.push_back({static_cast<uintptr_t>(candidate.Address), AddressMeaning::Direct,
-                               static_cast<uint8_t>(confidence * 100.0f), std::string("analyzer:") + label});
+                if (progress)
+                    progress("locator_analysis status=failed reason=" + analysis.GetError());
+                phases.Finish("analysis-failed");
+                return;
             }
+            const auto append = [](auto &out, const analyzer::LocateResult &located)
+            {
+                for (const auto &candidate : located.Candidates)
+                {
+                    if (candidate.Address == 0 || std::any_of(out.begin(), out.end(), [&](const auto &item)
+                                                              { return item.address == candidate.Address && item.meaning == AddressMeaning::Direct; }))
+                        continue;
+                    out.push_back({static_cast<uintptr_t>(candidate.Address), AddressMeaning::Direct,
+                                   static_cast<uint8_t>(std::clamp(candidate.Confidence, 0.0f, 1.0f) * 100.0f),
+                                   std::string("analyzer:") + located.Target});
+                }
+            };
+            append(result.objectRoots, analysis.Find(analyzer::Targets::GUObjectArray));
+            phases.Finish("resolve-GUObjectArray");
+            append(result.objectRoots, analysis.Find(analyzer::Targets::ObjObjects));
+            phases.Finish("resolve-ObjObjects");
+            append(result.nameRoots, analysis.Find(analyzer::Targets::Names));
+            phases.Finish("resolve-Names");
         };
-
-        // 符号可以是直接对象、指针槽、调试器助手，也可以是过时/部分导出
-        // 绝不能仅因其存在而忽略二进制分析的候选对象
-        if (progress)
-            progress("locator: resolving GUObjectArray anchors");
-        add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::GUObjectArray), "GUObjectArray");
-        if (progress)
-            progress("locator: resolving ObjObjects anchors");
-        add(result.objectRoots, analyzer.Find(anduefker::analyzer::Targets::ObjObjects), "ObjObjects");
-        if (progress)
-            progress("locator: resolving name anchors");
-        add(result.nameRoots, analyzer.Find(anduefker::analyzer::Targets::Names), "Names");
+        analyze();
+        phases.Finish("analyzer-cleanup");
         return result;
     }
 } // namespace anduefker::binding

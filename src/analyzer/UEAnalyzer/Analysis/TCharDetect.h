@@ -7,6 +7,7 @@
 
 namespace anduefker::analyzer
 {
+	class LiteralScanBatch;
 
 	/**
 	 * @brief What a character is in this build.
@@ -50,5 +51,7 @@ namespace anduefker::analyzer
 	 * @return The measured kind, or Unknown when neither encoding clearly wins.
 	 */
 	ETCharKind DetectTCharKind(const IMemory *Memory, size_t *OutUtf16 = nullptr, size_t *OutUtf32 = nullptr);
+	/// Batched probes retain the original ordered-prefix decision and per-segment caps.
+	void QueueTCharDetection(LiteralScanBatch &Batch, ETCharKind &Kind, size_t &Utf16, size_t &Utf32);
 
 } // namespace anduefker::analyzer

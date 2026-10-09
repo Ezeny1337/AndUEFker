@@ -4,6 +4,7 @@
 #include <elf.h>
 
 #include "anduefker/memory/RemoteMemorySource.hpp"
+#include "anduefker/module/ElfSymbols.hpp"
 
 namespace anduefker::app
 {
@@ -101,9 +102,13 @@ namespace anduefker::module
         auto elf = remote->Manager().elfScanner.findElf(moduleName);
         if (!elf.isValid())
             return 0;
-        uintptr_t symbol = elf.findSymbol(symbolName);
-        if (symbol == 0)
-            symbol = elf.findDebugSymbol(symbolName);
-        return symbol;
+        ModuleImage module;
+        if (!Discover(memory, {moduleName}, module))
+            return 0;
+        const auto result = QueryElfSymbols(memory, module, elf, {symbolName});
+        if (const auto found = result.exported.find(symbolName); found != result.exported.end())
+            return found->second;
+        const auto found = result.debug.find(symbolName);
+        return found == result.debug.end() ? 0 : found->second;
     }
 } // namespace anduefker::module

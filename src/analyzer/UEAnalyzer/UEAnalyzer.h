@@ -69,6 +69,9 @@ namespace anduefker::analyzer
 		/// Called on the analyzing thread at phase boundaries.
 		std::function<void(const std::string &)> Progress;
 
+		/// Called on the analyzing thread after each phase. Two-thread scans report a combined phase.
+		std::function<void(const char *)> PhaseCompleted;
+
 		/// Which targets to analyse, by strategy name. Empty means all of them.
 		///
 		/// Requested targets share proximity and resolution literal scans. Selecting

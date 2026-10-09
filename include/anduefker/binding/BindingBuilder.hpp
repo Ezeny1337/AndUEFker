@@ -23,7 +23,8 @@ namespace anduefker::binding
 
         [[nodiscard]] std::optional<RuntimeBinding> Build(const BindingCandidates &candidates,
                                                           const DecodePlan &decode = DecodePlan::Identity(),
-                                                          const std::function<void(const std::string &)> &progress = {}) const;
+                                                          const std::function<void(const std::string &)> &progress = {},
+                                                          bool detailedDiagnostics = false) const;
 
     private:
         [[nodiscard]] std::vector<uintptr_t> ResolveRoots(const std::vector<LocatedAddress> &candidates) const;

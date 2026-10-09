@@ -28,9 +28,15 @@ namespace anduefker::generation
         std::map<std::pair<uintptr_t, uintptr_t>, std::string> functions;
     };
 
+    struct CppPropertyType
+    {
+        std::string name;
+        std::string failureReason;
+    };
+
     [[nodiscard]] std::string SanitizeIdentifier(std::string value, const char *fallback);
     [[nodiscard]] CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection);
     [[nodiscard]] const char *EnumUnderlyingName(ir::EnumUnderlyingType type);
-    [[nodiscard]] std::string PropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
-                                           int32_t pointerWidth, int32_t nameSize, size_t depth = 0);
+    [[nodiscard]] CppPropertyType ResolvePropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
+                                                      int32_t pointerWidth, int32_t nameSize, size_t depth = 0);
 } // namespace anduefker::generation

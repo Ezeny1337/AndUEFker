@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -71,11 +72,20 @@ namespace anduefker::binding
         [[nodiscard]] bool IsValid() const;
     };
 
+    struct NamePoolAddresses
+    {
+        uintptr_t blocks = 0;
+        uintptr_t currentBlock = 0;
+        uintptr_t byteCursor = 0;
+    };
+
     struct NamePoolLayout
     {
         int32_t blocksOffset = -1;
-        int32_t maxChunkIndexOffset = -1;
-        int32_t byteCursorOffset = -1;
+        // Boundary fields are relative to the table, so a blocks-table alias and
+        // a full pool root have the same publication contract. Empty means unknown.
+        std::optional<int32_t> currentBlockFromBlocks;
+        std::optional<int32_t> byteCursorFromBlocks;
         int32_t blocksBit = -1;
         int32_t entryStride = -1;
         int32_t entryHeaderOffset = -1;
@@ -84,6 +94,11 @@ namespace anduefker::binding
         uint16_t entryWideMask = 0;
 
         [[nodiscard]] bool IsValid() const;
+        [[nodiscard]] std::optional<NamePoolAddresses> Locate(uintptr_t root) const;
+        [[nodiscard]] bool HasPublicationBoundary() const
+        {
+            return currentBlockFromBlocks.has_value() && byteCursorFromBlocks.has_value();
+        }
     };
 
     struct NameContainerLayout

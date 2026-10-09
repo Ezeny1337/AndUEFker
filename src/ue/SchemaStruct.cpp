@@ -53,6 +53,7 @@ namespace anduefker::ue::schema_probe
         {
             if (sizeCandidates.size() > 1)
             {
+                report.ambiguous = true;
                 report.failures.push_back("UStruct::PropertiesSize candidates are ambiguous across FVector layouts; candidates=" +
                                           std::to_string(sizeCandidates.size()));
                 return false;

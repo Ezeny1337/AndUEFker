@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -81,7 +82,7 @@ namespace anduefker::generation
     void ArtifactWriter::BasicTypes(std::ostream &stream) const
     {
         const auto &identity = context_.Schema().identity;
-        stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n\n";
+        stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <optional>\n#include <type_traits>\n#include <utility>\n\n";
         stream << "// For inspection and analysis; reflected offsets and sizes are authoritative.\n";
         stream << "// Canonical profile: " << identity.canonicalProfileId << " (" << identity.canonicalVersionRange << ").\n";
         stream << "// Runtime layout: " << identity.layoutProfileId << "; layout confidence: validated.\n";
@@ -108,6 +109,18 @@ namespace anduefker::generation
         stream << "// Opaque container storage; StorageSize comes from the reflected field.\n";
         stream << "template <typename ElementType, std::size_t StorageSize> struct TSet { std::uint8_t Data[StorageSize]; };\n";
         stream << "template <typename KeyType, typename ValueType, std::size_t StorageSize> struct TMap { std::uint8_t Data[StorageSize]; };\n";
+        stream << "// Field storage and the enum definition may have different widths. Conversions check representability.\n";
+        stream << "template <typename EnumType, typename StorageType> struct TEnumStorage\n{\n";
+        stream << "    static_assert(std::is_enum_v<EnumType> && std::is_integral_v<StorageType>);\n";
+        stream << "    StorageType Value;\n";
+        stream << "    std::optional<EnumType> TryGet() const\n    {\n";
+        stream << "        using Underlying = std::underlying_type_t<EnumType>;\n";
+        stream << "        if (!std::in_range<Underlying>(Value)) return std::nullopt;\n";
+        stream << "        return static_cast<EnumType>(static_cast<Underlying>(Value));\n    }\n";
+        stream << "    bool TrySet(EnumType value)\n    {\n";
+        stream << "        const auto raw = static_cast<std::underlying_type_t<EnumType>>(value);\n";
+        stream << "        if (!std::in_range<StorageType>(raw)) return false;\n";
+        stream << "        Value = static_cast<StorageType>(raw);\n        return true;\n    }\n};\n";
         stream << "}\n";
     }
 
@@ -194,6 +207,27 @@ namespace anduefker::generation
         WriteCaptureJson(stream, reflection_.capture);
         stream << ",\n  \"property_diagnostics\":";
         WritePropertyDiagnosticsJson(stream, reflection_);
+        stream << ",\n  \"opaque_fields_by_reason\":{";
+        bool firstOpaqueReason = true;
+        for (const auto &[reason, count] : report.opaqueReasons)
+        {
+            if (!firstOpaqueReason)
+                stream << ',';
+            firstOpaqueReason = false;
+            stream << '"' << EscapeJson(reason) << "\":" << count;
+        }
+        stream << '}';
+        stream << ",\n  \"opaque_cpp_representation_failures\":[";
+        bool firstRepresentationFailure = true;
+        for (const auto &[key, count] : report.cppRepresentationFailures)
+        {
+            if (!firstRepresentationFailure)
+                stream << ',';
+            firstRepresentationFailure = false;
+            stream << "{\"reason\":\"" << EscapeJson(key.first) << "\",\"property_class\":\""
+                   << EscapeJson(key.second) << "\",\"count\":" << count << '}';
+        }
+        stream << ']';
         stream << ",\n  \"generation_report\":{\"total\":" << report.layoutEvents
                << ",\"warnings\":" << report.layoutWarnings
                << ",\"sample_limit_per_category\":8,\"samples_omitted\":" << (report.layoutEvents > report.events.size() ? report.layoutEvents - report.events.size() : 0)
@@ -317,8 +351,14 @@ namespace anduefker::generation
             entry.boolLayout = ::anduefker::ir::IsValidPropertyBoolLayout(property);
             if (property.type.kind != PropertyKind::Bool && property.typeDetailsResolved &&
                 property.type.elementSize == property.elementSize)
-                entry.cppType = PropertyType(property.type, symbols, context_.Module().pointerWidth,
-                                             context_.Schema().fname.size);
+            {
+                auto resolved = ResolvePropertyType(property.type, symbols, context_.Module().pointerWidth,
+                                                    context_.Schema().fname.size);
+                entry.cppType = std::move(resolved.name);
+                entry.cppTypeFailure = std::move(resolved.failureReason);
+            }
+            else if (property.type.kind != PropertyKind::Bool)
+                entry.cppTypeFailure = !property.typeDetailsResolved ? "unresolved-type-details" : "property-type-size-disagreement";
             plan.fields.push_back(std::move(entry));
         }
         return plan;
@@ -336,19 +376,40 @@ namespace anduefker::generation
         const int32_t initialOffset = plan.initialOffset;
         const auto &analysis = function ? function->layout : owner.layout;
         const std::string scope = function ? "function-parameters" : "type-fields";
+        const auto opaqueReasonFor = [](const FieldGenerationEntry &entry)
+        {
+            const auto &property = *entry.property;
+            if (!entry.validBounds)
+                return "invalid-bounds";
+            if (!property.typeDetailsResolved)
+                return "unresolved-type-details";
+            if (property.type.kind == PropertyKind::Bool && !entry.boolLayout)
+                return "invalid-bool-layout";
+            if (entry.cppType.empty() && property.type.kind != PropertyKind::Bool)
+                return "no-sized-cpp-representation";
+            if (property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map)
+                return "container-internals-not-expanded";
+            return "none";
+        };
+        const auto recordOpaque = [&](const FieldGenerationEntry &entry)
+        {
+            ++opaqueFields;
+            ++report.opaqueReasons[opaqueReasonFor(entry)];
+            if (std::string_view(opaqueReasonFor(entry)) == "no-sized-cpp-representation")
+                ++report.cppRepresentationFailures[{entry.cppTypeFailure, entry.property->reflectedClass}];
+        };
         const auto describe = [&](const FieldGenerationEntry &entry)
         {
             const auto &property = *entry.property;
-            const char *opaqueReason = !entry.validBounds ? "invalid-bounds" : !property.typeDetailsResolved                                                      ? "unresolved-type-details"
-                                                                           : (property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map) ? "container-internals-not-expanded"
-                                                                           : (entry.cppType.empty() && property.type.kind != PropertyKind::Bool)                  ? "no-sized-cpp-representation"
-                                                                                                                                                                  : "none";
+            const char *opaqueReason = opaqueReasonFor(entry);
             stream << "    // Field name=" << EscapeJson(property.name) << " class=" << EscapeJson(property.reflectedClass)
                    << " metadata=" << Hex(property.address) << " target_offset=" << property.offset
                    << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim
                    << " flags=" << Hex(property.flags) << " referenced_object=" << Hex(property.type.referencedObject)
                    << " secondary_object=" << Hex(property.type.secondaryObject)
                    << " status=" << ParseStatusName(property.status) << " opaque_reason=" << opaqueReason;
+            if (!entry.cppTypeFailure.empty())
+                stream << " cpp_representation_reason=" << EscapeJson(entry.cppTypeFailure);
             if (function)
                 stream << " parameter=" << property.isParameter << " return=" << property.isReturnParameter
                        << " out=" << property.isOutParameter << " reference=" << property.isReferenceParameter
@@ -409,6 +470,13 @@ namespace anduefker::generation
             event.typeSize = size;
             event.initialCursor = initialOffset;
             event.strategy = "offset-description";
+            event.cursorSource = plan.forceOffsetDescription ? "declaration-dependency" : "layout-analysis";
+            const auto base = symbols.types.find(event.superAddress);
+            if (!function && base != symbols.types.end())
+            {
+                event.super = base->second.name;
+                event.baseSize = base->second.size;
+            }
             report.Info(std::move(event));
             stream << "    // Representation: offset-description; reflected order is not asserted.\n";
             stream << "    // Native data size is the reflected type/parameter size; unreflected bytes are not inferred as padding.\n";
@@ -424,7 +492,7 @@ namespace anduefker::generation
                     stream << "    // Invalid offset description: name=" << EscapeJson(property.name) << " symbol=" << member << " type=" << EscapeJson(typeName)
                            << " offset=" << property.offset << " element_size=" << property.elementSize
                            << " array_dim=" << property.arrayDim << "\n";
-                    ++opaqueFields;
+                    recordOpaque(entry);
                     continue;
                 }
                 stream << "    // OffsetDescription name=" << EscapeJson(property.name) << " symbol=" << member << " type=" << EscapeJson(typeName)
@@ -435,7 +503,7 @@ namespace anduefker::generation
                 stream << "    static constexpr std::size_t " << member << "_ArrayDim = " << property.arrayDim << ";\n";
                 if (property.type.kind != PropertyKind::Bool &&
                     (entry.cppType.empty() || property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map))
-                    ++opaqueFields;
+                    recordOpaque(entry);
                 if (entry.boolLayout)
                 {
                     stream << "    static constexpr std::uint8_t " << member << "_FieldSize = "
@@ -532,7 +600,7 @@ namespace anduefker::generation
             {
                 stream << "    std::uint8_t " << member << "[" << Hex(static_cast<uint64_t>(total))
                        << "]; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ") opaque\n";
-                ++opaqueFields;
+                recordOpaque(*entry);
             }
             else
             {
@@ -541,7 +609,7 @@ namespace anduefker::generation
                     stream << "[" << property.arrayDim << "]";
                 stream << "; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
                 if (property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map)
-                    ++opaqueFields;
+                    recordOpaque(*entry);
             }
             stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
             stream << "    static constexpr std::size_t " << member << "_ElementSize = " << property.elementSize << ";\n";
@@ -699,6 +767,8 @@ namespace anduefker::generation
                 stream << "    " << info.values[index] << " = ";
                 if (info.underlyingType == EnumUnderlyingType::UInt64)
                     stream << Hex(static_cast<uint64_t>(enumeration.values[index].value));
+                else if (enumeration.values[index].value == INT64_MIN)
+                    stream << "(-9223372036854775807LL - 1)";
                 else
                     stream << enumeration.values[index].value;
                 stream << ",\n";
@@ -713,7 +783,7 @@ namespace anduefker::generation
         const RuntimeBinding &binding = context_.Binding();
         const EngineSchema &schema = context_.Schema();
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 3,\n";
+        stream << "{\n  \"schema_version\": 4,\n";
         stream << "  \"engine\": \"" << EscapeJson(schema.identity.canonicalVersionRange.empty() ? schema.validation.familyEvidence : schema.identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\"" << EscapeJson(schema.validation.profileId)
                << "\",\"label\":\"" << EscapeJson(schema.validation.profileLabel)
@@ -762,9 +832,17 @@ namespace anduefker::generation
         if (binding.names.kind == NameContainerKind::Pool)
         {
             stream << ",\"blocks_offset\":" << binding.names.pool.blocksOffset
-                   << ",\"current_block_offset\":" << binding.names.pool.maxChunkIndexOffset
-                   << ",\"byte_cursor_offset\":" << binding.names.pool.byteCursorOffset
-                   << ",\"blocks_bit\":" << binding.names.pool.blocksBit
+                   << ",\"current_block_from_blocks\":";
+            if (binding.names.pool.currentBlockFromBlocks)
+                stream << *binding.names.pool.currentBlockFromBlocks;
+            else
+                stream << "null";
+            stream << ",\"byte_cursor_from_blocks\":";
+            if (binding.names.pool.byteCursorFromBlocks)
+                stream << *binding.names.pool.byteCursorFromBlocks;
+            else
+                stream << "null";
+            stream << ",\"blocks_bit\":" << binding.names.pool.blocksBit
                    << ",\"entry_stride\":" << binding.names.pool.entryStride
                    << ",\"entry_header_offset\":" << binding.names.pool.entryHeaderOffset
                    << ",\"entry_string_offset\":" << binding.names.pool.entryStringOffset
@@ -978,21 +1056,27 @@ namespace anduefker::generation
         result.opaqueFields = report.opaqueFields;
         result.omittedFields = report.omittedFields;
         result.layoutWarnings = report.layoutWarnings;
+        for (const auto &[reason, count] : report.opaqueReasons)
+            result.generationDiagnostics.push_back("SDK opaque summary: reason=" + reason + " total=" + std::to_string(count));
+        for (const auto &[key, count] : report.cppRepresentationFailures)
+            result.generationDiagnostics.push_back("SDK C++ representation summary: reason=" + key.first +
+                                                   " property_class=" + key.second + " total=" + std::to_string(count));
         for (const auto &[category, count] : report.counts)
             result.generationDiagnostics.push_back("SDK layout summary: category=" + category +
                                                    " total=" + std::to_string(count) +
                                                    " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
         for (const auto &event : report.events)
+        {
+            const std::string fieldDetails = event.propertyAddress == 0 ? "" : " property=" + event.property + " property_address=" + Hex(event.propertyAddress) + " offset=" + std::to_string(event.offset) + " end=" + std::to_string(event.end);
             result.generationDiagnostics.push_back("SDK layout event: severity=" + event.severity +
-                                                   " category=" + event.category +
-                                                   " owner=" + event.owner + " property=" + event.property +
-                                                   " address=" + Hex(event.propertyAddress) +
-                                                   " offset=" + std::to_string(event.offset) +
-                                                   " end=" + std::to_string(event.end) +
+                                                   " category=" + event.category + " scope=" + event.scope +
+                                                   " owner=" + event.owner + " owner_address=" + Hex(event.ownerAddress) +
+                                                   " type_size=" + std::to_string(event.typeSize) + fieldDetails +
                                                    " base_size=" + std::to_string(event.baseSize) +
                                                    " cursor=" + std::to_string(event.cursor) +
                                                    " cursor_source=" + event.cursorSource +
                                                    " strategy=" + event.strategy);
+        }
         const std::string artifactStem = packageStem + (status == ParseStatus::Partial ? ".partial" : "");
         const std::filesystem::path finalPath = outputRoot_ / artifactStem;
         if (std::filesystem::exists(finalPath, error))

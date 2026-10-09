@@ -26,35 +26,18 @@ namespace anduefker::ue::schema_probe
             report.failures.push_back("object model could not be initialized for UEnum samples");
             return false;
         }
-        for (int32_t index = 0; index < bootstrap_->objects->Count(); ++index)
+        for (const auto &object : session_.Objects(schema))
         {
-            const auto object = bootstrap_->objects->ReadObject(index);
-            if (!object.IsValid())
-                continue;
-            const auto classAddress = Add(object.address, schema.uobject.classPointer);
-            if (!classAddress)
-                continue;
-            uintptr_t classObject = 0;
-            if (!memory_.Read(*classAddress, classObject))
-                continue;
-            const auto nameAddress = Add(classObject, schema.uobject.name);
-            if (!nameAddress)
-                continue;
-            int32_t raw = 0;
-            if (!memory_.Read(*nameAddress, raw))
-                continue;
-            raw = binding_.decode.nameIndex(raw, *nameAddress);
-            const auto className = names.ReadName(raw);
-            if (className && *className == "Enum")
+            if (object.className == "Enum")
             {
-                const auto flags = model.Flags(object.address);
-                if (!flags || (*flags & (kRFClassDefaultObject | kRFIncompleteLoad)) != 0)
+                if ((object.flags & (kRFClassDefaultObject | kRFIncompleteLoad)) != 0)
                     continue;
                 enumObjects.push_back(object.address);
                 if (enumObjects.size() >= 32)
                     break;
             }
         }
+        report.probeLimited = session_.indexLimited;
         if (enumObjects.size() < 2)
         {
             report.failures.push_back("not enough UEnum sample objects were found");
@@ -229,6 +212,7 @@ namespace anduefker::ue::schema_probe
         if (selected == nullptr || selected->validArrays < requiredArrays ||
             selected->nonEmptyArrays < requiredNonEmptyArrays || ambiguous)
         {
+            report.ambiguous = ambiguous;
             report.failures.push_back("UEnum::Names was not resolved from FName/int64 array samples; required_headers=" +
                                       std::to_string(requiredArrays) + " required_nonempty=" +
                                       std::to_string(requiredNonEmptyArrays) + " ambiguous=" +
@@ -388,6 +372,7 @@ namespace anduefker::ue::schema_probe
         if (tailCandidates.empty() ||
             (tailCandidates.size() > 1 && tailScore(tailCandidates[0]) == tailScore(tailCandidates[1])))
         {
+            report.ambiguous = tailCandidates.size() > 1;
             report.failures.push_back("UEnum tail layout candidates were rejected or ambiguous; candidates=" +
                                       std::to_string(tailCandidates.size()));
             return false;

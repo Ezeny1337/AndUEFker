@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 class IMemory;
@@ -105,24 +106,39 @@ namespace anduefker::analyzer
 		}
 
 	private:
-		/// Matches every needle inside one buffer, offsetting hits by BaseAddress.
-		/// Matches starting at or past LimitOffset are left to the next chunk.
-		void MatchChunk(const uint8_t *Data, size_t Size, size_t LimitOffset, uint64_t BaseAddress, std::vector<size_t> &FoundPerNeedle, std::vector<Hit> &Out) const;
-
-		/// ScanRange, appending to a caller-owned hit budget so one budget spans a module.
-		void ScanRangeInto(const IMemory *Memory, uintptr_t Start, size_t Range, std::vector<size_t> &FoundPerNeedle, std::vector<Hit> &Out) const;
-
-		/// Needles sharing a first byte, so one memchr sweep serves all of them.
-		struct FirstByteBucket
-		{
-			uint8_t First = 0;			   ///< Byte every needle here begins with.
-			std::vector<uint32_t> Needles; ///< Indices into Needles_, in add order.
-		};
-
 		std::vector<Needle> Needles_;
-		std::vector<FirstByteBucket> Buckets_;
-		size_t LongestNeedle_ = 0;
 		size_t NextOwner_ = 0;
+	};
+
+	/// Owns scan tasks until Run completes. Completion callbacks borrow their outputs;
+	/// those outputs must outlive Run. Each task retains its own needle hit budgets.
+	class LiteralScanBatch
+	{
+	public:
+		struct Statistics
+		{
+			size_t RegisteredNeedles = 0;
+			size_t UniqueNeedles = 0;
+			uint64_t Comparisons = 0;
+			uint64_t ReadOperations = 0;
+			uint64_t ReadBytes = 0;
+		};
+		using Completion = std::function<void(const LiteralScanner &, const std::vector<LiteralScanner::Hit> &)>;
+		void Add(LiteralScanner Scanner, bool PerSegment, Completion Complete);
+		void Run(const IMemory *Memory, const ModuleInfo &Module);
+		const Statistics &Stats() const { return Stats_; }
+
+	private:
+		struct Task
+		{
+			LiteralScanner Scanner;
+			bool PerSegment = false;
+			Completion Complete;
+			std::vector<size_t> Counts;
+			std::vector<LiteralScanner::Hit> Hits;
+		};
+		std::vector<Task> Tasks_;
+		Statistics Stats_;
 	};
 
 } // namespace anduefker::analyzer

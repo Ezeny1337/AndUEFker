@@ -62,6 +62,7 @@ namespace anduefker::app
         std::string packageName;
         std::string outputRoot;
         std::vector<std::string> moduleNames = {"libUnreal.so", "libUE4.so"};
+        bool detailedDiagnostics = false;
     };
 
     class RuntimeSession

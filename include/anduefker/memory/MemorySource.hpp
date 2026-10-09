@@ -15,6 +15,7 @@ namespace anduefker::memory
         UnreadableRange,
         PartialRead,
         BackendFailure,
+        ProbeLimit,
     };
 
     struct ReadResult
@@ -38,6 +39,11 @@ namespace anduefker::memory
         uint64_t backendRequestedBytes = 0;
         uint64_t backendTransferredBytes = 0;
         uint64_t failures = 0;
+        uint64_t notInitialized = 0;
+        uint64_t invalidArguments = 0;
+        uint64_t unreadableRanges = 0;
+        uint64_t partialReads = 0;
+        uint64_t backendFailures = 0;
     };
 
     class IMemorySource

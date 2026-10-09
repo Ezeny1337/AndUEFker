@@ -62,6 +62,8 @@ add_library(anduefker_core STATIC
     src/memory/CaptureMemorySource.cpp
     src/memory/RemoteMemorySource.cpp
     src/module/ModuleCatalog.cpp
+    src/module/ElfSymbols.cpp
+    src/module/ElfSymbolQuery.cpp
     src/reflection/ReflectionReader.cpp
     src/reflection/ReflectionLayout.cpp
     src/ue/EngineSchema.cpp

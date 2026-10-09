@@ -1,5 +1,6 @@
 #include "ProbeContext.hpp"
 
+#include <algorithm>
 #include <array>
 #include <unordered_set>
 
@@ -12,18 +13,7 @@ namespace anduefker::ue::schema_probe
             return std::nullopt;
         if (!bootstrap_ || !bootstrap_->IsValid())
             return std::nullopt;
-        NameStoreReader names(memory_, binding_.nameRoot.address, binding_.names, binding_.decode,
-                              schema.fname, schema.features);
-        for (int32_t index = 0; index < bootstrap_->objects->Count(); ++index)
-        {
-            const auto object = bootstrap_->objects->ReadObject(index);
-            if (!object.IsValid())
-                continue;
-            const auto objectName = ReadObjectName(memory_, binding_, schema, names, object.address);
-            if (objectName && *objectName == name)
-                return object.address;
-        }
-        return std::nullopt;
+        return session_.FindNamed(schema, name);
     }
 
     bool SchemaProbeContext::FindPointerField(uintptr_t first,
@@ -431,6 +421,7 @@ namespace anduefker::ue::schema_probe
         };
         if (fnameCandidates.size() > 1 && sameFNameEvidence(fnameCandidates[0], fnameCandidates[1]))
         {
+            report.ambiguous = true;
             report.failures.push_back("FName layout candidates are ambiguous; top_score=" +
                                       std::to_string(fnameScore(fnameCandidates[0])) +
                                       " distinct_physical_layouts=" + std::to_string(fnameCandidates.size()) +
@@ -685,9 +676,49 @@ namespace anduefker::ue::schema_probe
 
     bool SchemaProbeContext::ValidateUObjectSchema(EngineSchema &schema, SchemaResolutionReport &report) const
     {
-        if (schema.uobject.internalIndex < 0 || schema.uobject.classPointer < 0)
+        if (!bootstrap_ || !bootstrap_->IsValid() || schema.uobject.internalIndex < 0 || schema.uobject.classPointer < 0)
             return false;
-        report.evidence.push_back("UObject bootstrap fields are structurally consistent");
-        return true;
+        ObjectModelReader model(memory_, binding_, schema);
+        if (!model.Initialize())
+        {
+            report.failures.push_back("object model initialization failed during UObject/name association validation");
+            return false;
+        }
+        size_t valid = 0;
+        std::unordered_set<std::string> objectNames, classNames;
+        const auto inStore = [&](uintptr_t address)
+        {
+            const auto index = model.InternalIndex(address);
+            return index && *index >= 0 && *index < bootstrap_->objects->Count() &&
+                   bootstrap_->objects->ReadObject(*index).address == address;
+        };
+        const size_t extent = static_cast<size_t>(std::max(schema.uobject.outer + static_cast<int32_t>(sizeof(uintptr_t)),
+                                                           schema.uobject.name + schema.fname.size));
+        for (const auto &[index, address] : bootstrap_->objectSamples)
+        {
+            const auto internalIndex = model.InternalIndex(address);
+            const auto cls = model.Class(address);
+            const auto name = model.Name(address);
+            const auto outer = model.Outer(address);
+            if (!internalIndex || *internalIndex != index || !name || name->empty() || !cls || !outer ||
+                !memory_.IsReadable(*cls, extent) || !inStore(*cls) ||
+                (*outer && (!memory_.IsReadable(*outer, extent) || !inStore(*outer))))
+                continue;
+            const auto className = model.Name(*cls);
+            const auto metaClass = model.Class(*cls);
+            if (!className || className->empty() || !metaClass || !memory_.IsReadable(*metaClass, extent) ||
+                !inStore(*metaClass) || model.Name(*metaClass) != std::optional<std::string>("Class"))
+                continue;
+            ++valid;
+            objectNames.insert(*name);
+            classNames.insert(*className);
+        }
+        const size_t tested = bootstrap_->objectSamples.size();
+        const bool accepted = valid >= 5 && valid * 5 >= tested * 4 && objectNames.size() >= 3 && classNames.size() >= 2;
+        report.evidence.push_back("UObject/name association tested=" + std::to_string(tested) + " valid=" + std::to_string(valid) +
+                                  " distinct_names=" + std::to_string(objectNames.size()) + " distinct_classes=" + std::to_string(classNames.size()));
+        if (!accepted)
+            report.failures.push_back("UObject names, class identities and outers did not agree with the object store");
+        return accepted;
     }
 } // namespace anduefker::ue::schema_probe

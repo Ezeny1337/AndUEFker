@@ -15,6 +15,7 @@ namespace anduefker::analyzer
 {
 
 	class GlobalAccessHarvester;
+	class LiteralScanBatch;
 
 	/**
 	 * @brief Locates anchor strings and the code that references them.
@@ -36,9 +37,11 @@ namespace anduefker::analyzer
 		 * looked up, because every caller already has it and the lookup is not free.
 		 */
 		void Run(const IMemory *Memory, const ModuleInfo &Module, std::span<const AnchorString> Anchors);
+		/// With Batch, completion is deferred; outputs and anchor strings must outlive Batch->Run().
 		static void RunBatch(const IMemory *Memory, const ModuleInfo &Module,
 							 std::span<StringAnchors *const> Outputs,
-							 const std::vector<std::span<const AnchorString>> &Groups);
+							 const std::vector<std::span<const AnchorString>> &Groups,
+							 LiteralScanBatch *Batch = nullptr);
 
 		/// Addresses of located anchor strings.
 		const std::vector<uint64_t> &GetAnchorAddresses() const { return AnchorAddrs_; }

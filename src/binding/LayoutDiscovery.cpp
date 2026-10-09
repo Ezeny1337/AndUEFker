@@ -328,17 +328,17 @@ namespace anduefker::binding
                             pool.entryStringOffset = stringOffset;
                             pool.entryLengthShift = shift;
                             pool.entryWideMask = 1;
-                            if (pointerOffset >= 8)
+                            const uintptr_t table = root + static_cast<uintptr_t>(pointerOffset);
+                            if (table >= 8 && memory_.IsReadable(table - 8, 8))
                             {
                                 uint32_t block = 0;
                                 uint32_t cursor = 0;
                                 const size_t blockSize = (size_t{1} << pool.blocksBit) * stride;
-                                if (memory_.Read(root + static_cast<uintptr_t>(pointerOffset - 8), block) &&
-                                    memory_.Read(root + static_cast<uintptr_t>(pointerOffset - 4), cursor) &&
+                                if (memory_.Read(table - 8, block) && memory_.Read(table - 4, cursor) &&
                                     block < 8192 && cursor <= blockSize && cursor % static_cast<uint32_t>(stride) == 0)
                                 {
-                                    pool.maxChunkIndexOffset = pointerOffset - 8;
-                                    pool.byteCursorOffset = pointerOffset - 4;
+                                    pool.currentBlockFromBlocks = -8;
+                                    pool.byteCursorFromBlocks = -4;
                                 }
                             }
                             std::string name;

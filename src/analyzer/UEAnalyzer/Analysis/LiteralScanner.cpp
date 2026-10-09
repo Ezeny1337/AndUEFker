@@ -1,7 +1,12 @@
 #include "LiteralScanner.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
+#include <stdexcept>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 
 #include "../../Memory/IMemory.h"
 
@@ -9,180 +14,179 @@ namespace anduefker::analyzer
 {
 	size_t LiteralScanner::AddLiteral(const char *Text, size_t MaxHitsPerEncoding)
 	{
+		if (NextOwner_ == SIZE_MAX) throw std::length_error("literal owner index overflow");
 		const size_t Owner = NextOwner_++;
-		if (!Text || !*Text)
-			return Owner;
-
+		if (!Text || !*Text) return Owner;
 		const size_t Length = std::strlen(Text);
+		if (Length > kChunkBytes / 4) throw std::length_error("literal exceeds scan chunk size");
 		AddRaw(Text, Length, Owner, 1, MaxHitsPerEncoding);
-
-		const std::vector<uint8_t> W16 = Widen<uint16_t>(Text);
+		const auto W16 = Widen<uint16_t>(Text);
+		const auto W32 = Widen<uint32_t>(Text);
 		AddRaw(W16.data(), W16.size(), Owner, 2, MaxHitsPerEncoding);
-
-		const std::vector<uint8_t> W32 = Widen<uint32_t>(Text);
 		AddRaw(W32.data(), W32.size(), Owner, 4, MaxHitsPerEncoding);
-
 		return Owner;
 	}
 
 	void LiteralScanner::AddRaw(const void *Data, size_t Size, size_t OwnerIndex, int Encoding, size_t MaxHits)
 	{
-		if (!Data || Size == 0)
-			return;
-
+		if (!Data || !Size) return;
+		if (Size > kChunkBytes || OwnerIndex == SIZE_MAX) throw std::length_error("literal registration exceeds scan limits");
 		Needle N;
 		N.Bytes.assign(static_cast<const uint8_t *>(Data), static_cast<const uint8_t *>(Data) + Size);
 		N.OwnerIndex = OwnerIndex;
 		N.Encoding = Encoding;
 		N.MaxHits = MaxHits;
-
-		LongestNeedle_ = std::max(LongestNeedle_, Size);
-
-		// Bucketed on the way in, so scanning never has to group them.
-		const uint8_t First = N.Bytes[0];
-		const uint32_t Index = static_cast<uint32_t>(Needles_.size());
-		auto At = std::find_if(Buckets_.begin(), Buckets_.end(), [First](const FirstByteBucket &B)
-							   { return B.First == First; });
-		if (At == Buckets_.end())
-		{
-			Buckets_.push_back(FirstByteBucket{First, {}});
-			At = Buckets_.end() - 1;
-		}
-		At->Needles.push_back(Index);
-
 		Needles_.push_back(std::move(N));
 		NextOwner_ = std::max(NextOwner_, OwnerIndex + 1);
-	}
-
-	void LiteralScanner::MatchChunk(const uint8_t *Data, size_t Size, size_t LimitOffset, uint64_t BaseAddress, std::vector<size_t> &FoundPerNeedle, std::vector<Hit> &Out) const
-	{
-		if (LimitOffset == 0)
-			return;
-
-		// One memchr sweep per distinct first byte, not one per needle. All three
-		// encodings of a literal begin with the same byte - "None", "N\0o\0n\0e\0"
-		// and "N\0\0\0..." all start 'N' - so a set of 7 anchors in 3 encodings is
-		// 21 needles but only 7 sweeps, and each byte of the image is read by memchr
-		// a third as often.
-		for (const FirstByteBucket &Bucket : Buckets_)
-		{
-			// The shortest needle here bounds how late a match can still start; the
-			// per-needle test below rejects the longer ones that no longer fit.
-			size_t Shortest = Size;
-			for (uint32_t n : Bucket.Needles)
-				Shortest = std::min(Shortest, Needles_[n].Bytes.size());
-			if (Shortest > Size)
-				continue;
-
-			// A match starting at or past LimitOffset lies inside the overlap the next
-			// chunk will re-read, and would otherwise be recorded twice - inflating the
-			// encoding counts and burning the hit budget on duplicates.
-			const size_t Last = std::min(Size - Shortest, LimitOffset - 1);
-
-			for (size_t Off = 0; Off <= Last;)
-			{
-				const void *Found = std::memchr(Data + Off, Bucket.First, Last - Off + 1);
-				if (!Found)
-					break;
-				const size_t At = static_cast<size_t>(static_cast<const uint8_t *>(Found) - Data);
-
-				for (uint32_t n : Bucket.Needles)
-				{
-					const Needle &N = Needles_[n];
-					if (At + N.Bytes.size() > Size)
-						continue;
-					if (N.MaxHits && FoundPerNeedle[n] >= N.MaxHits)
-						continue;
-					if (std::memcmp(Data + At, N.Bytes.data(), N.Bytes.size()) == 0)
-					{
-						Out.push_back(Hit{BaseAddress + At, n});
-						++FoundPerNeedle[n];
-					}
-				}
-				Off = At + 1;
-			}
-		}
-	}
-
-	std::vector<LiteralScanner::Hit> LiteralScanner::ScanRange(const IMemory *Memory, uintptr_t Start, size_t Range) const
-	{
-		std::vector<Hit> Out;
-		std::vector<size_t> FoundPerNeedle(Needles_.size(), 0);
-		ScanRangeInto(Memory, Start, Range, FoundPerNeedle, Out);
-		return Out;
-	}
-
-	void LiteralScanner::ScanRangeInto(const IMemory *Memory, uintptr_t Start, size_t Range, std::vector<size_t> &FoundPerNeedle, std::vector<Hit> &Out) const
-	{
-		if (!Memory || Needles_.empty() || Range == 0)
-			return;
-
-		std::vector<uint8_t> Buffer;
-
-		// The backend decides what is actually readable, so a hole in the middle of
-		// the request costs one lookup rather than a failed read per chunk.
-		for (const MemRegionInfo &Sub : Memory->BuildSegmentsRanges(Start, Range))
-		{
-			const uintptr_t SubEnd = Sub.GetEnd();
-			// Overlap so a literal straddling a chunk boundary is still matched.
-			const size_t Overlap = LongestNeedle_ > 1 ? LongestNeedle_ - 1 : 0;
-
-			for (uintptr_t Cursor = Sub.GetStart(); Cursor < SubEnd;)
-			{
-				const size_t Want = std::min<size_t>(kChunkBytes, static_cast<size_t>(SubEnd - Cursor));
-				Buffer.resize(Want);
-				const size_t Received = Memory->ReadBytes(Cursor, Buffer.data(), Want);
-				if (Received == 0 || Received > Want)
-					break; // readable content ended early; the rest of this range is not ours
-
-				const bool bLast = Received < Want || Received <= Overlap || Received == SubEnd - Cursor;
-				const size_t Advance = bLast ? Received : Received - Overlap;
-				MatchChunk(Buffer.data(), Received, Advance, static_cast<uint64_t>(Cursor), FoundPerNeedle, Out);
-
-				if (bLast)
-					break;
-				Cursor += Advance;
-			}
-		}
 	}
 
 	std::vector<LiteralScanner::Hit> LiteralScanner::Scan(const IMemory *Memory, const ModuleInfo &Module) const
 	{
 		std::vector<Hit> Out;
-		if (!Memory || Needles_.empty())
-			return Out;
-
-		// One budget for the whole module, not one per segment: the caller asks for N
-		// occurrences of a literal, and where they fall is not its concern.
-		std::vector<size_t> FoundPerNeedle(Needles_.size(), 0);
-
-		// Per segment rather than one module-wide range: a module's span can be
-		// enormous while its segments are not, and BuildSegmentsRanges would have to
-		// probe every hole in between.
-		for (const MemRegionInfo &Seg : Module.GetSegments())
-		{
-			if (Seg.GetSize() == 0)
-				continue;
-			ScanRangeInto(Memory, Seg.GetStart(), Seg.GetSize(), FoundPerNeedle, Out);
-		}
+		LiteralScanBatch Batch;
+		Batch.Add(*this, false, [&](const auto &, const auto &Hits) { Out = Hits; });
+		Batch.Run(Memory, Module);
 		return Out;
 	}
 
 	std::vector<LiteralScanner::Hit> LiteralScanner::ScanPerSegment(const IMemory *Memory, const ModuleInfo &Module) const
 	{
 		std::vector<Hit> Out;
-		if (!Memory || Needles_.empty())
-			return Out;
-
-		for (const MemRegionInfo &Seg : Module.GetSegments())
-		{
-			if (Seg.GetSize() == 0)
-				continue;
-			// Budget reset per segment - that is the whole difference from Scan.
-			std::vector<size_t> FoundPerNeedle(Needles_.size(), 0);
-			ScanRangeInto(Memory, Seg.GetStart(), Seg.GetSize(), FoundPerNeedle, Out);
-		}
+		LiteralScanBatch Batch;
+		Batch.Add(*this, true, [&](const auto &, const auto &Hits) { Out = Hits; });
+		Batch.Run(Memory, Module);
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+	std::vector<LiteralScanner::Hit> LiteralScanner::ScanRange(const IMemory *Memory, uintptr_t Start, size_t Range) const
+	{
+		if (!Range || Range > UINTPTR_MAX - Start) return {};
+		return Scan(Memory, ModuleInfo({}, Start, Start + Range, Start,
+			{MemRegionInfo({}, Start, Start + Range, 0, true)}));
+	}
+
+	void LiteralScanBatch::Add(LiteralScanner Scanner, bool PerSegment, Completion Complete)
+	{
+		Task T;
+		T.Counts.resize(Scanner.GetNeedles().size());
+		T.Scanner = std::move(Scanner);
+		T.PerSegment = PerSegment;
+		T.Complete = std::move(Complete);
+		Tasks_.push_back(std::move(T));
+	}
+
+	void LiteralScanBatch::Run(const IMemory *Memory, const ModuleInfo &Module)
+	{
+		// Patterns borrow immutable task bytes. Detaching tasks keeps registration and
+		// completion callbacks from invalidating those bytes or their consumer indices.
+		std::vector<Task> Tasks;
+		Tasks.swap(Tasks_);
+		Statistics Stats;
+		struct Consumer { size_t Task, Needle; };
+		struct Pattern { const std::vector<uint8_t> *Bytes; std::vector<Consumer> Consumers; size_t ActiveConsumers = 0; };
+		std::vector<Pattern> Patterns;
+		std::unordered_map<std::string_view, size_t> Registered;
+		std::array<std::vector<size_t>, 256> Buckets;
+		for (size_t TaskIndex = 0; TaskIndex < Tasks.size(); ++TaskIndex)
+		{
+			const auto &Needles = Tasks[TaskIndex].Scanner.GetNeedles();
+			for (size_t NeedleIndex = 0; NeedleIndex < Needles.size(); ++NeedleIndex)
+			{
+				const auto &Bytes = Needles[NeedleIndex].Bytes;
+				++Stats.RegisteredNeedles;
+				const auto [At, Added] = Registered.emplace(std::string_view(reinterpret_cast<const char *>(Bytes.data()), Bytes.size()), Patterns.size());
+				if (Added)
+				{
+					Buckets[Bytes.front()].push_back(Patterns.size());
+					Patterns.push_back({&Bytes, {}});
+				}
+				Patterns[At->second].Consumers.push_back({TaskIndex, NeedleIndex});
+				++Patterns[At->second].ActiveConsumers;
+			}
+		}
+		Stats.UniqueNeedles = Patterns.size();
+		const auto Needs = [](const Pattern &P) { return P.ActiveConsumers != 0; };
+		std::vector<uint8_t> Buffer;
+		if (Memory && !Patterns.empty())
+			for (const auto &Seg : Module.GetSegments())
+			{
+				if (!Seg.GetSize()) continue;
+				for (auto &T : Tasks)
+					if (T.PerSegment) std::fill(T.Counts.begin(), T.Counts.end(), 0);
+				for (auto &P : Patterns)
+				{
+					P.ActiveConsumers = 0;
+					for (const auto &C : P.Consumers)
+					{
+						const auto &T = Tasks[C.Task];
+						const auto Cap = T.Scanner.GetNeedles()[C.Needle].MaxHits;
+						P.ActiveConsumers += !Cap || T.Counts[C.Needle] < Cap ? 1u : 0u;
+					}
+				}
+				for (const auto &Sub : Memory->BuildSegmentsRanges(Seg.GetStart(), Seg.GetSize()))
+				{
+					if (Sub.GetStart() < Seg.GetStart() || Sub.GetEnd() > Seg.GetEnd()) continue;
+					for (uintptr_t Cursor = Sub.GetStart(); Cursor < Sub.GetEnd();)
+					{
+						size_t Longest = 0;
+						for (const auto &P : Patterns) if (Needs(P)) Longest = std::max(Longest, P.Bytes->size());
+						if (!Longest) break;
+						const size_t Overlap = Longest - 1;
+						const size_t Want = std::min<size_t>(LiteralScanner::kChunkBytes, Sub.GetEnd() - Cursor);
+						Buffer.resize(Want);
+						const size_t Received = Memory->ReadBytes(Cursor, Buffer.data(), Want);
+						++Stats.ReadOperations;
+						if (!Received || Received > Want) break;
+						Stats.ReadBytes += Received;
+						const bool Last = Received < Want || Received <= Overlap || Received == Sub.GetEnd() - Cursor;
+						const size_t Advance = Last ? Received : Received - Overlap;
+						for (size_t First = 0; First < Buckets.size(); ++First)
+						{
+							std::vector<size_t> Active;
+							size_t Shortest = Received + 1;
+							for (const auto Index : Buckets[First])
+								if (Needs(Patterns[Index]))
+								{ Active.push_back(Index); Shortest = std::min(Shortest, Patterns[Index].Bytes->size()); }
+							if (Shortest > Received) continue;
+							const size_t FinalOffset = std::min(Received - Shortest, Advance - 1);
+							for (size_t Off = 0; Off <= FinalOffset && !Active.empty();)
+							{
+								const auto *Found = static_cast<const uint8_t *>(std::memchr(Buffer.data() + Off, static_cast<int>(First), FinalOffset - Off + 1));
+								if (!Found) break;
+								const size_t At = static_cast<size_t>(Found - Buffer.data());
+								bool Retired = false;
+								for (const auto Index : Active)
+								{
+									auto &P = Patterns[Index];
+									if (P.Bytes->size() > Received - At) continue;
+									++Stats.Comparisons;
+									if (std::memcmp(Found, P.Bytes->data(), P.Bytes->size())) continue;
+									for (const auto &C : P.Consumers)
+									{
+										auto &T = Tasks[C.Task];
+										const auto Cap = T.Scanner.GetNeedles()[C.Needle].MaxHits;
+										if (Cap && T.Counts[C.Needle] >= Cap) continue;
+										T.Hits.push_back({Cursor + At, C.Needle});
+										++T.Counts[C.Needle];
+										if (Cap && T.Counts[C.Needle] == Cap) --P.ActiveConsumers;
+									}
+									Retired = Retired || !Needs(P);
+								}
+								if (Retired) std::erase_if(Active, [&](size_t Index) { return !Needs(Patterns[Index]); });
+								Off = At + 1;
+							}
+						}
+						if (Last) break;
+						Cursor += Advance;
+					}
+				}
+			}
+		Stats_ = Stats;
+		for (auto &T : Tasks)
+		{
+			std::sort(T.Hits.begin(), T.Hits.end(), [](const auto &A, const auto &B)
+			{ return A.Address != B.Address ? A.Address < B.Address : A.NeedleIndex < B.NeedleIndex; });
+			if (T.Complete) T.Complete(T.Scanner, T.Hits);
+		}
+	}
+}

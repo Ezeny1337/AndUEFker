@@ -6,6 +6,7 @@
 #include <cstring>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace anduefker::ue::schema_probe
 {
@@ -44,65 +45,53 @@ namespace anduefker::ue::schema_probe
         }
         size_t excludedDefaultObjects = 0;
         size_t excludedLoadingObjects = 0;
-        size_t unreadableSampleFlags = 0;
         std::unordered_map<std::string, size_t> classSampleCounts;
         const auto sampleLimitFor = [](const std::string &className)
         {
             return NormalizeRuntimeFieldName(className) == "Function" ? size_t{48} : size_t{16};
         };
-        for (int32_t index = 0; index < bootstrap_->objects->Count() && functions.size() < 96; ++index)
+        for (const auto &object : session_.Objects(schema))
         {
-            const auto object = bootstrap_->objects->ReadObject(index);
-            if (!object.IsValid())
-                continue;
-            const auto className = model.ClassName(object.address);
-            if (!className)
-                continue;
-            const FieldKind kind = FieldKindFromRuntimeName(*className, false);
+            if (functions.size() >= 96)
+                break;
+            const FieldKind kind = FieldKindFromRuntimeName(object.className, false);
             if (!IsFunctionFieldKind(kind))
                 continue;
             // CDO 属于 UFunction 的实例，但它们并不是已被链接的函数定义
             // 采样资格不可依赖于候选的 FunctionFlags 偏移量
-            const auto objectFlags = model.Flags(object.address);
-            if (!objectFlags)
-            {
-                ++unreadableSampleFlags;
-                continue;
-            }
-            if ((*objectFlags & kRFClassDefaultObject) != 0)
+            const uint32_t objectFlags = object.flags;
+            if ((objectFlags & kRFClassDefaultObject) != 0)
             {
                 ++excludedDefaultObjects;
                 if (excludedDefaultObjects <= 8)
                     report.evidence.push_back("excluded UFunction CDO address=" + std::to_string(object.address) +
-                                              " class=" + *className + " object_flags=" + std::to_string(*objectFlags));
+                                              " class=" + object.className + " object_flags=" + std::to_string(objectFlags));
                 continue;
             }
-            if ((*objectFlags & kRFIncompleteLoad) != 0)
+            if ((objectFlags & kRFIncompleteLoad) != 0)
             {
                 ++excludedLoadingObjects;
                 continue;
             }
-            const auto objectName = model.Name(object.address);
-            if (!objectName)
+            const size_t limit = sampleLimitFor(object.className);
+            if (classSampleCounts[object.className] >= limit)
                 continue;
-            const size_t limit = sampleLimitFor(*className);
-            if (classSampleCounts[*className] >= limit)
-                continue;
-            ++classSampleCounts[*className];
+            ++classSampleCounts[object.className];
             functions.push_back(FunctionSample{object.address,
                                                kind,
-                                               *className,
-                                               *objectName,
-                                               *objectFlags,
+                                               object.className,
+                                               object.name,
+                                               objectFlags,
                                                false,
                                                ProbeSampleState::NotObserved,
                                                FieldChainStatus::Empty,
                                                {}});
         }
+        report.probeLimited = session_.indexLimited;
         const std::string sampleSummary = " samples=" + std::to_string(functions.size()) +
                                           " excluded_cdo=" + std::to_string(excludedDefaultObjects) +
                                           " excluded_loading=" + std::to_string(excludedLoadingObjects) +
-                                          " unreadable_object_flags=" + std::to_string(unreadableSampleFlags);
+                                          " index_limited=" + std::to_string(session_.indexLimited);
         report.evidence.push_back("UFunction sample eligibility;" + sampleSummary);
         if (functions.size() < 2)
         {
@@ -130,7 +119,8 @@ namespace anduefker::ue::schema_probe
                     ++readable;
                     continue;
                 }
-                if (!IsReadablePointer(memory_, next))
+                const auto nextName = Add(next, schema.uobject.name);
+                if (!IsReadablePointer(memory_, next) || !nextName || !memory_.IsReadable(*nextName, sizeof(int32_t)))
                     continue;
                 ++readable;
                 if (readObjectName(next))
@@ -171,6 +161,11 @@ namespace anduefker::ue::schema_probe
 
             const FieldChainResult chain = model.FieldsWithStatus(current, 256);
             sample.chainStatus = chain.status;
+            if (chain.status == FieldChainStatus::LimitExceeded)
+            {
+                report.sampleTruncated = true;
+                report.searchComplete = false;
+            }
             bool valid = chain.Complete();
             for (const FieldMetadata &field : chain.fields)
             {
@@ -183,14 +178,24 @@ namespace anduefker::ue::schema_probe
                 }
                 if (!IsPropertyFieldKind(field.kind))
                     continue;
-                const auto property = model.Property(field.address);
-                if (!property || property->arrayDim <= 0 || property->elementSize <= 0 || property->offset < 0)
+                // Parameter semantics consume only the integer header. Subtype payloads
+                // belong to the Property stage and must not add Function dependencies or reads.
+                PropertyMetadata property;
+                static_cast<FieldMetadata &>(property) = field;
+                const auto read = [&](int32_t offset, auto &value)
+                {
+                    const auto address = Add(field.address, offset);
+                    return address && memory_.Read(*address, value);
+                };
+                if (!read(schema.property.arrayDim, property.arrayDim) || !read(schema.property.elementSize, property.elementSize) ||
+                    !read(schema.property.propertyFlags, property.flags) || !read(schema.property.offsetInternal, property.offset) ||
+                    property.arrayDim <= 0 || property.elementSize <= 0 || property.offset < 0)
                 {
                     valid = false;
                     sample.parameterChainState = ProbeSampleState::SemanticMismatch;
                     break;
                 }
-                sample.properties.push_back(*property);
+                sample.properties.push_back(std::move(property));
             }
             sample.parameterChainValid = valid && chain.Complete();
             if (sample.parameterChainValid)
@@ -201,6 +206,8 @@ namespace anduefker::ue::schema_probe
         size_t reportedInvalidChains = 0;
         for (const FunctionSample &sample : functions)
         {
+            if (!sample.parameterChainValid)
+                report.evidenceComplete = false;
             if (!sample.parameterChainValid && reportedInvalidChains < 8)
             {
                 report.evidence.push_back("UFunction parameter chain rejected address=" + std::to_string(sample.address) +
@@ -273,6 +280,7 @@ namespace anduefker::ue::schema_probe
         {
             int32_t offset = -1;
             size_t headerReadable = 0;
+            size_t headerReadFailures = 0;
             size_t flagHits = 0;
             size_t shapeHits = 0;
             size_t returnHits = 0;
@@ -344,7 +352,10 @@ namespace anduefker::ue::schema_probe
                 const auto flagsAddress = Add(sample.address, offset);
                 std::array<uint8_t, 10> header{};
                 if (!flagsAddress || !memory_.ReadBytes(*flagsAddress, header.data(), header.size()).Ok())
+                {
+                    ++candidate.headerReadFailures;
                     continue;
+                }
                 observation.readable = true;
                 std::memcpy(&observation.flags, header.data(), sizeof(observation.flags));
                 observation.numParams = header[4];
@@ -432,7 +443,10 @@ namespace anduefker::ue::schema_probe
                 bestObserved = candidate;
 
             if (!isHardValidHeaderCandidate(candidate))
+            {
+                ++report.rejectedCandidates;
                 continue;
+            }
 
             if (best.offset < 0 || betterHeaderCandidate(candidate, best))
             {
@@ -447,6 +461,7 @@ namespace anduefker::ue::schema_probe
         const bool parameterSemanticsComplete = isHardValidHeaderCandidate(best);
         const std::string candidateSummary = " selected_flags=" + std::to_string(diagnosticCandidate.flagHits) +
                                              " header_readable=" + std::to_string(diagnosticCandidate.headerReadable) +
+                                             " selected_header_read_failures=" + std::to_string(diagnosticCandidate.headerReadFailures) +
                                              " flag_failures=" + std::to_string(diagnosticCandidate.flagFailures) +
                                              " selected_shapes=" + std::to_string(diagnosticCandidate.shapeHits) +
                                              " selected_returns=" + std::to_string(diagnosticCandidate.returnHits) +
@@ -488,6 +503,7 @@ namespace anduefker::ue::schema_probe
         }
         if (best.offset < 0 || !parameterSemanticsComplete || equivalentHeaderCandidates > 1)
         {
+            report.ambiguous = equivalentHeaderCandidates > 1;
             std::string mismatchSamples;
             std::string returnSamples;
             size_t reportedSamples = 0;
@@ -565,6 +581,7 @@ namespace anduefker::ue::schema_probe
             size_t nonNativeModuleExecutableHits = 0;
             size_t nonNativeOutsideModuleExecutableHits = 0;
             size_t nonNativeMissingHits = 0;
+            size_t readFailures = 0;
         };
         NativeCandidate bestNative;
         NativeCandidate bestObservedNative;
@@ -605,6 +622,7 @@ namespace anduefker::ue::schema_probe
                 uintptr_t native = 0;
                 if (!memory_.Read(*nativeAddress, native))
                 {
+                    ++candidate.readFailures;
                     if ((flags & kFUNCNative) != 0)
                     {
                         ++candidate.nativeSamples;
@@ -690,6 +708,7 @@ namespace anduefker::ue::schema_probe
         if (bestNative.offset < 0 || bestNative.nativeSamples < requiredNativeSamples ||
             bestNative.moduleExecutableHits < requiredNativeHits || equivalentNativeCandidates > 1)
         {
+            report.ambiguous = equivalentNativeCandidates > 1;
             report.failures.push_back("UFunction::ExecFunction was not resolved after header selection; flags_offset=" +
                                       std::to_string(schema.ufunction.functionFlags) +
                                       " native_offset=" + std::to_string(diagnosticNative.offset) +
@@ -718,57 +737,127 @@ namespace anduefker::ue::schema_probe
                                   std::to_string(bestNative.moduleExecutableHits) + " native_samples=" +
                                   std::to_string(bestNative.nativeSamples) + " outside_module=" +
                                   std::to_string(bestNative.outsideModuleExecutableHits) + " non_native_samples=" +
-                                  std::to_string(bestNative.nonNativeSamples));
+                                  std::to_string(bestNative.nonNativeSamples) + " selected_read_failures=" +
+                                  std::to_string(bestNative.readFailures));
         report.versionEvidence.push_back({"ufunction-native-tail",
                                           "native_function_offset=" + std::to_string(schema.ufunction.nativeFunction) +
                                               " tail_delta=" + std::to_string(nativeTailDelta),
                                           VersionEvidenceStrength::Medium,
                                           "tail position is build-conditional; does not uniquely identify WITH_LIVE_CODING"});
 
-        const auto readClassName = [&](uintptr_t object) -> std::optional<std::string>
-        {
-            const auto classAddress = Add(object, schema.uobject.classPointer);
-            if (!classAddress)
-                return std::nullopt;
-            uintptr_t classObject = 0;
-            if (!memory_.Read(*classAddress, classObject))
-                return std::nullopt;
-            const auto nameAddress = Add(classObject, schema.uobject.name);
-            if (!nameAddress)
-                return std::nullopt;
-            int32_t raw = 0;
-            if (!memory_.Read(*nameAddress, raw))
-                return std::nullopt;
-            raw = binding_.decode.nameIndex(raw, *nameAddress);
-            return names.ReadName(raw);
-        };
-
+        // A candidate is evidence only after its UObject identity, outer and complete
+        // UField chain agree on multiple independent owners. Invalid scalar contents
+        // are rejected before dereference, rather than contaminating read statistics.
+        std::vector<uintptr_t> owners;
         for (const char *ownerName : {"KismetSystemLibrary", "Actor", "PlayerController"})
         {
             const auto owner = FindObjectByName(schema, ownerName);
-            if (!owner)
-                continue;
-            for (int32_t offset = 0x20; offset <= 0x180; offset += 4)
+            if (owner && std::find(owners.begin(), owners.end(), *owner) == owners.end())
+                owners.push_back(*owner);
+        }
+        std::vector<int32_t> childrenCandidates;
+        size_t rejectedPointers = 0;
+        const size_t objectExtent = static_cast<size_t>(std::max({schema.uobject.classPointer + static_cast<int32_t>(sizeof(uintptr_t)),
+                                                                  schema.uobject.outer + static_cast<int32_t>(sizeof(uintptr_t)),
+                                                                  schema.uobject.name + schema.fname.size,
+                                                                  schema.uobject.internalIndex + 4}));
+        for (int32_t offset = 0x20; offset <= 0x180; offset += 4)
+        {
+            size_t matches = 0;
+            bool mismatch = false;
+            for (const uintptr_t owner : owners)
             {
                 uintptr_t child = 0;
-                const auto address = Add(*owner, offset);
-                if (!address || !memory_.Read(*address, child) || child == 0)
-                    continue;
-                const auto childClass = readClassName(child);
-                if (childClass && IsFunctionFieldKind(FieldKindFromRuntimeName(*childClass, false)))
+                const auto address = Add(owner, offset);
+                if (!address || !memory_.IsReadable(*address, sizeof(child)))
                 {
-                    schema.ustruct.children = offset;
+                    ++rejectedPointers;
+                    mismatch = true;
                     break;
                 }
+                if (!memory_.Read(*address, child))
+                {
+                    mismatch = true;
+                    break;
+                }
+                if (child == 0)
+                    continue;
+                if (!session_.FindObject(schema, child) || !memory_.IsReadable(child, objectExtent))
+                {
+                    ++rejectedPointers;
+                    mismatch = true;
+                    break;
+                }
+                const auto cls = model.Class(child);
+                if (!cls || !memory_.IsReadable(*cls, objectExtent))
+                {
+                    ++rejectedPointers;
+                    mismatch = true;
+                    break;
+                }
+                const auto index = model.InternalIndex(child);
+                const auto outer = model.Outer(child);
+                const auto className = model.Name(*cls);
+                if (!index || *index < 0 || *index >= bootstrap_->objects->Count() ||
+                    bootstrap_->objects->ReadObject(*index).address != child || !outer || *outer != owner ||
+                    !className || (!IsFunctionFieldKind(FieldKindFromRuntimeName(*className, false)) && (schema.features.useFProperty || !IsPropertyFieldKind(FieldKindFromRuntimeName(*className, false)))))
+                {
+                    mismatch = true;
+                    break;
+                }
+                bool sawFunction = false;
+                std::unordered_set<uintptr_t> visited;
+                for (uintptr_t node = child; node != 0;)
+                {
+                    const auto *identity = session_.FindObject(schema, node);
+                    const auto nextAddress = Add(node, schema.ufield.next);
+                    if (visited.size() >= 4096)
+                    {
+                        report.sampleTruncated = true;
+                        report.searchComplete = false;
+                        mismatch = true;
+                        break;
+                    }
+                    if (!identity || !visited.insert(node).second ||
+                        !nextAddress || !memory_.IsReadable(*nextAddress, sizeof(uintptr_t)) ||
+                        !memory_.IsReadable(node, objectExtent) || !memory_.IsReadable(identity->classAddress, objectExtent))
+                    {
+                        ++rejectedPointers;
+                        mismatch = true;
+                        break;
+                    }
+                    const auto field = model.UField(node);
+                    const auto fieldOuter = model.Outer(node);
+                    if (!field || !fieldOuter || *fieldOuter != owner || field->classAddress != identity->classAddress ||
+                        (!IsFunctionFieldKind(field->kind) && (schema.features.useFProperty || !IsPropertyFieldKind(field->kind))))
+                    {
+                        mismatch = true;
+                        break;
+                    }
+                    sawFunction = sawFunction || IsFunctionFieldKind(field->kind);
+                    node = field->nextAddress;
+                }
+                if (mismatch || !sawFunction)
+                {
+                    mismatch = true;
+                    break;
+                }
+                ++matches;
             }
-            if (schema.ustruct.children >= 0)
-                break;
+            if (!mismatch && matches >= 2)
+                childrenCandidates.push_back(offset);
         }
-        if (schema.ustruct.children < 0)
+        report.evidence.push_back("UFunction children validation owners=" + std::to_string(owners.size()) +
+                                  " candidates=" + std::to_string(childrenCandidates.size()) +
+                                  " rejected_pointers=" + std::to_string(rejectedPointers));
+        report.rejectedCandidates += rejectedPointers;
+        if (childrenCandidates.size() != 1)
         {
-            report.failures.push_back("UStruct::Children was not resolved from reflected classes");
+            report.ambiguous = childrenCandidates.size() > 1;
+            report.failures.push_back("UStruct::Children requires one candidate validated by multiple class-owned function chains");
             return false;
         }
+        schema.ustruct.children = childrenCandidates.front();
 
         schema.validation.functions = true;
         report.evidence.push_back("resolved UField::Next and UStruct::Children for UFunction reflection; next=" +

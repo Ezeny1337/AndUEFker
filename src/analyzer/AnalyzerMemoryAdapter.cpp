@@ -5,6 +5,7 @@
 #include <limits>
 
 #include <KittyMemoryEx.hpp>
+#include "anduefker/module/ElfSymbols.hpp"
 
 namespace anduefker::analyzer
 {
@@ -130,8 +131,11 @@ namespace anduefker::analyzer
         auto elf = memory_->Manager().elfScanner.findElf(moduleName);
         if (!elf.isValid())
             return 0;
-        uintptr_t address = elf.findSymbol(symbolName);
-        return address != 0 ? address : elf.findDebugSymbol(symbolName);
+        const auto result = module::QueryElfSymbols(*memory_, module_, elf, {symbolName});
+        if (const auto found = result.exported.find(symbolName); found != result.exported.end())
+            return found->second;
+        const auto found = result.debug.find(symbolName);
+        return found == result.debug.end() ? 0 : found->second;
     }
 
     ModuleInfo AnalyzerMemoryAdapter::GetUnrealModule()

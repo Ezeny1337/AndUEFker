@@ -10,6 +10,7 @@
 #include "Analysis/AnchoredResolution.h"
 #include "Analysis/CallGraph.h"
 #include "Analysis/GlobalAccessHarvester.h"
+#include "Analysis/LiteralScanner.h"
 #include "Analysis/StringAnchors.h"
 #include "Analysis/StructureVerifier.h"
 #include "Analysis/TCharDetect.h"
@@ -190,12 +191,15 @@ namespace anduefker::analyzer
 		const auto Harvest_ = [&]
 		{ return State->Harvester.Run(Memory, Arch, Harvest, &State->Calls); };
 
+		AnchoredResolution::AnchorSites ResolutionLiterals;
+		LiteralScanBatch::Statistics LiteralStats;
 		// Finding the anchor strings needs no harvest result, only the bytes, so it
 		// is the one phase that can run beside the decode. It writes each target's
 		// own StringAnchors and the TCHAR counters, all of which the harvest never
 		// touches, and both phases only read from Memory and Module.
 		const auto ScanLiterals = [&]
 		{
+			LiteralScanBatch Batch;
 			std::vector<StringAnchors *> Outputs;
 			std::vector<std::span<const AnchorString>> Groups;
 			for (Analysis::TargetAnalysis &T : State->Targets)
@@ -203,8 +207,15 @@ namespace anduefker::analyzer
 				Outputs.push_back(&T.Anchors);
 				Groups.push_back(T.Strategy->ProximityAnchors());
 			}
-			StringAnchors::RunBatch(Memory, State->Module, Outputs, Groups);
-			State->TChar = DetectTCharKind(Memory, &State->TCharUtf16Hits, &State->TCharUtf32Hits);
+			StringAnchors::RunBatch(Memory, State->Module, Outputs, Groups, &Batch);
+			QueueTCharDetection(Batch, State->TChar, State->TCharUtf16Hits, State->TCharUtf32Hits);
+			std::vector<const Anchor *> ResolutionAnchors;
+			for (const auto &Target : State->Targets)
+				for (const Anchor &A : Target.Strategy->ResolutionAnchors())
+					ResolutionAnchors.push_back(&A);
+			AnchoredResolution::QueueAnchorLiterals(Batch, ResolutionAnchors, ResolutionLiterals);
+			Batch.Run(Memory, State->Module);
+			LiteralStats = Batch.Stats();
 		};
 
 		bool bHarvested = false;
@@ -265,13 +276,19 @@ namespace anduefker::analyzer
 			// single-threaded order.
 			if (ScanError)
 				std::rethrow_exception(ScanError);
+			if (Out.Options_.PhaseCompleted)
+				Out.Options_.PhaseCompleted("instruction-and-literal-scan");
 		}
 		else
 		{
 			bHarvested = Harvest_();
+			if (Out.Options_.PhaseCompleted)
+				Out.Options_.PhaseCompleted("instruction-harvest");
 			if (Out.Options_.Progress)
 				Out.Options_.Progress("analyzer: instruction harvest complete; literal scan started");
 			ScanLiterals();
+			if (Out.Options_.PhaseCompleted)
+				Out.Options_.PhaseCompleted("shared-literal-scan");
 		}
 
 		if (!bHarvested)
@@ -281,7 +298,9 @@ namespace anduefker::analyzer
 		}
 
 		if (Out.Options_.Progress)
-			Out.Options_.Progress("analyzer: literal scan complete; ranking global accesses");
+			Out.Options_.Progress("analyzer_literal_scan registered_needles=" + std::to_string(LiteralStats.RegisteredNeedles) +
+								  " unique_needles=" + std::to_string(LiteralStats.UniqueNeedles) + " comparisons=" + std::to_string(LiteralStats.Comparisons) +
+								  " read_operations=" + std::to_string(LiteralStats.ReadOperations) + " read_bytes=" + std::to_string(LiteralStats.ReadBytes));
 
 		// Needs both phases: the sites come from the harvester, the strings from the
 		// scan, so this is the join point rather than part of either.
@@ -294,18 +313,16 @@ namespace anduefker::analyzer
 		}
 
 		State->BuildRanking();
+		if (Out.Options_.PhaseCompleted)
+			Out.Options_.PhaseCompleted("global-ranking");
 		if (Out.Options_.Progress)
-			Out.Options_.Progress("analyzer: global ranking complete; resolution anchor scan started");
-		std::vector<const Anchor *> ResolutionAnchors;
-		for (const auto &Target : State->Targets)
-			for (const Anchor &A : Target.Strategy->ResolutionAnchors())
-				ResolutionAnchors.push_back(&A);
-		if (Out.Options_.Progress)
-			Out.Options_.Progress("analyzer: batch scanning resolution anchors");
-		State->ResolutionSites = AnchoredResolution::ScanAnchorSites(Memory, State->Module, State->Harvester, ResolutionAnchors);
+			Out.Options_.Progress("analyzer: global ranking complete; mapping shared resolution literals to code sites");
+		State->ResolutionSites = AnchoredResolution::MapAnchorSites(ResolutionLiterals, State->Harvester);
+		if (Out.Options_.PhaseCompleted)
+			Out.Options_.PhaseCompleted("resolution-anchor-mapping");
 
 		if (Out.Options_.Progress)
-			Out.Options_.Progress("analyzer: resolution anchor scan complete");
+			Out.Options_.Progress("analyzer: resolution anchor mapping complete");
 
 		Out.State_ = std::move(State);
 		return Out;

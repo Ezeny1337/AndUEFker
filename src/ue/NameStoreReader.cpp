@@ -117,8 +117,11 @@ namespace anduefker::ue
         const int32_t entryIndex = index & ((1 << pool.blocksBit) - 1);
         const size_t blockSize = (size_t{1} << pool.blocksBit) * static_cast<size_t>(pool.entryStride);
         const size_t offset = static_cast<size_t>(entryIndex) * static_cast<size_t>(pool.entryStride);
+        const auto addresses = pool.Locate(root_);
+        if (!addresses)
+            return std::nullopt;
         size_t usedBytes = blockSize;
-        if (pool.maxChunkIndexOffset >= 0)
+        if (pool.HasPublicationBoundary())
         {
             const uint64_t generation = memory_.AddressSpaceGeneration();
             if (generation != boundaryGeneration_)
@@ -126,21 +129,18 @@ namespace anduefker::ue
                 currentBlock_.reset();
                 boundaryGeneration_ = generation;
             }
-            // The pool appends names. Reuse a published boundary until a newer name requires extending it.
+            // 该名称池仅以追加方式新增名称
+            // 在出现需要扩展边界的新名称之前，应复用 published 内存边界
             if (!currentBlock_ || static_cast<uint32_t>(blockIndex) > *currentBlock_ ||
                 (static_cast<uint32_t>(blockIndex) == *currentBlock_ && offset >= byteCursor_))
             {
-                const auto currentAddress = AddOffset(root_, static_cast<uintptr_t>(pool.maxChunkIndexOffset));
                 uint32_t current = 0;
                 uint32_t cursor = static_cast<uint32_t>(blockSize);
-                if (!currentAddress || !memory_.ReadFreshBytes(*currentAddress, &current, sizeof(current)).Ok() || current >= 8192)
+                if (!memory_.ReadFreshBytes(addresses->currentBlock, &current, sizeof(current)).Ok() || current >= 8192)
                     return std::nullopt;
-                if (pool.byteCursorOffset >= 0)
-                {
-                    const auto cursorAddress = AddOffset(root_, static_cast<uintptr_t>(pool.byteCursorOffset));
-                    if (!cursorAddress || !memory_.ReadFreshBytes(*cursorAddress, &cursor, sizeof(cursor)).Ok() || cursor > blockSize)
-                        return std::nullopt;
-                }
+                if (!memory_.ReadFreshBytes(addresses->byteCursor, &cursor, sizeof(cursor)).Ok() || cursor > blockSize ||
+                    cursor % static_cast<uint32_t>(pool.entryStride) != 0)
+                    return std::nullopt;
                 currentBlock_ = current;
                 byteCursor_ = cursor;
             }
@@ -151,10 +151,7 @@ namespace anduefker::ue
         }
         if (offset >= usedBytes || usedBytes - offset < static_cast<size_t>(pool.entryStringOffset))
             return std::nullopt;
-        const auto blocksAddress = AddOffset(root_, static_cast<uintptr_t>(pool.blocksOffset));
-        if (!blocksAddress)
-            return std::nullopt;
-        const auto blockSlot = AddScaled(*blocksAddress, blockIndex, static_cast<int32_t>(sizeof(uintptr_t)));
+        const auto blockSlot = AddScaled(addresses->blocks, blockIndex, static_cast<int32_t>(sizeof(uintptr_t)));
         if (!blockSlot)
             return std::nullopt;
         const auto rawBlock = ReadPointer(*blockSlot);

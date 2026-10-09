@@ -15,6 +15,7 @@ namespace
         std::fprintf(stderr, "  -o, --output <dir>        Output directory for generated SDK\n");
         std::fprintf(stderr, "  -p, --package <name>      Target package name (e.g., com.example.app)\n");
         std::fprintf(stderr, "\nOptional arguments:\n");
+        std::fprintf(stderr, "  --detailed-diagnostics    Include detailed candidates in the runtime log\n");
         std::fprintf(stderr, "  -h, --help                Show this help message\n");
         std::fprintf(stderr, "\nExample:\n");
         std::fprintf(stderr, "  %s -o ./output -p com.YS.Nicecity\n", program);
@@ -49,6 +50,12 @@ try
             }
             config.outputRoot = argv[index];
             hasOutput = true;
+            continue;
+        }
+
+        if (arg == "--detailed-diagnostics")
+        {
+            config.detailedDiagnostics = true;
             continue;
         }
 

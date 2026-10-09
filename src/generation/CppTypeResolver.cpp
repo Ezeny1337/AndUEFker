@@ -104,8 +104,8 @@ namespace anduefker::generation
     CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection)
     {
         CppSymbols result;
-        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TArray", "TSet", "TMap"};
-        // 所有声明和引用共用同一个符号表；重名后缀不依赖进程地址。
+        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TArray", "TSet", "TMap", "TEnumStorage"};
+        // 所有声明和引用共用同一个符号表；重名后缀不依赖进程地址
         for (const auto &type : reflection.types)
             result.types.emplace(type.address, CppTypeInfo{UniqueName(used, SanitizeIdentifier(type.name, "Type_")), type.size});
         for (const auto &enumeration : reflection.enums)
@@ -160,13 +160,19 @@ namespace anduefker::generation
         }
     }
 
-    std::string PropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
-                             int32_t pointerWidth, int32_t nameSize, size_t depth)
+    CppPropertyType ResolvePropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
+                                        int32_t pointerWidth, int32_t nameSize, size_t depth)
     {
-        if (!reference.detailsResolved || reference.elementSize <= 0 || depth >= 32)
-            return {};
+        if (!reference.detailsResolved)
+            return {{}, "unresolved-type-details"};
+        if (reference.elementSize <= 0)
+            return {{}, "invalid-element-size"};
+        if (depth >= 32)
+            return {{}, "type-depth-limit"};
         const auto sized = [&](const std::string &name, int32_t size)
-        { return reference.elementSize == size ? name : std::string{}; };
+        {
+            return reference.elementSize == size ? CppPropertyType{name, {}} : CppPropertyType{{}, "size-mismatch:expected=" + std::to_string(size) + ":observed=" + std::to_string(reference.elementSize)};
+        };
         switch (reference.kind)
         {
         case PropertyKind::Int8:
@@ -198,41 +204,87 @@ namespace anduefker::generation
         case PropertyKind::Class:
             if (const auto found = symbols.types.find(reference.referencedObject); found != symbols.types.end())
                 return sized(found->second.name + "*", pointerWidth);
-            break;
+            return {{}, "missing-type-symbol"};
         case PropertyKind::Struct:
-            if (const auto found = symbols.types.find(reference.referencedObject); found != symbols.types.end() && found->second.size > 0)
+            if (const auto found = symbols.types.find(reference.referencedObject); found != symbols.types.end())
+            {
+                if (found->second.size <= 0)
+                    return {{}, "invalid-referenced-type-size"};
                 return sized(found->second.name, found->second.size);
-            break;
+            }
+            return {{}, "missing-type-symbol"};
         case PropertyKind::Enum:
             if (const auto found = symbols.enums.find(reference.secondaryObject); found != symbols.enums.end())
-                return sized(found->second.name, found->second.size);
-            break;
+            {
+                if (!reference.inner || reference.inner->elementSize != reference.elementSize)
+                    return {{}, "invalid-enum-storage"};
+                EnumUnderlyingType storage = EnumUnderlyingType::Unknown;
+                switch (reference.inner->kind)
+                {
+                case PropertyKind::Int8:
+                    storage = EnumUnderlyingType::Int8;
+                    break;
+                case PropertyKind::Byte:
+                    storage = EnumUnderlyingType::UInt8;
+                    break;
+                case PropertyKind::Int16:
+                    storage = EnumUnderlyingType::Int16;
+                    break;
+                case PropertyKind::UInt16:
+                    storage = EnumUnderlyingType::UInt16;
+                    break;
+                case PropertyKind::Int32:
+                    storage = EnumUnderlyingType::Int32;
+                    break;
+                case PropertyKind::UInt32:
+                    storage = EnumUnderlyingType::UInt32;
+                    break;
+                case PropertyKind::Int64:
+                    storage = EnumUnderlyingType::Int64;
+                    break;
+                case PropertyKind::UInt64:
+                    storage = EnumUnderlyingType::UInt64;
+                    break;
+                default:
+                    return {{}, "invalid-enum-storage"};
+                }
+                const auto inner = ResolvePropertyType(*reference.inner, symbols, pointerWidth, nameSize, depth + 1);
+                if (inner.name.empty())
+                    return {{}, "inner:" + inner.failureReason};
+                if (storage == found->second.underlyingType && found->second.size == reference.elementSize)
+                    return {found->second.name, {}};
+                return {"TEnumStorage<" + found->second.name + ", " + inner.name + ">", {}};
+            }
+            return {{}, "missing-enum-symbol"};
         case PropertyKind::Interface:
             if (symbols.types.contains(reference.referencedObject))
                 return sized("FScriptInterface", pointerWidth * 2);
-            break;
+            return {{}, "missing-type-symbol"};
         case PropertyKind::Array:
         case PropertyKind::Set:
             if (reference.inner)
             {
-                const auto inner = PropertyType(*reference.inner, symbols, pointerWidth, nameSize, depth + 1);
-                if (!inner.empty())
-                    return reference.kind == PropertyKind::Array ? sized("TArray<" + inner + ">", pointerWidth + 8)
-                                                                 : "TSet<" + inner + ", " + std::to_string(reference.elementSize) + ">";
+                const auto inner = ResolvePropertyType(*reference.inner, symbols, pointerWidth, nameSize, depth + 1);
+                if (inner.name.empty())
+                    return {{}, "inner:" + inner.failureReason};
+                return reference.kind == PropertyKind::Array ? sized("TArray<" + inner.name + ">", pointerWidth + 8)
+                                                             : CppPropertyType{"TSet<" + inner.name + ", " + std::to_string(reference.elementSize) + ">", {}};
             }
-            break;
+            return {{}, "missing-inner-type"};
         case PropertyKind::Map:
             if (reference.key && reference.value)
             {
-                const auto key = PropertyType(*reference.key, symbols, pointerWidth, nameSize, depth + 1);
-                const auto value = PropertyType(*reference.value, symbols, pointerWidth, nameSize, depth + 1);
-                if (!key.empty() && !value.empty())
-                    return "TMap<" + key + ", " + value + ", " + std::to_string(reference.elementSize) + ">";
+                const auto key = ResolvePropertyType(*reference.key, symbols, pointerWidth, nameSize, depth + 1);
+                if (key.name.empty())
+                    return {{}, "key:" + key.failureReason};
+                const auto value = ResolvePropertyType(*reference.value, symbols, pointerWidth, nameSize, depth + 1);
+                if (value.name.empty())
+                    return {{}, "value:" + value.failureReason};
+                return {"TMap<" + key.name + ", " + value.name + ", " + std::to_string(reference.elementSize) + ">", {}};
             }
-            break;
+            return {{}, "missing-key-or-value-type"};
         default:
-            break;
+            return {{}, "unsupported-property-kind"};
         }
-        return {};
     }
 } // namespace anduefker::generation

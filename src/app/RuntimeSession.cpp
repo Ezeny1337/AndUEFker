@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
+#include "anduefker/memory/ReadDiagnostics.hpp"
 #include "anduefker/ue/SchemaCatalog.hpp"
 
 namespace anduefker::app
@@ -19,7 +20,6 @@ namespace anduefker::app
     using ::anduefker::binding::LocatedAddress;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::memory::ReadStats;
-    using ::anduefker::ue::CreateSchemaProbeBootstrap;
     using ::anduefker::ue::EngineProfile;
     using ::anduefker::ue::SchemaCatalog;
     using ::anduefker::ue::SchemaLayoutVariantName;
@@ -224,15 +224,7 @@ namespace anduefker::app
             const auto stats = memory_->Stats();
             Note("stage=" + std::string(stage) + " elapsed_ms=" +
                  std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - stageStart).count()) +
-                 " operations=" + std::to_string(stats.operations - stageStats.operations) +
-                 " requested_bytes=" + std::to_string(stats.requestedBytes - stageStats.requestedBytes) +
-                 " transferred_bytes=" + std::to_string(stats.transferredBytes - stageStats.transferredBytes) +
-                 " cache_hits=" + std::to_string(stats.cacheHits - stageStats.cacheHits) +
-                 " cache_misses=" + std::to_string(stats.cacheMisses - stageStats.cacheMisses) +
-                 " backend_operations=" + std::to_string(stats.backendOperations - stageStats.backendOperations) +
-                 " backend_requested_bytes=" + std::to_string(stats.backendRequestedBytes - stageStats.backendRequestedBytes) +
-                 " backend_transferred_bytes=" + std::to_string(stats.backendTransferredBytes - stageStats.backendTransferredBytes) +
-                 " failures=" + std::to_string(stats.failures - stageStats.failures));
+                 ::anduefker::memory::DescribeReadStats(stats, stageStats));
             stageStart = now;
             stageStats = stats;
         };
@@ -269,10 +261,23 @@ namespace anduefker::app
 
         finishStage("module-discovery");
         GlobalLocator locator(*memory_, context_.Module());
-        const BindingCandidates candidates = locator.Locate(
+        BindingCandidates candidates = locator.LocateSymbols(
             {"GUObjectArray", "GObjects", "ObjObjects"},
             {"GNameBlocksDebug", "GFNameTableForDebuggerVisualizers_MT", "NamePoolData"}, progress);
-        finishStage("global-locator");
+        finishStage("symbol-locator");
+        BindingBuilder builder(*memory_);
+        auto binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), progress, config_.detailedDiagnostics);
+        finishStage("symbol-binding");
+        if (!binding)
+        {
+            Note("locator_path source=analyzer reason=symbol-binding-incomplete");
+            candidates = locator.LocateAnalysis(candidates, progress);
+            finishStage("analyzer-locator");
+            binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), progress, config_.detailedDiagnostics);
+            finishStage("analyzer-binding");
+        }
+        else
+            Note("locator_path source=symbols validation=complete");
         Note(RuntimeLogLevel::Debug, "Object candidates=" + std::to_string(candidates.objectRoots.size()));
         Note(RuntimeLogLevel::Debug, "Name candidates=" + std::to_string(candidates.nameRoots.size()));
         for (size_t index = 0; index < candidates.objectRoots.size(); ++index)
@@ -290,12 +295,9 @@ namespace anduefker::app
                                              " confidence=" + std::to_string(candidate.confidence) + " source=" + candidate.source);
         }
 
-        BindingBuilder builder(*memory_);
-        const auto binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), progress);
-        finishStage("binding");
         if (!binding)
         {
-            failures_.push_back("runtime binding failed; static symbol candidates were insufficient");
+            failures_.push_back("runtime binding failed after symbol and analyzer validation");
             Note(RuntimeLogLevel::Error, failures_.back());
             return RuntimeSessionStatus::Failed;
         }
@@ -310,16 +312,6 @@ namespace anduefker::app
         SchemaSelectionResult schemaSelection;
         const std::vector<EngineProfile> profiles = SchemaCatalog::Profiles();
         Note(RuntimeLogLevel::Info, "Detecting Unreal Engine schema profile...");
-        auto schemaBootstrap = CreateSchemaProbeBootstrap(*memory_, context_.Binding());
-        if (!schemaBootstrap->IsValid())
-        {
-            const std::string failure = schemaBootstrap->failure.empty()
-                                            ? "schema bootstrap is unavailable"
-                                            : schemaBootstrap->failure;
-            failures_.push_back(failure);
-            Note(RuntimeLogLevel::Error, failure);
-            return RuntimeSessionStatus::BindingReady;
-        }
         std::vector<EngineSchema> candidateSchemas;
         auto resolveProfiles = [&]()
         {
@@ -327,6 +319,8 @@ namespace anduefker::app
             candidateSchemas.clear();
             candidateSchemas.reserve(profiles.size());
             schemaSelection.candidates.reserve(profiles.size());
+            const auto probeSession = ::anduefker::ue::CreateSchemaProbeSession(
+                *memory_, context_.Binding(), {}, context_.Module().base, context_.Module().end);
             for (const EngineProfile &profile : profiles)
             {
                 Note("schema: probing profile=" + profile.id);
@@ -334,7 +328,7 @@ namespace anduefker::app
                 const auto profileStart = std::chrono::steady_clock::now();
                 const ReadStats profileStatsBefore = memory_->Stats();
                 SchemaResolver resolver(*memory_, context_.Binding(), profile, {},
-                                        context_.Module().base, context_.Module().end, schemaBootstrap);
+                                        context_.Module().base, context_.Module().end, probeSession);
                 SchemaCandidateSummary candidateReport = resolver.Resolve(candidateSchema);
                 const ReadStats profileStatsAfter = memory_->Stats();
                 Note(RuntimeLogLevel::Debug, "schema_profile id=" + profile.id +
@@ -342,15 +336,8 @@ namespace anduefker::app
                                                  std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                                     std::chrono::steady_clock::now() - profileStart)
                                                                     .count()) +
-                                                 " operations=" + std::to_string(profileStatsAfter.operations - profileStatsBefore.operations) +
-                                                 " requested_bytes=" + std::to_string(profileStatsAfter.requestedBytes - profileStatsBefore.requestedBytes) +
-                                                 " transferred_bytes=" + std::to_string(profileStatsAfter.transferredBytes - profileStatsBefore.transferredBytes) +
-                                                 " cache_hits=" + std::to_string(profileStatsAfter.cacheHits - profileStatsBefore.cacheHits) +
-                                                 " cache_misses=" + std::to_string(profileStatsAfter.cacheMisses - profileStatsBefore.cacheMisses) +
-                                                 " backend_operations=" + std::to_string(profileStatsAfter.backendOperations - profileStatsBefore.backendOperations) +
-                                                 " backend_requested_bytes=" + std::to_string(profileStatsAfter.backendRequestedBytes - profileStatsBefore.backendRequestedBytes) +
-                                                 " backend_transferred_bytes=" + std::to_string(profileStatsAfter.backendTransferredBytes - profileStatsBefore.backendTransferredBytes) +
-                                                 " failures=" + std::to_string(profileStatsAfter.failures - profileStatsBefore.failures));
+                                                 " probe_limited=" + std::to_string(candidateReport.probeLimited) +
+                                                 ::anduefker::memory::DescribeReadStats(profileStatsAfter, profileStatsBefore));
                 const std::string reason = candidateReport.failures.empty()
                                                ? (candidateReport.evidence.empty() ? "none" : candidateReport.evidence.front())
                                                : candidateReport.failures.front();
@@ -362,19 +349,28 @@ namespace anduefker::app
                                                  " layout_score=" + std::to_string(candidateReport.layoutScore) +
                                                  " version_evidence_score=" + std::to_string(candidateReport.versionEvidenceScore) +
                                                  " reason=" + reason);
-                for (const std::string &evidence : candidateReport.evidence)
+                for (const auto &use : candidateReport.stages)
                 {
-                    const bool important = evidence.find("resolved ") != std::string::npos ||
-                                           evidence.find("failed") != std::string::npos ||
-                                           evidence.find("rejected") != std::string::npos ||
-                                           evidence.find("candidate") != std::string::npos ||
-                                           evidence.find("sample eligibility") != std::string::npos ||
-                                           evidence.find("parameter chain") != std::string::npos ||
-                                           evidence.find("case-preserving") != std::string::npos ||
-                                           evidence.find("property subtype") != std::string::npos ||
-                                           evidence.find("delegate subtype") != std::string::npos;
-                    if (important)
-                        Note(RuntimeLogLevel::Debug, "schema_evidence id=" + profile.id + " " + evidence);
+                    const auto &stage = *use.result;
+                    const std::string prefix = "schema_stage profile=" + profile.id + " id=" +
+                                               ::anduefker::ue::SchemaProbeStageName(stage.stage);
+                    Note(use.reused ? RuntimeLogLevel::Debug : RuntimeLogLevel::Info, prefix + " source_profile=" + stage.sourceProfile +
+                                                                                          " reused=" + std::to_string(use.reused) + " resolved=" + std::to_string(stage.resolved) +
+                                                                                          " evidence_complete=" + std::to_string(stage.evidenceComplete) +
+                                                                                          " sample_truncated=" + std::to_string(stage.sampleTruncated) +
+                                                                                          " budget_exhausted=" + std::to_string(stage.budgetExhausted) +
+                                                                                          " read_failed=" + std::to_string(stage.readFailed) +
+                                                                                          " rejected_candidates=" + std::to_string(stage.rejectedCandidates) +
+                                                                                          " ambiguous=" + std::to_string(stage.ambiguous) + " search_complete=" + std::to_string(stage.searchComplete) +
+                                                                                          " elapsed_ms=" + std::to_string(use.reused ? 0 : stage.elapsedMs) +
+                                                                                          (use.reused ? std::string{} : ::anduefker::memory::DescribeReadStats(stage.readsAfter, stage.readsBefore)) +
+                                                                                          (stage.selectedLayout.empty() ? std::string{} : " selected_layout={" + stage.selectedLayout + "}"));
+                    if (config_.detailedDiagnostics && !use.reused)
+                        for (const auto &evidence : stage.evidence)
+                            Note(RuntimeLogLevel::Debug, prefix + " evidence=" + evidence);
+                    if (!use.reused)
+                        for (const auto &failure : stage.failures)
+                            Note(RuntimeLogLevel::Debug, prefix + " failure=" + failure);
                 }
                 for (const auto &evidence : candidateReport.versionEvidence)
                     Note(RuntimeLogLevel::Debug, "schema_version_evidence id=" + profile.id +
@@ -400,14 +396,6 @@ namespace anduefker::app
             if (!memory_->RefreshAddressSpace())
             {
                 Note(RuntimeLogLevel::Error, "remote address-space refresh failed after schema probe invalidation");
-                break;
-            }
-            schemaBootstrap = CreateSchemaProbeBootstrap(*memory_, context_.Binding());
-            if (!schemaBootstrap->IsValid())
-            {
-                Note(RuntimeLogLevel::Error, schemaBootstrap->failure.empty()
-                                                 ? "schema bootstrap could not be recreated after address-space refresh"
-                                                 : schemaBootstrap->failure);
                 break;
             }
         }
@@ -484,15 +472,7 @@ namespace anduefker::app
                 Note(RuntimeLogLevel::Error, schemaReport.failures[index]);
         }
         const ReadStats &memoryStats = memory_->Stats();
-        Note(RuntimeLogLevel::Debug, "memory stats operations=" + std::to_string(memoryStats.operations) +
-                                         " requested_bytes=" + std::to_string(memoryStats.requestedBytes) +
-                                         " transferred_bytes=" + std::to_string(memoryStats.transferredBytes) +
-                                         " cache_hits=" + std::to_string(memoryStats.cacheHits) +
-                                         " cache_misses=" + std::to_string(memoryStats.cacheMisses) +
-                                         " backend_operations=" + std::to_string(memoryStats.backendOperations) +
-                                         " backend_requested_bytes=" + std::to_string(memoryStats.backendRequestedBytes) +
-                                         " backend_transferred_bytes=" + std::to_string(memoryStats.backendTransferredBytes) +
-                                         " failures=" + std::to_string(memoryStats.failures));
+        Note(RuntimeLogLevel::Debug, "memory stats" + ::anduefker::memory::DescribeReadStats(memoryStats));
         if (!schemaAccepted)
         {
             failures_.insert(failures_.end(), schemaReport.failures.begin(), schemaReport.failures.end());
@@ -531,15 +511,8 @@ namespace anduefker::app
         reflection_ = reader.Read();
         finishStage("reflection");
         const ReadStats afterReflection = memory_->Stats();
-        Note(RuntimeLogLevel::Debug, "memory stats stage=reflection operations=" + std::to_string(afterReflection.operations - beforeReflection.operations) +
-                                         " requested_bytes=" + std::to_string(afterReflection.requestedBytes - beforeReflection.requestedBytes) +
-                                         " transferred_bytes=" + std::to_string(afterReflection.transferredBytes - beforeReflection.transferredBytes) +
-                                         " cache_hits=" + std::to_string(afterReflection.cacheHits - beforeReflection.cacheHits) +
-                                         " cache_misses=" + std::to_string(afterReflection.cacheMisses - beforeReflection.cacheMisses) +
-                                         " backend_operations=" + std::to_string(afterReflection.backendOperations - beforeReflection.backendOperations) +
-                                         " backend_requested_bytes=" + std::to_string(afterReflection.backendRequestedBytes - beforeReflection.backendRequestedBytes) +
-                                         " backend_transferred_bytes=" + std::to_string(afterReflection.backendTransferredBytes - beforeReflection.backendTransferredBytes) +
-                                         " failures=" + std::to_string(afterReflection.failures - beforeReflection.failures));
+        Note(RuntimeLogLevel::Debug, "memory stats stage=reflection" +
+                                         ::anduefker::memory::DescribeReadStats(afterReflection, beforeReflection));
         Note(RuntimeLogLevel::Info, "Capture observations_stable=" + std::to_string(reflection_.capture.observationsStable) +
                                         " attempts=" + std::to_string(reflection_.capture.attempts) +
                                         " observed_ranges=" + std::to_string(reflection_.capture.observedRanges) +

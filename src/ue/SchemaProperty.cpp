@@ -199,11 +199,12 @@ namespace anduefker::ue::schema_probe
                                       nearSummary);
             return false;
         }
-        // 相同源码布局优先级下，等价语义证据无法唯一确定偏移。
+        // 相同源码布局优先级下，等价语义证据无法唯一确定偏移
         if (tailCandidates.size() > 1 &&
             tailCandidates[0].header.sourceLayout == tailCandidates[1].header.sourceLayout &&
             tailCandidates[0].sourceFlagsLayout == tailCandidates[1].sourceFlagsLayout)
         {
+            report.ambiguous = true;
             report.failures.push_back("property layout candidates are ambiguous; candidates=" +
                                       std::to_string(tailCandidates.size()) + " first_flags=" +
                                       std::to_string(tailCandidates[0].propertyFlags) + " first_offset=" +

@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 #include "../../Architecture/IArchDecoder.h"
 #include "../../Memory/IMemory.h"
@@ -36,18 +37,29 @@ namespace anduefker::analyzer
 		const IMemory *Memory, const ModuleInfo &Module, const GlobalAccessHarvester &Harvester,
 		std::span<const Anchor *const> Anchors)
 	{
+		LiteralScanBatch Batch;
+		AnchorSites Literals;
+		QueueAnchorLiterals(Batch, Anchors, Literals);
+		Batch.Run(Memory, Module);
+		return MapAnchorSites(Literals, Harvester);
+	}
+
+	void AnchoredResolution::QueueAnchorLiterals(LiteralScanBatch &Batch, std::span<const Anchor *const> Anchors,
+												 AnchorSites &Literals)
+	{
 		AnchorSites Result;
 		for (const Anchor *A : Anchors)
 			if (A && A->Text && *A->Text)
 				Result.try_emplace({A->Text, A->Match});
 		LiteralScanner Scanner;
-		std::vector<std::vector<uint64_t> *> Owners;
+		std::vector<std::pair<std::string, EAnchorMatch>> Owners;
 		for (auto &[Key, Sites] : Result)
 		{
 			const std::string &Text = Key.first;
 			const EAnchorMatch Match = Key.second;
 			const size_t Owner = Owners.size();
-			Owners.push_back(&Sites);
+			(void)Sites;
+			Owners.push_back(Key);
 			const auto add = [&](std::vector<uint8_t> Bytes, int Encoding)
 			{
 				if (Match == EAnchorMatch::Terminated)
@@ -58,15 +70,25 @@ namespace anduefker::analyzer
 			add(LiteralScanner::Widen<uint16_t>(Text.c_str()), 2);
 			add(LiteralScanner::Widen<uint32_t>(Text.c_str()), 4);
 		}
-		for (const auto &Hit : Scanner.ScanPerSegment(Memory, Module))
+		Batch.Add(std::move(Scanner), true,
+				  [&Literals, Result = std::move(Result), Owners = std::move(Owners)](const LiteralScanner &Scanner, const std::vector<LiteralScanner::Hit> &Hits) mutable
+				  {
+					  for (const auto &Hit : Hits)
+						  Result.at(Owners[Scanner.GetNeedles()[Hit.NeedleIndex].OwnerIndex]).push_back(Hit.Address);
+					  Literals = std::move(Result);
+				  });
+	}
+
+	AnchoredResolution::AnchorSites AnchoredResolution::MapAnchorSites(const AnchorSites &Literals,
+																	   const GlobalAccessHarvester &Harvester)
+	{
+		AnchorSites Result;
+		for (const auto &[Key, Addresses] : Literals)
 		{
-			auto &Sites = *Owners[Scanner.GetNeedles()[Hit.NeedleIndex].OwnerIndex];
-			if (const AccessInfo *Info = Harvester.Find(Hit.Address))
-				Sites.insert(Sites.end(), Info->Sites.begin(), Info->Sites.end());
-		}
-		for (auto &[Key, Sites] : Result)
-		{
-			(void)Key;
+			auto &Sites = Result[Key];
+			for (const auto Address : Addresses)
+				if (const AccessInfo *Info = Harvester.Find(Address))
+					Sites.insert(Sites.end(), Info->Sites.begin(), Info->Sites.end());
 			std::sort(Sites.begin(), Sites.end());
 			Sites.erase(std::unique(Sites.begin(), Sites.end()), Sites.end());
 		}
