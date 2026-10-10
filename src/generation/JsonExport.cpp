@@ -92,7 +92,8 @@ namespace anduefker::generation
                    << ",\"kind\":\"" << KindName(reference.kind) << "\",\"class\":\"" << EscapeJson(reference.reflectedClass)
                    << "\",\"element_size\":" << reference.elementSize << ",\"referenced_object\":\"" << Hex(reference.referencedObject)
                    << "\",\"secondary_object\":\"" << Hex(reference.secondaryObject) << "\",\"details_resolved\":"
-                   << (reference.detailsResolved ? "true" : "false");
+                   << (reference.detailsResolved ? "true" : "false")
+                   << ",\"node_details_resolved\":" << (reference.nodeDetailsResolved ? "true" : "false");
             const auto child = [&](const char *name, const std::shared_ptr<ir::TypeReferenceIR> &value)
             {
                 if (value)
@@ -154,7 +155,7 @@ namespace anduefker::generation
         }
 
         void Property(std::ostream &stream, const ir::PropertyIR &property,
-                      const ir::LayoutAnalysisIR *analysis = nullptr)
+                      const ir::LayoutAnalysisIR *analysis = nullptr, const FieldDescriptions *fields = nullptr)
         {
             stream << "{\"address\":\"" << Hex(property.address) << "\",\"name\":\"" << EscapeJson(property.name)
                    << "\",\"class\":\"" << EscapeJson(property.reflectedClass) << "\",\"offset\":" << property.offset
@@ -175,6 +176,17 @@ namespace anduefker::generation
             stream << ",\"type\":";
             size_t remaining = 256;
             TypeReference(stream, property.type, 0, remaining);
+            if (fields)
+            {
+                const auto found = fields->find(property.address);
+                if (found != fields->end())
+                {
+                    const auto &field = found->second;
+                    stream << ",\"generation\":{\"type_id\":" << field.typeId
+                           << ",\"valid_bounds\":" << (field.validBounds ? "true" : "false")
+                           << ",\"layout\":\"" << ir::LayoutRepresentationName(field.layout) << "\"}";
+                }
+            }
             if (property.type.kind == ir::PropertyKind::Bool)
                 stream << ",\"bool_layout\":{\"field_size\":" << static_cast<unsigned int>(property.boolean.fieldSize)
                        << ",\"byte_offset\":" << static_cast<unsigned int>(property.boolean.byteOffset)
@@ -185,7 +197,7 @@ namespace anduefker::generation
             stream << '}';
         }
 
-        void Function(std::ostream &stream, const ir::FunctionIR &function)
+        void Function(std::ostream &stream, const ir::FunctionIR &function, const FieldDescriptions *fields)
         {
             stream << "{\"address\":\"" << Hex(function.address) << "\",\"name\":\"" << EscapeJson(function.name)
                    << "\",\"full_name\":\"" << EscapeJson(function.fullName)
@@ -224,14 +236,14 @@ namespace anduefker::generation
             {
                 if (parameter != 0)
                     stream << ',';
-                Property(stream, function.parameters[parameter], &function.layout);
+                Property(stream, function.parameters[parameter], &function.layout, fields);
             }
             stream << "],\"locals\":[";
             for (size_t local = 0; local < function.locals.size(); ++local)
             {
                 if (local != 0)
                     stream << ',';
-                Property(stream, function.locals[local], &function.layout);
+                Property(stream, function.locals[local], &function.layout, fields);
             }
             stream << "],\"layout_analysis\":";
             LayoutAnalysis(stream, function.layout);
@@ -474,7 +486,8 @@ namespace anduefker::generation
     {
         const size_t exported = static_cast<size_t>(std::count_if(
             reflection.delegateSignatures.begin(), reflection.delegateSignatures.end(),
-            [](const auto &signature) { return signature.exported; }));
+            [](const auto &signature)
+            { return signature.exported; }));
         stream << "{\"referenced\":" << reflection.delegateSignatures.size()
                << ",\"exported\":" << exported << ",\"missing_definitions\":"
                << (reflection.delegateSignatures.size() - exported) << ",\"counts_by_definition_status\":{";
@@ -519,7 +532,7 @@ namespace anduefker::generation
 
     void WriteContainerStorageJson(std::ostream &stream, const ir::ReflectionIR &reflection)
     {
-        stream << "{\"abi_selected\":false,\"max_observations\":512,\"max_owners_per_shape\":2,\"candidates_by_class\":{";
+        stream << "{\"abi_selected\":false,\"max_observations\":512,\"max_owners_per_shape\":2,\"max_candidates\":8192,\"priority\":\"representation-gaps-first\",\"shape_checks\":\"necessary-not-sufficient\",\"candidates_by_class\":{";
         bool first = true;
         for (const auto &[kind, count] : reflection.containerStorageCandidates)
         {
@@ -554,7 +567,8 @@ namespace anduefker::generation
                    << "\",\"class\":\"" << EscapeJson(observation.propertyClass)
                    << "\",\"member\":\"" << EscapeJson(observation.member)
                    << "\",\"basis\":\"" << EscapeJson(observation.basis)
-                   << "\",\"offset\":" << observation.offset << ",\"address\":\"" << Hex(observation.address)
+                   << "\",\"offset\":" << observation.offset << ",\"reference_offset\":" << observation.referenceOffset
+                   << ",\"property_data_end\":" << observation.propertyDataEnd << ",\"address\":\"" << Hex(observation.address)
                    << "\",\"storage_size\":" << observation.storageSize << ",\"inner_size\":" << observation.innerSize
                    << ",\"inner_class\":\"" << EscapeJson(observation.innerClass)
                    << "\",\"value_size\":" << observation.valueSize << ",\"value_class\":\"" << EscapeJson(observation.valueClass) << '"'
@@ -562,6 +576,17 @@ namespace anduefker::generation
                    << ",\"read_error\":" << observation.readError << ",\"requested\":" << observation.requested
                    << ",\"transferred\":" << observation.transferred
                    << ",\"status\":\"" << EscapeJson(observation.status) << "\",\"bytes\":\"" << bytes.str() << '"';
+            stream << ",\"flag_candidates\":[";
+            for (size_t candidate = 0; candidate < observation.flagCandidates.size(); ++candidate)
+            {
+                if (candidate != 0)
+                    stream << ',';
+                const auto &flag = observation.flagCandidates[candidate];
+                stream << "{\"offset\":" << flag.offset << ",\"width\":" << static_cast<unsigned int>(flag.width)
+                       << ",\"raw\":" << flag.raw << ",\"known_value\":" << (flag.knownValue ? "true" : "false")
+                       << ",\"basis\":\"" << EscapeJson(flag.basis) << "\",\"selected\":false}";
+            }
+            stream << ']';
             if (observation.sparseShapeConsistent)
                 stream << ",\"sparse_shape_consistent\":" << (*observation.sparseShapeConsistent ? "true" : "false");
             if (observation.compactShapeConsistent)
@@ -571,9 +596,9 @@ namespace anduefker::generation
         stream << "]}";
     }
 
-    void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
+    void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity, const FieldDescriptions *fields)
     {
-        stream << "{\n\"schema_version\":6,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":7,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"}";
@@ -588,7 +613,26 @@ namespace anduefker::generation
         WriteCaptureJson(stream, reflection.capture);
         stream << ",\n\"diagnostics\":";
         Strings(stream, reflection.diagnostics);
-        stream << ",\n\"types\":[\n";
+        stream << ",\n\"generation_types\":[";
+        std::map<size_t, const CppPropertyType *> generationTypes;
+        if (fields)
+            for (const auto &[address, field] : *fields)
+            {
+                (void)address;
+                generationTypes.try_emplace(field.typeId, &field.type);
+            }
+        bool firstGenerationType = true;
+        for (const auto &[id, type] : generationTypes)
+        {
+            if (!firstGenerationType)
+                stream << ',';
+            firstGenerationType = false;
+            stream << "{\"id\":" << id << ",\"semantic_type\":\"" << EscapeJson(type->semanticName)
+                   << "\",\"cpp_type\":\"" << EscapeJson(type->name)
+                   << "\",\"storage\":\"" << PropertyStorageKindName(type->storage) << "\",\"reason\":\"" << EscapeJson(type->failureReason)
+                   << "\",\"semantics_resolved\":" << (type->semanticsResolved ? "true" : "false") << '}';
+        }
+        stream << "],\n\"types\":[\n";
         for (size_t index = 0; index < reflection.types.size(); ++index)
         {
             if (index != 0)
@@ -602,7 +646,7 @@ namespace anduefker::generation
             {
                 if (item != 0)
                     stream << ',';
-                Property(stream, type.properties[item], &type.layout);
+                Property(stream, type.properties[item], &type.layout, fields);
             }
             stream << "],\"layout_analysis\":";
             LayoutAnalysis(stream, type.layout);
@@ -625,7 +669,7 @@ namespace anduefker::generation
             if (!firstFunction)
                 stream << ",\n";
             firstFunction = false;
-            Function(stream, function);
+            Function(stream, function, fields);
         }
         stream << "\n],\n\"enums\":[\n";
         for (size_t index = 0; index < reflection.enums.size(); ++index)

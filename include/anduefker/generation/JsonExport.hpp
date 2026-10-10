@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "anduefker/ir/ReflectionIR.hpp"
+#include "anduefker/generation/CppTypeResolver.hpp"
 #include "anduefker/ue/EngineSchema.hpp"
 
 namespace anduefker::generation
@@ -25,5 +26,6 @@ namespace anduefker::generation
     void WritePropertyDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection);
     void WriteDelegateDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection);
     void WriteContainerStorageJson(std::ostream &stream, const ir::ReflectionIR &reflection);
-    void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity);
+    void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity,
+                             const FieldDescriptions *fields = nullptr);
 } // namespace anduefker::generation

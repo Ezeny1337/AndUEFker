@@ -249,6 +249,7 @@ namespace anduefker::reflection
             return kind && *kind == expected;
         };
         bool semanticMatch = true;
+        bool enclosingContainer = false;
         switch (result.kind)
         {
         case PropertyKind::Object:
@@ -270,11 +271,13 @@ namespace anduefker::reflection
         case PropertyKind::Set:
         case PropertyKind::Optional:
             result.inner = nested(result.referencedObject);
+            enclosingContainer = true;
             semanticMatch = result.inner && result.inner->detailsResolved;
             break;
         case PropertyKind::Map:
             result.key = nested(result.referencedObject);
             result.value = nested(result.secondaryObject);
+            enclosingContainer = true;
             semanticMatch = result.key && result.value && result.key->detailsResolved && result.value->detailsResolved;
             break;
         case PropertyKind::Enum:
@@ -321,6 +324,9 @@ namespace anduefker::reflection
         default:
             break;
         }
+        result.nodeDetailsResolved = result.detailsResolved && (enclosingContainer
+                                                                    ? (result.kind == PropertyKind::Map ? result.key && result.value : result.inner != nullptr)
+                                                                    : semanticMatch);
         if (!semanticMatch)
         {
             property.diagnostics.push_back("property type semantics unresolved: address=" + std::to_string(metadata.address));
@@ -337,12 +343,21 @@ namespace anduefker::reflection
                 reason = "object-property-class-metadata-null";
             RecordPropertyDetail(metadata, property, reason);
         }
-        // A validated child header/owner is sufficient for a raw candidate window;
-        // unsupported child semantics must not hide the enclosing container evidence.
+        // 经过验证的子项标头/Owner 足以构成一个原始的候选窗口
+        // 不受支持的子项语义绝不能掩盖外围容器的证据
         if (metadata.elementSize > 0 &&
             (((result.kind == PropertyKind::Array || result.kind == PropertyKind::Set) && result.inner) ||
              (result.kind == PropertyKind::Map && result.key && result.value)))
-            ObserveContainerStorage(metadata, result);
+        {
+            if (observedContainers_.insert(metadata.address).second)
+            {
+                ++containerCandidates_[metadata.normalizedClassName];
+                if (pendingContainers_.size() < 8192)
+                    pendingContainers_.push_back({metadata, result});
+                else
+                    ++containerNotObserved_[metadata.normalizedClassName + ":candidate-queue-budget"];
+            }
+        }
         path.erase(metadata.address);
         return result;
     }
@@ -650,8 +665,8 @@ namespace anduefker::reflection
 
     void ReflectionReader::CloseDelegateSignatures(ReflectionIR &ir) const
     {
-        // Reading a signature can discover more signatures in its parameters. Drain a
-        // bounded worklist, not recursive function reads or a map-order-dependent scan.
+        // 读取一个签名可以在其参数中发现更多签名
+        // 应当处理并清空一个有界的待办工作列表，而不是进行递归的函数读取或依赖映射顺序的扫描
         while (nextSignature_ < pendingSignatures_.size())
         {
             FunctionIR *function = ReadFunction(pendingSignatures_[nextSignature_++], ir);
@@ -662,11 +677,47 @@ namespace anduefker::reflection
         }
     }
 
+    void ReflectionReader::CollectContainerStorage() const
+    {
+        const auto limitedRepresentation = [](const auto &self, const TypeReferenceIR &reference, size_t depth) -> bool
+        {
+            if (depth >= 32 || !reference.detailsResolved)
+                return true;
+            switch (reference.kind)
+            {
+            case PropertyKind::Text:
+            case PropertyKind::WeakObject:
+            case PropertyKind::LazyObject:
+            case PropertyKind::SoftObject:
+            case PropertyKind::SoftClass:
+            case PropertyKind::Delegate:
+            case PropertyKind::MulticastDelegate:
+            case PropertyKind::FieldPath:
+            case PropertyKind::Optional:
+                return true;
+            default:
+                return (reference.inner && self(self, *reference.inner, depth + 1)) ||
+                       (reference.key && self(self, *reference.key, depth + 1)) ||
+                       (reference.value && self(self, *reference.value, depth + 1));
+            }
+        };
+        const auto priority = [&](const ContainerCandidate &candidate)
+        {
+            return !candidate.reference.detailsResolved ? 0 : limitedRepresentation(limitedRepresentation, candidate.reference, 0) ? 1
+                                                                                                                                   : 2;
+        };
+        for (auto &candidate : pendingContainers_)
+            candidate.priority = priority(candidate);
+        // 结构表征缺口优先享有 budget，常规容器依然需要分配器证据
+        std::stable_sort(pendingContainers_.begin(), pendingContainers_.end(), [](const auto &left, const auto &right)
+                         { return left.priority < right.priority; });
+        for (const auto &candidate : pendingContainers_)
+            ObserveContainerStorage(candidate.metadata, candidate.reference);
+        pendingContainers_.clear();
+    }
+
     void ReflectionReader::ObserveContainerStorage(const PropertyMetadata &metadata, const TypeReferenceIR &reference) const
     {
-        if (!observedContainers_.insert(metadata.address).second)
-            return;
-        ++containerCandidates_[metadata.normalizedClassName];
         if (containerObservations_.size() >= 512)
         {
             ++containerNotObserved_[metadata.normalizedClassName + ":global-observation-budget"];
@@ -676,12 +727,13 @@ namespace anduefker::reflection
         const auto *value = reference.value.get();
         const std::string shape = metadata.normalizedClassName + ":" + std::to_string(metadata.elementSize) +
                                   ":" + (element ? element->reflectedClass : "none") +
-                                  ":" + std::to_string(element ? element->elementSize : 0) +
+                                  ":" + std::to_string(element ? element->elementSize : 0) + ":" + std::to_string(element ? element->arrayDim : 0) +
                                   ":" + (value ? value->reflectedClass : "none") +
-                                  ":" + std::to_string(value ? value->elementSize : 0);
+                                  ":" + std::to_string(value ? value->elementSize : 0) + ":" + std::to_string(value ? value->arrayDim : 0) +
+                                  ":" + std::to_string(reference.detailsResolved);
         auto &owners = containerSampleOwners_[shape];
-        // These are discovery observations, not selected ABI fields. Bound both
-        // shape diversity and owner samples; report every omitted observation.
+        // 这些是发现阶段的观测结果，而非选定的 ABI 字段
+        // 必须对形状多样性与 Owner 样本的数量进行边界限制，同时必须报告每一个被省略的观测项
         if (owners.size() >= 2 || owners.contains(metadata.ownerAddress))
         {
             ++containerNotObserved_[metadata.normalizedClassName + ":sample-budget-or-repeated-owner"];
@@ -697,17 +749,40 @@ namespace anduefker::reflection
         observation.innerClass = element ? element->reflectedClass : "";
         observation.valueClass = value ? value->reflectedClass : "";
         observation.storageSize = metadata.elementSize;
-        observation.innerSize = element ? element->elementSize : 0;
-        observation.valueSize = value ? value->elementSize : 0;
+        observation.propertyDataEnd = schema_.property.subtypeStart;
+        observation.referenceOffset = reference.kind == PropertyKind::Array ? schema_.propertySubtypes.arrayInner : reference.kind == PropertyKind::Map ? schema_.propertySubtypes.mapBase
+                                                                                                                                                        : schema_.propertySubtypes.setElement;
+        const auto childExtent = [](const TypeReferenceIR *child)
+        {
+            const int64_t size = child ? static_cast<int64_t>(child->elementSize) * child->arrayDim : 0;
+            return child && child->elementSize > 0 && child->arrayDim > 0 && size <= INT32_MAX ? static_cast<int32_t>(size) : 0;
+        };
+        observation.innerSize = childExtent(element);
+        observation.valueSize = childExtent(value);
         int32_t referenceOffset = -1;
         size_t referenceCount = 1;
         size_t windowSize = 0;
         if (reference.kind == PropertyKind::Array)
         {
             referenceOffset = schema_.propertySubtypes.arrayInner;
-            observation.member = "ArrayFlags";
-            observation.basis = "after-validated-inner; flag-width=1-or-4; candidate-only";
-            windowSize = 4;
+            observation.member = "ArrayFlags-candidates";
+            // 4.25-5.2 ：先 Inner，后 int flags；5.3+ ：先字节 flags，后 Inner
+            // 通过 Inner+4 读取经过验证的属性数据末尾，而不是盲目地使用 Inner-8
+            // 派生成员可能会复用基类的尾部填充，此处不选择任何候选方案
+            const int64_t end = static_cast<int64_t>(referenceOffset) + static_cast<int64_t>(sizeof(uintptr_t)) + 4;
+            if (schema_.property.subtypeStart >= 0 && schema_.property.subtypeStart <= referenceOffset &&
+                end - schema_.property.subtypeStart <= 32)
+            {
+                referenceOffset = schema_.property.subtypeStart;
+                referenceCount = 0;
+                windowSize = static_cast<size_t>(end - referenceOffset);
+                observation.basis = "validated-property-data-end-through-inner+4; flags-before-inner:uint8 or after-inner:int32; candidate-only";
+            }
+            else
+            {
+                windowSize = 4;
+                observation.basis = "after-inner:int32-candidate-only; before-inner-candidate-unavailable:unresolved-property-data-end";
+            }
             if (!schema_.features.useFProperty)
                 observation.status = "not-applicable-to-uproperty";
         }
@@ -750,6 +825,39 @@ namespace anduefker::reflection
         }
         else if (observation.status.empty())
             observation.status = "candidate-offset-unrepresentable";
+        if (observation.readable && schema_.features.useFProperty)
+        {
+            const auto flagCandidate = [&](int32_t offset, uint8_t width, const char *basis)
+            {
+                if (offset < observation.offset)
+                    return;
+                const size_t index = static_cast<size_t>(offset - observation.offset);
+                if (index > observation.bytes.size() || width > observation.bytes.size() - index)
+                    return;
+                uint32_t raw = 0;
+                std::memcpy(&raw, observation.bytes.data() + index, width);
+                observation.flagCandidates.push_back({basis, offset, width, raw, raw <= 1});
+            };
+            if (reference.kind == PropertyKind::Array)
+            {
+                if (schema_.property.subtypeStart >= observation.offset &&
+                    schema_.property.subtypeStart < observation.referenceOffset)
+                    flagCandidate(schema_.property.subtypeStart, 1, "UE5.3+-flags-before-inner-property-data-end");
+                if (observation.referenceOffset <= INT32_MAX - static_cast<int32_t>(sizeof(uintptr_t)))
+                    flagCandidate(observation.referenceOffset + static_cast<int32_t>(sizeof(uintptr_t)), 4,
+                                  "UE4.25-5.2-flags-after-inner");
+            }
+            else if (reference.kind == PropertyKind::Map)
+            {
+                // UE 中同时存在这两种布局族；不能仅凭大小来选择其中任何一个
+                for (const auto &[size, basis] : {std::pair{12, "compact-map-layout-tail"}, std::pair{24, "sparse-map-layout-tail"}})
+                    if (observation.offset <= INT32_MAX - size)
+                    {
+                        flagCandidate(observation.offset + size, 1, basis);
+                        flagCandidate(observation.offset + size, 4, basis);
+                    }
+            }
+        }
         if (observation.readable && reference.kind != PropertyKind::Array)
         {
             const auto word = [&](size_t index)
@@ -767,11 +875,13 @@ namespace anduefker::reflection
                 return alignment > 0 && (alignment & (alignment - 1)) == 0;
             };
             observation.sparseShapeConsistent =
-                pairFits && word(start) >= payloadEnd && word(start + 1) >= word(start) + 4 &&
-                word(start + 2) >= word(start + 1) + 4 &&
-                alignmentValid(word(start + 3)) && word(start + 4) >= word(start + 2);
+                observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
+                word(start) >= payloadEnd && word(start) % 4 == 0 && word(start + 1) == word(start) + 4 &&
+                word(start + 2) >= word(start + 1) + 4 && alignmentValid(word(start + 3)) && word(start + 3) >= 4 &&
+                word(start + 4) >= word(start + 2) && word(start + 4) >= 8;
             observation.compactShapeConsistent =
-                pairFits && word(start) >= payloadEnd && alignmentValid(word(start + 1));
+                observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
+                word(start) >= payloadEnd && alignmentValid(word(start + 1));
         }
         containerObservations_.push_back(std::move(observation));
     }
@@ -1033,6 +1143,8 @@ namespace anduefker::reflection
         for (const auto &[key, count] : entryCounts)
         {
             const auto &[entry, readable, executable, inModule] = key;
+            if (count == 1)
+                continue;
             const size_t id = entryIds.size();
             entryIds.emplace(key, id);
             std::ostringstream line;
@@ -1144,8 +1256,18 @@ namespace anduefker::reflection
             const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
             std::ostringstream line;
             line << "function_entry address=0x" << std::hex << address << " owner=0x" << function.outerAddress
-                 << " flags=0x" << function.flags << std::dec << " entry_id=" << entryIds.at(key)
-                 << " name=" << std::quoted(function.name) << " class=" << function.reflectedClass
+                 << " flags=0x" << function.flags << std::dec;
+            if (const auto id = entryIds.find(key); id != entryIds.end())
+                line << " entry_id=" << id->second;
+            else
+            {
+                line << " entry=0x" << std::hex << function.execEntry << std::dec
+                     << " readable=" << function.entryReadable << " executable=" << function.entryExecutable
+                     << " in_module=" << function.entryInModule;
+                if (function.execEntryRva)
+                    line << " rva=0x" << std::hex << *function.execEntryRva << std::dec;
+            }
+            line << " name=" << std::quoted(function.name) << " class=" << function.reflectedClass
                  << " native=" << function.nativeFlag << " native_exec_available=" << function.nativeExecRva.has_value()
                  << " header_readable=" << function.headerReadable
                  << " params=" << static_cast<unsigned int>(function.headerNumParams) << '/' << function.headerParamSize
@@ -1165,7 +1287,7 @@ namespace anduefker::reflection
             for (const auto &property : function.locals)
                 propertyEvidence(property, function.fullName, address, "function-local");
         }
-        diagnostic_("container_storage_probe abi_selected=0 max_observations=512 max_owners_per_shape=2");
+        diagnostic_("container_storage_probe abi_selected=0 max_observations=512 max_owners_per_shape=2 max_candidates=8192 priority=representation-gaps-first shape_checks=necessary-not-sufficient");
         for (const auto &[kind, count] : reflection.containerStorageCandidates)
             diagnostic_("container_storage_candidates class=" + kind + " count=" + std::to_string(count));
         for (const auto &[reason, count] : reflection.containerStorageNotObserved)
@@ -1178,6 +1300,7 @@ namespace anduefker::reflection
                  << " owner_is_uobject=" << observation.ownerIsUObject
                  << " name=" << std::quoted(observation.propertyName) << " class=" << observation.propertyClass
                  << " member=" << observation.member << " offset=" << observation.offset
+                 << " reference_offset=" << observation.referenceOffset << " property_data_end=" << observation.propertyDataEnd
                  << " storage_size=" << observation.storageSize << " inner_size=" << observation.innerSize
                  << " inner_class=" << observation.innerClass << " value_size=" << observation.valueSize
                  << " value_class=" << observation.valueClass << " readable=" << observation.readable
@@ -1192,6 +1315,11 @@ namespace anduefker::reflection
             for (uint8_t byte : observation.bytes)
                 line << std::setw(2) << static_cast<unsigned int>(byte);
             diagnostic_(line.str());
+            for (const auto &flag : observation.flagCandidates)
+                diagnostic_("container_flag_candidate property=" + std::to_string(observation.propertyAddress) +
+                            " offset=" + std::to_string(flag.offset) + " width=" + std::to_string(flag.width) +
+                            " raw=" + std::to_string(flag.raw) + " known_value=" + std::to_string(flag.knownValue) +
+                            " basis=" + flag.basis + " selected=0");
         }
         for (const auto &enumeration : reflection.enums)
             for (const auto &message : enumeration.diagnostics)
@@ -1207,6 +1335,7 @@ namespace anduefker::reflection
         nextSignature_ = 0;
         functionChains_.clear();
         observedContainers_.clear();
+        pendingContainers_.clear();
         containerSampleOwners_.clear();
         containerCandidates_.clear();
         containerNotObserved_.clear();
@@ -1274,6 +1403,7 @@ namespace anduefker::reflection
                 if (progress_)
                     progress_("capture: validating observed bytes; enumerated=" + std::to_string(index));
                 CloseDelegateSignatures(result);
+                CollectContainerStorage();
                 validation = memory_.Validate();
                 const auto boundary = objects_.RefreshObjectCount();
                 details.countAddress = boundary.countAddress;
@@ -1466,6 +1596,9 @@ namespace anduefker::reflection
             if (index >= details.initialCount)
                 ++details.additionalTypes;
         }
+        for (const auto &candidate : pendingContainers_)
+            ++containerNotObserved_[candidate.metadata.normalizedClassName + ":capture-ended-before-probe"];
+        pendingContainers_.clear();
         if (!details.coverageComplete && details.reason.empty())
             details.reason = "enumeration-coverage-incomplete";
         result.diagnostics.push_back("object enumeration: initial_count=" + std::to_string(details.initialCount) +

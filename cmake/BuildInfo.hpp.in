@@ -7,5 +7,7 @@ namespace anduefker::app
     inline constexpr const char *kProducerVersion = "@PROJECT_VERSION@";
     inline constexpr const char *kProducerIdentityStatus = "@ANDUEFKER_PRODUCER_IDENTITY_STATUS@";
     inline constexpr const char *kProducerIdentityQueryResult = "@ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT@";
+    inline constexpr const char *kProducerIdentityFailureReason = "@ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON@";
+    inline constexpr const char *kProducerWorktreeFailureReason = "@ANDUEFKER_PRODUCER_WORKTREE_FAILURE_REASON@";
     inline constexpr const char *kProducerWorktreeStatus = "@ANDUEFKER_PRODUCER_WORKTREE_STATUS@";
 }

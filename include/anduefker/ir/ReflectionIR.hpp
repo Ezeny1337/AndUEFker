@@ -145,6 +145,8 @@ namespace anduefker::ir
         uintptr_t secondaryObject = 0;
         int32_t elementSize = 0;
         bool detailsResolved = false;
+        // 即使子项的语义尚未解析，其外围的元数据/标识依然可以是有效的
+        bool nodeDetailsResolved = false;
         std::shared_ptr<TypeReferenceIR> inner;
         std::shared_ptr<TypeReferenceIR> key;
         std::shared_ptr<TypeReferenceIR> value;
@@ -215,7 +217,7 @@ namespace anduefker::ir
         std::vector<std::string> diagnostics;
         TypeReferenceIR type;
         BoolLayoutIR boolean;
-        // 仅保留失败节点的事实，嵌套属性受 ReadTypeReference 的遍历预算约束。
+        // 仅保留失败节点的事实，嵌套属性受 ReadTypeReference 的遍历预算约束
         std::vector<PropertyDetailDiagnostic> detailDiagnostics;
     };
 
@@ -428,6 +430,8 @@ namespace anduefker::ir
         std::string valueClass;
         std::string member;
         std::string basis;
+        int32_t referenceOffset = -1;
+        int32_t propertyDataEnd = -1;
         int32_t offset = -1;
         uintptr_t address = 0;
         int32_t storageSize = 0;
@@ -439,6 +443,15 @@ namespace anduefker::ir
         size_t transferred = 0;
         std::optional<bool> sparseShapeConsistent;
         std::optional<bool> compactShapeConsistent;
+        struct FlagCandidate
+        {
+            std::string basis;
+            int32_t offset = -1;
+            uint8_t width = 0;
+            uint32_t raw = 0;
+            bool knownValue = false;
+        };
+        std::vector<FlagCandidate> flagCandidates;
         std::vector<uint8_t> bytes;
         std::string status;
     };
@@ -451,7 +464,7 @@ namespace anduefker::ir
         std::vector<std::string> diagnostics;
         std::vector<TypeIR> types;
         std::vector<EnumIR> enums;
-        // Own definitions once per capture attempt; types and properties reference addresses.
+        // 每次捕获尝试中，每个定义仅拥有并生成一次，类型与属性均通过内存地址进行引用
         std::map<uintptr_t, FunctionIR> functions;
         std::vector<DelegateSignatureObservation> delegateSignatures;
         std::vector<ContainerStorageObservation> containerStorageObservations;

@@ -173,7 +173,7 @@ AndUEFker -o <输出目录> -p <包名>
 
 生成的头文件使用 `AndUE` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
 
-`reflection.json` 的 JSON schema 版本为 `6`，`manifest.json` 和 `diagnostics.json` 为 `5`，`runtime.json` 为 `4`。
+`reflection.json` 的 JSON schema 版本为 `7`，`manifest.json` 和 `diagnostics.json` 为 `6`，`runtime.json` 为 `4`。字段生成类型在 `reflection.json` 中按 ID 共用；`diagnostics.json` 引用其中的委托和容器证据。
 
 ## 常用对象类地址
 
@@ -212,7 +212,7 @@ AndUEFker 会在绑定和 Schema 解析阶段记录以下证据：
 
 命令行程序在完整产物就绪时返回 `0`，反射读取或 SDK 描述部分完成时返回 `3`，其他失败或未完成运行阶段返回 `1`。
 
-`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Opaque 容器表示字段类型已识别，但内部实现没有展开；它本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。
+`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Typed opaque 存储（包括分配器尚未验证的数组）保留已知字段语义和大小，但不推断内部布局；它本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。
 
 ## Issue
 

@@ -167,18 +167,20 @@ namespace anduefker::generation
         if (diagnostic)
         {
             const auto &property = *field.property;
+            std::ostringstream context;
+            context << "class=" << property.reflectedClass << " reason=" << field.reason
+                    << " cpp_reason=" << std::quoted(field.cppFailure) << " representation=" << field.representation
+                    << " semantics_resolved=" << property.typeDetailsResolved << " valid_bounds=" << field.validBounds
+                    << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim
+                    << " cpp_type=" << std::quoted(field.cppType);
+            const auto [id, inserted] = opaqueContextIds.emplace(context.str(), opaqueContextIds.size());
+            if (inserted)
+                diagnostic("sdk_opaque_context id=" + std::to_string(id->second) + " " + context.str());
             std::ostringstream line;
             line << "sdk_opaque owner=" << Hex(field.ownerAddress) << " property=" << Hex(property.address)
-                 << " name=" << std::quoted(property.name) << " class=" << property.reflectedClass
-                 << " reason=" << field.reason << " cpp_reason=" << std::quoted(field.cppFailure)
-                 << " representation=" << field.representation << " semantics_resolved=" << property.typeDetailsResolved
-                 << " valid_bounds=" << field.validBounds << " offset=" << property.offset
-                 << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim;
-            if (!field.cppType.empty())
-                line << " cpp_type=" << std::quoted(field.cppType);
-            if (property.type.kind == PropertyKind::Array)
-                line << " array_header_size_matches=" << field.arrayHeaderSizeMatches;
-            if (!field.cppFailure.empty())
+                 << " name=" << std::quoted(property.name) << " offset=" << property.offset << " context_id=" << id->second;
+            if (!field.cppFailure.empty() && field.cppFailure != "internals-not-expanded" &&
+                field.cppFailure != "container-internals-not-expanded")
                 line << " failure_path=" << field.failurePath << " failure_node=" << Hex(node->metadataAddress)
                      << " failure_class=" << node->reflectedClass << " failure_size=" << node->elementSize;
             diagnostic(line.str());
@@ -186,7 +188,7 @@ namespace anduefker::generation
         opaqueDetails.push_back(std::move(field));
     }
 
-    void ArtifactWriter::BasicTypes(std::ostream &stream) const
+    void ArtifactWriter::BasicTypes(std::ostream &stream, const CppSymbols &symbols) const
     {
         const auto &identity = context_.Schema().identity;
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <optional>\n#include <type_traits>\n#include <utility>\n\n";
@@ -211,7 +213,18 @@ namespace anduefker::generation
         const char *targetPointer = context_.Module().pointerWidth == 8 ? "std::uint64_t" : "std::uint32_t";
         stream << "using TargetAddress = " << targetPointer << ";\n";
         stream << "struct FString { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
-        stream << "template <typename ElementType> struct TArray { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "// Allocator internals are not selected from a matching total size.\n";
+        stream << "template <std::size_t StorageSize> struct TOpaqueStorage { std::uint8_t Data[StorageSize]; };\n";
+        stream << "template <typename ElementType, std::size_t StorageSize> struct TArray : TOpaqueStorage<StorageSize> {};\n";
+        stream << "template <typename ElementType, std::size_t ElementSize, std::size_t Count> struct TStaticArrayStorage { std::uint8_t Data[ElementSize][Count]; };\n";
+        stream << "template <std::size_t StorageSize> struct FTextStorage : TOpaqueStorage<StorageSize> {};\n";
+        for (const char *wrapper : {"TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TDelegateStorage", "TMulticastDelegateStorage", "TOptionalStorage"})
+            stream << "template <typename SemanticType, std::size_t StorageSize> struct " << wrapper << " : TOpaqueStorage<StorageSize> {};\n";
+        stream << "template <std::size_t StorageSize> struct TFieldPathStorage : TOpaqueStorage<StorageSize> {};\n";
+        for (const auto &[address, function] : reflection_.functions)
+            if (function.headerReadable && function.referencedAsSignature)
+                stream << "struct " << symbols.functions.at(address) << "_Signature; // " << EscapeJson(function.fullName)
+                       << " metadata=" << Hex(address) << "\n";
         stream << "struct FScriptInterface { TargetAddress ObjectPointer; TargetAddress InterfacePointer; };\n";
         stream << "// Opaque container storage; StorageSize comes from the reflected field.\n";
         stream << "template <typename ElementType, std::size_t StorageSize> struct TSet { std::uint8_t Data[StorageSize]; };\n";
@@ -236,7 +249,7 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 5,\n";
+        stream << "  \"schema_version\": 6,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
@@ -258,6 +271,8 @@ namespace anduefker::generation
                << ",\"producer_identity_status\":\"" << EscapeJson(provenance_.producerIdentityStatus)
                << "\",\"producer_identity_query_result\":\"" << EscapeJson(provenance_.producerIdentityQueryResult)
                << "\",\"producer_worktree_status\":\"" << EscapeJson(provenance_.producerWorktreeStatus) << '"'
+               << ",\"producer_identity_failure_reason\":\"" << EscapeJson(provenance_.producerIdentityFailureReason)
+               << "\",\"producer_worktree_failure_reason\":\"" << EscapeJson(provenance_.producerWorktreeFailureReason) << '"'
                << ",\"run_id\":\"" << EscapeJson(provenance_.runId) << "\",\"target_pid\":" << provenance_.targetPid
                << ",\"address_space_generation\":" << provenance_.addressSpaceGeneration
                << ",\"architecture\":\"" << ArchitectureName(context_.Module().architecture)
@@ -299,7 +314,7 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 5,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 6,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
@@ -327,6 +342,16 @@ namespace anduefker::generation
         WriteCaptureJson(stream, reflection_.capture);
         stream << ",\n  \"property_diagnostics\":";
         WritePropertyDiagnosticsJson(stream, reflection_);
+        stream << ",\n  \"storage_representation_counts\":{";
+        bool firstStorage = true;
+        for (const auto &[kind, count] : report.storageKinds)
+        {
+            if (!firstStorage)
+                stream << ',';
+            firstStorage = false;
+            stream << '"' << PropertyStorageKindName(kind) << "\":" << count;
+        }
+        stream << '}';
         stream << ",\n  \"opaque_fields_by_reason\":{";
         bool firstOpaqueReason = true;
         for (const auto &[reason, count] : report.opaqueReasons)
@@ -413,17 +438,13 @@ namespace anduefker::generation
             const auto &field = report.opaqueDetails[index];
             const auto &property = *field.property;
             stream << "{\"owner\":\"" << Hex(field.ownerAddress) << "\",\"property\":\"" << Hex(property.address)
-                   << "\",\"name\":\"" << EscapeJson(property.name) << "\",\"class\":\"" << EscapeJson(property.reflectedClass)
-                   << "\",\"offset\":" << property.offset << ",\"element_size\":" << property.elementSize
-                   << ",\"array_dim\":" << property.arrayDim << ",\"reason\":\"" << EscapeJson(field.reason)
+                   << "\",\"reason\":\"" << EscapeJson(field.reason)
                    << "\",\"representation\":\"" << EscapeJson(field.representation)
-                   << "\",\"semantics_resolved\":" << (property.typeDetailsResolved ? "true" : "false")
-                   << ",\"valid_bounds\":" << (field.validBounds ? "true" : "false");
-            if (!field.cppType.empty())
-                stream << ",\"cpp_type\":\"" << EscapeJson(field.cppType) << '"';
+                   << "\",\"valid_bounds\":" << (field.validBounds ? "true" : "false");
             if (property.type.kind == PropertyKind::Array)
                 stream << ",\"array_header_size_matches\":" << (field.arrayHeaderSizeMatches ? "true" : "false");
-            if (!field.cppFailure.empty())
+            if (!field.cppFailure.empty() && field.cppFailure != "internals-not-expanded" &&
+                field.cppFailure != "container-internals-not-expanded")
                 stream << ",\"cpp_reason\":\"" << EscapeJson(field.cppFailure)
                        << "\",\"failure_path\":\"" << EscapeJson(field.failurePath)
                        << "\",\"failure_node\":\"" << Hex(field.failureNode->metadataAddress)
@@ -431,10 +452,7 @@ namespace anduefker::generation
                        << "\",\"failure_size\":" << field.failureNode->elementSize;
             stream << '}';
         }
-        stream << "],\n  \"delegate_signatures\":";
-        WriteDelegateDiagnosticsJson(stream, reflection_);
-        stream << ",\n  \"container_storage_evidence\":";
-        WriteContainerStorageJson(stream, reflection_);
+        stream << "],\n  \"reflection_evidence\":{\"artifact\":\"reflection.json\",\"property_join_key\":\"address\",\"generation_types\":\"generation_types\",\"delegate_signatures\":\"delegate_signatures\",\"container_storage\":\"container_storage_evidence\"}";
         stream << ",\n";
         stream << "  \"diagnostics\": [";
         for (size_t index = 0; index < reflection_.diagnostics.size(); ++index)
@@ -496,22 +514,9 @@ namespace anduefker::generation
         plan.fields.reserve(properties.size());
         for (const PropertyIR &property : properties)
         {
-            const int64_t total = static_cast<int64_t>(property.elementSize) * property.arrayDim;
-            int64_t end = static_cast<int64_t>(property.offset) + total;
-            FieldGenerationEntry entry;
-            entry.property = &property;
-            entry.validBounds = ::anduefker::ir::IsValidPropertyBounds(property, size, end);
-            entry.boolLayout = ::anduefker::ir::IsValidPropertyBoolLayout(property);
-            if (property.type.kind != PropertyKind::Bool && property.typeDetailsResolved &&
-                property.type.elementSize == property.elementSize)
-            {
-                auto resolved = ResolvePropertyType(property.type, symbols, context_.Module().pointerWidth,
-                                                    context_.Schema().fname.size);
-                entry.cppType = std::move(resolved.name);
-                entry.cppTypeFailure = std::move(resolved.failureReason);
-            }
-            else if (property.type.kind != PropertyKind::Bool)
-                entry.cppTypeFailure = !property.typeDetailsResolved ? "unresolved-type-details" : "property-type-size-disagreement";
+            FieldGenerationEntry entry = DescribeField(property, size, symbols, context_.Module().pointerWidth,
+                                                       context_.Schema().fname.size);
+            entry.layout = analysis.representation;
             plan.fields.push_back(std::move(entry));
         }
         return plan;
@@ -537,10 +542,10 @@ namespace anduefker::generation
                 return "unresolved-type-details";
             if (property.type.kind == PropertyKind::Bool && !entry.boolLayout)
                 return "invalid-bool-layout";
-            if (entry.cppType.empty() && property.type.kind != PropertyKind::Bool)
+            if (entry.type.name.empty() && property.type.kind != PropertyKind::Bool)
                 return "no-sized-cpp-representation";
-            if (property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map)
-                return "container-internals-not-expanded";
+            if (entry.type.IsOpaque())
+                return entry.type.storage == PropertyStorageKind::PartialContainer ? "container-child-internals-not-expanded" : "internals-not-expanded";
             return "none";
         };
         const auto registerOwner = [&]
@@ -559,8 +564,8 @@ namespace anduefker::generation
             field.ownerAddress = function ? function->address : owner.address;
             field.property = entry.property;
             field.reason = opaqueReasonFor(entry);
-            field.cppFailure = entry.cppTypeFailure;
-            field.cppType = entry.cppType;
+            field.cppFailure = entry.type.failureReason;
+            field.cppType = entry.type.name;
             field.representation = plan.forceOffsetDescription ? "offset-description" : LayoutRepresentationName(analysis.representation);
             field.validBounds = entry.validBounds;
             field.arrayHeaderSizeMatches = entry.property->type.kind == PropertyKind::Array &&
@@ -576,15 +581,29 @@ namespace anduefker::generation
                    << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim
                    << " flags=" << Hex(property.flags) << " referenced_object=" << Hex(property.type.referencedObject)
                    << " secondary_object=" << Hex(property.type.secondaryObject)
-                   << " status=" << ParseStatusName(property.status) << " opaque_reason=" << opaqueReason;
-            if (!entry.cppTypeFailure.empty())
-                stream << " cpp_representation_reason=" << EscapeJson(entry.cppTypeFailure);
+                   << " status=" << ParseStatusName(property.status) << " opaque_reason=" << opaqueReason
+                   << " semantic_type=" << EscapeJson(entry.type.semanticName) << " storage=" << PropertyStorageKindName(entry.type.storage);
+            if (!entry.type.failureReason.empty())
+                stream << " cpp_representation_reason=" << EscapeJson(entry.type.failureReason);
             if (function)
                 stream << " parameter=" << property.isParameter << " return=" << property.isReturnParameter
                        << " out=" << property.isOutParameter << " reference=" << property.isReferenceParameter
                        << " const=" << property.isConstParameter;
             stream << '\n';
         };
+        for (const auto &entry : plan.fields)
+        {
+            auto description = entry;
+            std::ostringstream typeKey;
+            typeKey << std::quoted(entry.type.name) << std::quoted(entry.type.semanticName)
+                    << std::quoted(entry.type.failureReason) << PropertyStorageKindName(entry.type.storage) << ':' << entry.type.semanticsResolved;
+            description.typeId = report.typeIds.emplace(typeKey.str(), report.typeIds.size()).first->second;
+            if (plan.forceOffsetDescription)
+                description.layout = LayoutRepresentation::OffsetDescription;
+            if (!report.fields.contains(entry.property->address))
+                ++report.storageKinds[entry.type.storage];
+            report.fields.insert_or_assign(entry.property->address, std::move(description));
+        }
         for (const auto &issue : analysis.issues)
         {
             registerOwner();
@@ -626,7 +645,7 @@ namespace anduefker::generation
                 describe(entry);
                 const PropertyIR &property = *entry.property;
                 const std::string member = SanitizeIdentifier(property.name, "Member_") + "_" + std::to_string(ordinal++);
-                const std::string typeName = entry.cppType.empty() ? property.reflectedClass : entry.cppType;
+                const std::string typeName = entry.type.name.empty() ? property.reflectedClass : entry.type.name;
                 if (!entry.validBounds)
                 {
                     stream << "    // Invalid offset description: name=" << EscapeJson(property.name) << " symbol=" << member << " type=" << EscapeJson(typeName)
@@ -642,7 +661,7 @@ namespace anduefker::generation
                 stream << "    static constexpr std::size_t " << member << "_ElementSize = " << property.elementSize << ";\n";
                 stream << "    static constexpr std::size_t " << member << "_ArrayDim = " << property.arrayDim << ";\n";
                 if (property.type.kind != PropertyKind::Bool &&
-                    (entry.cppType.empty() || property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map))
+                    (entry.type.name.empty() || entry.type.IsOpaque()))
                     recordOpaque(entry);
                 if (entry.boolLayout)
                 {
@@ -736,7 +755,7 @@ namespace anduefker::generation
                 stream << "    // Unexpected field interval overlap after layout analysis: " << member << "\n";
             if (property.offset > cursor)
                 stream << "    std::uint8_t UnknownData_" << ordinal++ << "[" << Hex(property.offset - cursor) << "];\n";
-            if (entry->cppType.empty())
+            if (entry->type.name.empty())
             {
                 stream << "    std::uint8_t " << member << "[" << Hex(static_cast<uint64_t>(total))
                        << "]; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ") opaque\n";
@@ -744,11 +763,11 @@ namespace anduefker::generation
             }
             else
             {
-                stream << "    " << entry->cppType << " " << member;
+                stream << "    " << entry->type.name << " " << member;
                 if (property.arrayDim > 1)
                     stream << "[" << property.arrayDim << "]";
                 stream << "; // " << Hex(property.offset) << " (" << Hex(static_cast<uint64_t>(total)) << ")\n";
-                if (property.type.kind == PropertyKind::Set || property.type.kind == PropertyKind::Map)
+                if (entry->type.IsOpaque())
                     recordOpaque(*entry);
             }
             stream << "    static constexpr std::size_t " << member << "_Offset = " << property.offset << ";\n";
@@ -893,6 +912,8 @@ namespace anduefker::generation
             const FieldGenerationPlan plan = BuildFieldGenerationPlan(owner, &function, function.parameters,
                                                                       function.paramSize, symbols);
             WriteFields(stream, owner, &function, plan, symbols, report);
+            if (function.referencedAsSignature)
+                stream << "struct " << functionName << "_Signature { using Parameters = " << functionName << "_Params; };\n\n";
         }
         stream << "}\n";
     }
@@ -1098,10 +1119,10 @@ namespace anduefker::generation
         return stream.str();
     }
 
-    void ArtifactWriter::ReflectionJson(std::ostream &stream) const
+    void ArtifactWriter::ReflectionJson(std::ostream &stream, const GenerationReport &report) const
     {
         const auto &validation = context_.Schema().validation;
-        WriteReflectionJson(stream, reflection_, {context_.Schema().identity.canonicalVersionRange.empty() ? validation.familyEvidence : context_.Schema().identity.canonicalVersionRange, validation.profileId, validation.profileLabel, validation.profileVersionRange, &context_.Schema().identity});
+        WriteReflectionJson(stream, reflection_, {context_.Schema().identity.canonicalVersionRange.empty() ? validation.familyEvidence : context_.Schema().identity.canonicalVersionRange, validation.profileId, validation.profileLabel, validation.profileVersionRange, &context_.Schema().identity}, &report.fields);
     }
 
     ArtifactResult ArtifactWriter::Write() const
@@ -1186,7 +1207,7 @@ namespace anduefker::generation
             return true;
         };
         if (!writeFile("BasicTypes.hpp", [&](std::ostream &stream)
-                       { BasicTypes(stream); }) ||
+                       { BasicTypes(stream, symbols); }) ||
             !writeFile("Types.hpp", [&](std::ostream &stream)
                        { Types(stream, symbols, report); }) ||
             !writeFile("Enums.hpp", [&](std::ostream &stream)
@@ -1194,7 +1215,7 @@ namespace anduefker::generation
             !writeFile("Functions.hpp", [&](std::ostream &stream)
                        { Functions(stream, symbols, report); }) ||
             !writeFile("reflection.json", [&](std::ostream &stream)
-                       { ReflectionJson(stream); }))
+                       { ReflectionJson(stream, report); }))
             return result;
         const ParseStatus status = reflection_.status == ParseStatus::Partial || report.Status() == ParseStatus::Partial
                                        ? ParseStatus::Partial
@@ -1204,6 +1225,9 @@ namespace anduefker::generation
         result.opaqueFields = report.opaqueFields;
         result.omittedFields = report.omittedFields;
         result.layoutWarnings = report.layoutWarnings;
+        for (const auto &[kind, count] : report.storageKinds)
+            result.generationDiagnostics.push_back("SDK storage summary: representation=" + std::string(PropertyStorageKindName(kind)) +
+                                                   " total=" + std::to_string(count));
         for (const auto &[reason, count] : report.opaqueReasons)
             result.generationDiagnostics.push_back("SDK opaque summary: reason=" + reason + " total=" + std::to_string(count));
         for (const auto &[key, count] : report.cppRepresentationFailures)

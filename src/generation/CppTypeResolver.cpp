@@ -1,4 +1,5 @@
 #include "anduefker/generation/CppTypeResolver.hpp"
+#include "anduefker/ir/ReflectionLayout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -106,7 +107,7 @@ namespace anduefker::generation
     CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection)
     {
         CppSymbols result;
-        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TArray", "TSet", "TMap", "TEnumStorage"};
+        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TArray", "TSet", "TMap", "TEnumStorage", "TOpaqueStorage", "TStaticArrayStorage", "FTextStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TFieldPathStorage", "TDelegateStorage", "TMulticastDelegateStorage", "TOptionalStorage"};
         // 所有声明和引用共用同一个符号表；重名后缀不依赖进程地址
         for (const auto &type : reflection.types)
             result.types.emplace(type.address, CppTypeInfo{UniqueName(used, SanitizeIdentifier(type.name, "Type_")), type.size});
@@ -139,8 +140,8 @@ namespace anduefker::generation
             const std::string stem = SanitizeIdentifier(ownerName + "_" + function.name, "Function_");
             std::string name = stem;
             size_t suffix = 0;
-            static constexpr std::array<const char *, 6> endings = {
-                "_Params", "_ParamsSize", "_ExecEntryRva", "_HasExecEntryRva", "_NativeExecRva", "_HasNativeExecRva"};
+            static constexpr std::array<const char *, 7> endings = {
+                "_Params", "_ParamsSize", "_ExecEntryRva", "_HasExecEntryRva", "_NativeExecRva", "_HasNativeExecRva", "_Signature"};
             const auto conflicts = [&]
             {
                 return std::any_of(endings.begin(), endings.end(), [&](const char *ending)
@@ -178,8 +179,26 @@ namespace anduefker::generation
         }
     }
 
-    CppPropertyType ResolvePropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
-                                        int32_t pointerWidth, int32_t nameSize, size_t depth)
+    const char *PropertyStorageKindName(PropertyStorageKind kind)
+    {
+        switch (kind)
+        {
+        case PropertyStorageKind::Unavailable:
+            return "unavailable";
+        case PropertyStorageKind::SizedDescription:
+            return "sized-description";
+        case PropertyStorageKind::BoolMask:
+            return "bool-mask";
+        case PropertyStorageKind::TypedOpaque:
+            return "typed-opaque";
+        case PropertyStorageKind::PartialContainer:
+            return "partial-container";
+        }
+        return "unavailable";
+    }
+
+    static CppPropertyType ResolveSizedType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
+                                            int32_t pointerWidth, int32_t nameSize, size_t depth)
     {
         if (!reference.detailsResolved)
             return {{}, "unresolved-type-details"};
@@ -208,7 +227,19 @@ namespace anduefker::generation
         case PropertyKind::UInt64:
             return sized("std::uint64_t", 8);
         case PropertyKind::Bool:
+            return sized("std::uint8_t", 1);
         case PropertyKind::Byte:
+            if (reference.referencedObject != 0)
+            {
+                const auto found = symbols.enums.find(reference.referencedObject);
+                if (found == symbols.enums.end())
+                    return {{}, "missing-enum-symbol"};
+                const auto &enumeration = found->second;
+                return sized(enumeration.underlyingType == EnumUnderlyingType::UInt8 && enumeration.size == 1
+                                 ? enumeration.name
+                                 : "TEnumStorage<" + enumeration.name + ", std::uint8_t>",
+                             1);
+            }
             return sized("std::uint8_t", 1);
         case PropertyKind::Float:
             return sized("float", 4);
@@ -278,31 +309,177 @@ namespace anduefker::generation
             if (symbols.types.contains(reference.referencedObject))
                 return sized("FScriptInterface", pointerWidth * 2);
             return {{}, "missing-type-symbol"};
-        case PropertyKind::Array:
-        case PropertyKind::Set:
-            if (reference.inner)
-            {
-                const auto inner = ResolvePropertyType(*reference.inner, symbols, pointerWidth, nameSize, depth + 1);
-                if (inner.name.empty())
-                    return {{}, "inner:" + inner.failureReason};
-                return reference.kind == PropertyKind::Array ? sized("TArray<" + inner.name + ">", pointerWidth + 8)
-                                                             : CppPropertyType{"TSet<" + inner.name + ", " + std::to_string(reference.elementSize) + ">", {}};
-            }
-            return {{}, "missing-inner-type"};
-        case PropertyKind::Map:
-            if (reference.key && reference.value)
-            {
-                const auto key = ResolvePropertyType(*reference.key, symbols, pointerWidth, nameSize, depth + 1);
-                if (key.name.empty())
-                    return {{}, "key:" + key.failureReason};
-                const auto value = ResolvePropertyType(*reference.value, symbols, pointerWidth, nameSize, depth + 1);
-                if (value.name.empty())
-                    return {{}, "value:" + value.failureReason};
-                return {"TMap<" + key.name + ", " + value.name + ", " + std::to_string(reference.elementSize) + ">", {}};
-            }
-            return {{}, "missing-key-or-value-type"};
         default:
             return {{}, "unsupported-property-kind"};
         }
+    }
+
+    CppPropertyType ResolvePropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,
+                                        int32_t pointerWidth, int32_t nameSize, size_t depth)
+    {
+        if (depth >= 32)
+            return {{}, "type-depth-limit"};
+        CppPropertyType result = ResolveSizedType(reference, symbols, pointerWidth, nameSize, depth);
+        result.semanticsResolved = reference.detailsResolved;
+        result.semanticName = result.name.empty() ? reference.reflectedClass : result.name;
+        if (!result.name.empty())
+        {
+            const auto enumeration = symbols.enums.find(reference.kind == PropertyKind::Byte ? reference.referencedObject : reference.secondaryObject);
+            if ((reference.kind == PropertyKind::Byte || reference.kind == PropertyKind::Enum) && enumeration != symbols.enums.end())
+                result.semanticName = enumeration->second.name;
+            result.storage = PropertyStorageKind::SizedDescription;
+            return result;
+        }
+        if ((!reference.detailsResolved && !reference.nodeDetailsResolved) || reference.elementSize <= 0)
+            return result;
+        const std::string size = std::to_string(reference.elementSize);
+        const auto object = symbols.types.find(reference.referencedObject);
+        const std::string target = object == symbols.types.end() ? "void" : object->second.name;
+        const auto opaque = [&](const std::string &wrapper, const std::string &semantic, const std::string &argument = "")
+        {
+            result.name = wrapper + "<" + argument + size + ">";
+            result.semanticName = semantic;
+            result.storage = PropertyStorageKind::TypedOpaque;
+            result.failureReason = "internals-not-expanded";
+        };
+        const auto child = [&](const std::shared_ptr<ir::TypeReferenceIR> &node)
+        {
+            CppPropertyType type = node ? ResolvePropertyType(*node, symbols, pointerWidth, nameSize, depth + 1)
+                                        : CppPropertyType{{}, "missing-child-type"};
+            if (node && type.name.empty() && node->elementSize > 0)
+            {
+                // 保留已知的子项分类与反射范围，同时不对内部结构的有效性做任何断言
+                type.name = "TOpaqueStorage<" + std::to_string(node->elementSize) + ">";
+                type.semanticName = node->reflectedClass.empty() ? "Unknown" : node->reflectedClass;
+                type.storage = PropertyStorageKind::TypedOpaque;
+            }
+            if (node && !type.name.empty() && node->arrayDim > 1)
+            {
+                type.name = "TStaticArrayStorage<" + type.name + ", " + std::to_string(node->elementSize) +
+                            ", " + std::to_string(node->arrayDim) + ">";
+                type.semanticName += "[" + std::to_string(node->arrayDim) + "]";
+                type.storage = PropertyStorageKind::TypedOpaque;
+                type.failureReason = type.failureReason.empty() ? "static-array-storage-not-expanded"
+                                                                : "static-array-storage-not-expanded:" + type.failureReason;
+            }
+            if (node && node->arrayDim <= 0)
+                type = {{}, "invalid-child-array-dim"};
+            return type;
+        };
+        switch (reference.kind)
+        {
+        case PropertyKind::Text:
+            opaque("FTextStorage", "FText");
+            break;
+        case PropertyKind::WeakObject:
+            if (object == symbols.types.end())
+            {
+                result.failureReason = "missing-type-symbol";
+                break;
+            }
+            opaque("TWeakObjectStorage", "TWeakObjectPtr<" + target + ">", target + ", ");
+            break;
+        case PropertyKind::LazyObject:
+            if (object == symbols.types.end())
+            {
+                result.failureReason = "missing-type-symbol";
+                break;
+            }
+            opaque("TLazyObjectStorage", "TLazyObjectPtr<" + target + ">", target + ", ");
+            break;
+        case PropertyKind::SoftObject:
+            if (object == symbols.types.end())
+            {
+                result.failureReason = "missing-type-symbol";
+                break;
+            }
+            opaque("TSoftObjectStorage", "TSoftObjectPtr<" + target + ">", target + ", ");
+            break;
+        case PropertyKind::SoftClass:
+            if (object == symbols.types.end())
+            {
+                result.failureReason = "missing-type-symbol";
+                break;
+            }
+            opaque("TSoftClassStorage", "TSoftClassPtr<" + target + ">", target + ", ");
+            break;
+        case PropertyKind::FieldPath:
+            opaque("TFieldPathStorage", reference.reflectedClass);
+            break;
+        case PropertyKind::Delegate:
+        case PropertyKind::MulticastDelegate:
+        {
+            const auto signature = symbols.functions.find(reference.referencedObject);
+            if (signature == symbols.functions.end())
+            {
+                result.failureReason = "missing-signature-symbol";
+                break;
+            }
+            const std::string tag = signature->second + "_Signature";
+            opaque(reference.kind == PropertyKind::Delegate ? "TDelegateStorage" : "TMulticastDelegateStorage",
+                   reference.reflectedClass + "<" + tag + ">", tag + ", ");
+            break;
+        }
+        case PropertyKind::Array:
+        case PropertyKind::Set:
+        case PropertyKind::Optional:
+        {
+            const auto inner = child(reference.inner);
+            if (inner.name.empty())
+            {
+                result.failureReason = "inner:" + inner.failureReason;
+                break;
+            }
+            const std::string wrapper = reference.kind == PropertyKind::Array ? "TArray" : reference.kind == PropertyKind::Set ? "TSet"
+                                                                                                                               : "TOptionalStorage";
+            opaque(wrapper, wrapper + "<" + inner.semanticName + ">", inner.name + ", ");
+            result.storage = inner.IsOpaque() ? PropertyStorageKind::PartialContainer : PropertyStorageKind::TypedOpaque;
+            result.failureReason = inner.IsOpaque() ? "inner:" + inner.failureReason : "container-internals-not-expanded";
+            break;
+        }
+        case PropertyKind::Map:
+        {
+            const auto key = child(reference.key);
+            const auto value = child(reference.value);
+            if (key.name.empty() || value.name.empty())
+            {
+                result.failureReason = key.name.empty() ? "key:" + key.failureReason : "value:" + value.failureReason;
+                break;
+            }
+            opaque("TMap", "TMap<" + key.semanticName + ", " + value.semanticName + ">", key.name + ", " + value.name + ", ");
+            result.storage = key.IsOpaque() || value.IsOpaque() ? PropertyStorageKind::PartialContainer : PropertyStorageKind::TypedOpaque;
+            result.failureReason = key.IsOpaque() ? "key:" + key.failureReason : value.IsOpaque() ? "value:" + value.failureReason
+                                                                                                  : "container-internals-not-expanded";
+            break;
+        }
+        default:
+            break;
+        }
+        return result;
+    }
+
+    FieldDescription DescribeField(const ir::PropertyIR &property, int32_t bound,
+                                   const CppSymbols &symbols, int32_t pointerWidth, int32_t nameSize)
+    {
+        FieldDescription result;
+        result.property = &property;
+        result.type.semanticName = property.reflectedClass;
+        result.type.semanticsResolved = property.typeDetailsResolved;
+        int64_t end = 0;
+        result.validBounds = ir::IsValidPropertyBounds(property, bound, end);
+        result.boolLayout = ir::IsValidPropertyBoolLayout(property);
+        if (property.type.elementSize != property.elementSize)
+            result.type.failureReason = "property-type-size-disagreement";
+        else if (property.type.kind == PropertyKind::Bool)
+        {
+            result.type.semanticName = "bool";
+            result.type.semanticsResolved = property.typeDetailsResolved;
+            result.type.storage = result.boolLayout ? PropertyStorageKind::BoolMask : PropertyStorageKind::Unavailable;
+            if (!result.boolLayout)
+                result.type.failureReason = "invalid-bool-layout";
+        }
+        else
+            result.type = ResolvePropertyType(property.type, symbols, pointerWidth, nameSize);
+        return result;
     }
 } // namespace anduefker::generation

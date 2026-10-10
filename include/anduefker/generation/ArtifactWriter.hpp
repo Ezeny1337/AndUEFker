@@ -37,6 +37,8 @@ namespace anduefker::generation
         std::string producerIdentityStatus = "not-reported";
         std::string producerIdentityQueryResult = "not-reported";
         std::string producerWorktreeStatus = "not-reported";
+        std::string producerIdentityFailureReason = "not-reported";
+        std::string producerWorktreeFailureReason = "not-reported";
         int32_t targetPid = -1;
         uint64_t addressSpaceGeneration = 0;
     };
@@ -112,16 +114,20 @@ namespace anduefker::generation
             size_t layoutWarnings = 0;
             size_t layoutEvents = 0;
             std::map<std::string, size_t> opaqueReasons;
+            std::map<PropertyStorageKind, size_t> storageKinds;
             std::map<std::pair<std::string, std::string>, size_t> cppRepresentationFailures;
             std::function<void(const std::string &)> diagnostic;
             std::map<uintptr_t, GenerationOwner> owners;
             std::map<std::string, size_t> counts;
-            // Non-owning property views remain valid during the const IR export.
+            // 非所有权属性视图在 const IR 导出期间保持有效
             std::vector<OpaqueField> opaqueDetails;
             std::vector<LayoutEvent> events;
+            FieldDescriptions fields;
+            std::map<std::string, size_t> typeIds;
+            std::map<std::string, size_t> opaqueContextIds;
             [[nodiscard]] ParseStatus Status() const
             {
-                // Intentional opaque storage is not a missing field.
+                // 有意设计的 Opaque storage 并不是缺失的字段
                 return omittedFields == 0 && layoutWarnings == 0 ? ParseStatus::Complete : ParseStatus::Partial;
             }
             void RegisterOwner(GenerationOwner owner);
@@ -154,14 +160,7 @@ namespace anduefker::generation
             }
             void Record(const LayoutEvent &event) const;
         };
-        struct FieldGenerationEntry
-        {
-            const PropertyIR *property = nullptr;
-            std::string cppType;
-            std::string cppTypeFailure;
-            bool validBounds = false;
-            bool boolLayout = false;
-        };
+        using FieldGenerationEntry = FieldDescription;
         struct FieldGenerationPlan
         {
             bool forceOffsetDescription = false;
@@ -171,9 +170,9 @@ namespace anduefker::generation
         };
         [[nodiscard]] std::string ManifestJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string DiagnosticsJson(const GenerationReport &report, ParseStatus status) const;
-        void ReflectionJson(std::ostream &stream) const;
+        void ReflectionJson(std::ostream &stream, const GenerationReport &report) const;
         [[nodiscard]] std::string RuntimeJson() const;
-        void BasicTypes(std::ostream &stream) const;
+        void BasicTypes(std::ostream &stream, const CppSymbols &symbols) const;
         void Types(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;
         void Enums(std::ostream &stream, const CppSymbols &symbols) const;
         void Functions(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;

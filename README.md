@@ -173,7 +173,7 @@ The output directory also receives the session log:
 
 The generated headers use the `AndUE` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
 
-JSON schema versions are `6` for `reflection.json`, `5` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`.
+JSON schema versions are `7` for `reflection.json`, `6` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`. Field generation types are shared by ID in `reflection.json`; `diagnostics.json` references its delegate and container evidence.
 
 ## Common object addresses
 
@@ -212,7 +212,7 @@ The generated `manifest.json` reports one of the following artifact states:
 
 The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
 
-`manifest.json` records `reflection_status` and `sdk_status` separately. Opaque containers are intentional descriptions of known fields whose internal implementation is not expanded; they do not by themselves make the SDK description partial. Omitted fields and description layout warnings do.
+`manifest.json` records `reflection_status` and `sdk_status` separately. Typed opaque storage (including arrays with unverified allocators) preserves known field semantics and sizes without asserting internal layouts; it does not by itself make the SDK description partial. Omitted fields and description layout warnings do.
 
 ## Issues
 

@@ -19,20 +19,47 @@ set(ANDUEFKER_PRODUCER_WORKTREE "unknown")
 set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "git-not-found")
 set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "not-run")
 set(ANDUEFKER_PRODUCER_WORKTREE_STATUS "not-queried")
+set(ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON "git-not-found")
+set(ANDUEFKER_PRODUCER_WORKTREE_FAILURE_REASON "not-queried")
+# Persist only known categories, never Git stderr (which can contain local paths).
+function(anduefker_git_failure_reason result error output)
+    if("${result}" STREQUAL "0")
+        set(reason "none")
+    elseif(NOT "${result}" MATCHES "^-?[0-9]+$")
+        set(reason "launch-failed")
+    elseif("${error}" MATCHES "detected dubious ownership|unsafe repository")
+        set(reason "unsafe-repository-ownership")
+    elseif("${error}" MATCHES "not a git repository")
+        set(reason "not-a-git-repository")
+    elseif("${error}" MATCHES "Permission denied|Access is denied")
+        set(reason "permission-denied")
+    elseif("${error}" MATCHES "unknown revision|Needed a single revision|ambiguous argument")
+        set(reason "revision-unavailable")
+    else()
+        set(reason "unclassified-git-error")
+    endif()
+    set(${output} "${reason}" PARENT_SCOPE)
+endfunction()
 find_package(Git QUIET)
 if(Git_FOUND)
     set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "worktree-query-failed")
     execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --is-inside-work-tree
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         RESULT_VARIABLE ANDUEFKER_GIT_WORKTREE_RESULT
-        OUTPUT_VARIABLE ANDUEFKER_GIT_INSIDE_WORKTREE OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        OUTPUT_VARIABLE ANDUEFKER_GIT_INSIDE_WORKTREE OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_VARIABLE ANDUEFKER_GIT_ERROR)
+    anduefker_git_failure_reason("${ANDUEFKER_GIT_WORKTREE_RESULT}" "${ANDUEFKER_GIT_ERROR}"
+        ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON)
     set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "${ANDUEFKER_GIT_WORKTREE_RESULT}")
     if(ANDUEFKER_GIT_WORKTREE_RESULT STREQUAL "0" AND ANDUEFKER_GIT_INSIDE_WORKTREE STREQUAL "true")
         set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "revision-query-failed")
         execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
             RESULT_VARIABLE ANDUEFKER_GIT_RESULT
-            OUTPUT_VARIABLE ANDUEFKER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            OUTPUT_VARIABLE ANDUEFKER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_VARIABLE ANDUEFKER_GIT_ERROR)
+        anduefker_git_failure_reason("${ANDUEFKER_GIT_RESULT}" "${ANDUEFKER_GIT_ERROR}"
+            ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON)
         set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "${ANDUEFKER_GIT_RESULT}")
         if(ANDUEFKER_GIT_RESULT STREQUAL "0" AND ANDUEFKER_GIT_COMMIT MATCHES "^[0-9a-fA-F]+$")
             set(ANDUEFKER_PRODUCER_COMMIT "${ANDUEFKER_GIT_COMMIT}")
@@ -41,7 +68,10 @@ if(Git_FOUND)
             execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                 RESULT_VARIABLE ANDUEFKER_GIT_STATUS_RESULT
-                OUTPUT_VARIABLE ANDUEFKER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+                OUTPUT_VARIABLE ANDUEFKER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_VARIABLE ANDUEFKER_GIT_ERROR)
+            anduefker_git_failure_reason("${ANDUEFKER_GIT_STATUS_RESULT}" "${ANDUEFKER_GIT_ERROR}"
+                ANDUEFKER_PRODUCER_WORKTREE_FAILURE_REASON)
             if(ANDUEFKER_GIT_STATUS_RESULT STREQUAL "0")
                 set(ANDUEFKER_PRODUCER_WORKTREE_STATUS "ok")
                 if(ANDUEFKER_GIT_STATUS STREQUAL "")
@@ -52,9 +82,11 @@ if(Git_FOUND)
             endif()
         elseif(ANDUEFKER_GIT_RESULT STREQUAL "0")
             set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "invalid-revision-output")
+            set(ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON "invalid-revision-output")
         endif()
     elseif(ANDUEFKER_GIT_WORKTREE_RESULT STREQUAL "0")
         set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "not-a-worktree")
+        set(ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON "not-a-worktree")
     endif()
 endif()
 if(NOT ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT MATCHES "^-?[0-9]+$"

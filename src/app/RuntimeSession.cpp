@@ -99,7 +99,7 @@ namespace anduefker::app
 
     void RuntimeSession::Note(RuntimeLogLevel level, std::string message)
     {
-        // Keep target metadata on one physical log line without hiding control bytes.
+        // 将目标元数据保持在单个物理日志行中，且不隐藏控制字节
         std::string escaped;
         escaped.reserve(message.size());
         static constexpr char hex[] = "0123456789ABCDEF";
@@ -204,6 +204,8 @@ namespace anduefker::app
         provenance_.producerIdentityStatus = kProducerIdentityStatus;
         provenance_.producerIdentityQueryResult = kProducerIdentityQueryResult;
         provenance_.producerWorktreeStatus = kProducerWorktreeStatus;
+        provenance_.producerIdentityFailureReason = kProducerIdentityFailureReason;
+        provenance_.producerWorktreeFailureReason = kProducerWorktreeFailureReason;
         provenance_.runId = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                std::chrono::system_clock::now().time_since_epoch())
                                                .count()) +
@@ -248,8 +250,10 @@ namespace anduefker::app
                                          " identity_status=" + provenance_.producerIdentityStatus +
                                          " identity_query_result=" + provenance_.producerIdentityQueryResult +
                                          " worktree_status=" + provenance_.producerWorktreeStatus +
+                                         " identity_failure_reason=" + provenance_.producerIdentityFailureReason +
+                                         " worktree_failure_reason=" + provenance_.producerWorktreeFailureReason +
                                          " identity_source=cmake-configure run_id=" + provenance_.runId);
-        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=2 owner_contexts=address-keyed exec_entries=context-keyed");
+        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=3 owner_contexts=address-keyed exec_entries=shared-context-or-inline opaque_fields=context-keyed");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);
