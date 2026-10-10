@@ -165,7 +165,7 @@ AndUEFker -o <输出目录> -p <包名>
 | `BasicTypes.hpp` | SDK 基础类型与容器描述。 |
 | `Types.hpp` | 生成的 Unreal 类和结构体，包含反射身份与目标布局信息。 |
 | `Enums.hpp` | 生成的枚举声明和值。 |
-| `Functions.hpp` | Native 函数地址与反射参数布局。 |
+| `Functions.hpp` | 反射执行入口 RVA 与参数布局。 |
 | `reflection.json` | 详细反射 IR，包括属性、函数、枚举、继承关系和地址。 |
 | `manifest.json` | 产物状态和解析统计信息。 |
 | `diagnostics.json` | 反射诊断、冲突和失败计数。 |
@@ -173,7 +173,7 @@ AndUEFker -o <输出目录> -p <包名>
 
 生成的头文件使用 `AndUE` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
 
-`reflection.json` 的 JSON schema 版本为 `5`，`manifest.json` 和 `diagnostics.json` 为 `4`，`runtime.json` 为 `4`。
+`reflection.json` 的 JSON schema 版本为 `6`，`manifest.json` 和 `diagnostics.json` 为 `5`，`runtime.json` 为 `4`。
 
 ## 常用对象类地址
 

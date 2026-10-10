@@ -41,12 +41,6 @@ namespace anduefker::app
         Error,
     };
 
-    struct RuntimeLogEntry
-    {
-        RuntimeLogLevel level = RuntimeLogLevel::Info;
-        std::string message;
-    };
-
     enum class RuntimeSessionStatus
     {
         Failed,
@@ -75,12 +69,11 @@ namespace anduefker::app
         [[nodiscard]] const std::vector<std::string> &Failures() const { return failures_; }
         [[nodiscard]] const ArtifactResult &Artifacts() const { return artifacts_; }
         [[nodiscard]] std::string LogPath() const;
-        [[nodiscard]] const std::vector<RuntimeLogEntry> &LogEntries() const { return logEntries_; }
 
     private:
         void Note(std::string message);
         void Note(RuntimeLogLevel level, std::string message);
-        [[nodiscard]] bool FlushDiagnostics() const;
+        [[nodiscard]] bool FlushDiagnostics();
         [[nodiscard]] RuntimeSessionStatus RunImpl();
 
         RuntimeSessionConfig config_;
@@ -90,7 +83,6 @@ namespace anduefker::app
         ArtifactResult artifacts_;
         generation::ArtifactProvenance provenance_;
         std::vector<std::string> failures_;
-        std::vector<RuntimeLogEntry> logEntries_;
         std::chrono::steady_clock::time_point started_;
         std::ofstream liveLog_;
         bool liveLogFailed_ = false;

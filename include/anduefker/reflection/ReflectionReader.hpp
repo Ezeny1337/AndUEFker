@@ -70,7 +70,10 @@ namespace anduefker::reflection
                                                       std::vector<std::string> &diagnostics) const;
         void ReadProperties(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
         void ReadFunctionParameters(uintptr_t first, FunctionIR &function, ReflectionStats &stats) const;
-        void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const;
+        [[nodiscard]] FunctionIR *ReadFunction(uintptr_t address, ReflectionIR &ir) const;
+        void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionIR &ir) const;
+        void CloseDelegateSignatures(ReflectionIR &ir) const;
+        void ObserveContainerStorage(const PropertyMetadata &metadata, const TypeReferenceIR &reference) const;
         [[nodiscard]] std::optional<TypeIR> ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const;
         [[nodiscard]] ReflectionIR ReadAttempt(::anduefker::memory::CaptureValidation &validation,
                                                ::anduefker::ir::CaptureInfo::Attempt &details);
@@ -85,5 +88,13 @@ namespace anduefker::reflection
         std::function<void(const std::string &)> progress_;
         std::function<void(const std::string &)> diagnostic_;
         mutable std::map<uintptr_t, ::anduefker::ir::DelegateSignatureObservation> delegateSignatures_;
+        mutable std::vector<uintptr_t> pendingSignatures_;
+        mutable size_t nextSignature_ = 0;
+        mutable std::map<uintptr_t, std::pair<uintptr_t, ::anduefker::ue::FieldChainStatus>> functionChains_;
+        mutable std::unordered_set<uintptr_t> observedContainers_;
+        mutable std::map<std::string, std::unordered_set<uintptr_t>> containerSampleOwners_;
+        mutable std::map<std::string, size_t> containerCandidates_;
+        mutable std::map<std::string, size_t> containerNotObserved_;
+        mutable std::vector<::anduefker::ir::ContainerStorageObservation> containerObservations_;
     };
 } // namespace anduefker::reflection

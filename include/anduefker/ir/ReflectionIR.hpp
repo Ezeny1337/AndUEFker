@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -220,11 +222,33 @@ namespace anduefker::ir
     struct FunctionIR
     {
         uintptr_t address = 0;
-        uintptr_t nativeRva = 0;
-        uintptr_t nativeAddress = 0;
+        uintptr_t outerAddress = 0;
+        std::string outerFullName;
+        std::string outerClass;
+        std::string reflectedClass;
+        uint32_t objectFlags = 0;
+        bool headerReadable = false;
+        bool discoveredFromChildren = false;
+        bool referencedAsSignature = false;
+        uintptr_t execEntry = 0;
+        std::optional<uintptr_t> execEntryRva;
+        std::optional<uintptr_t> nativeExecRva;
+        bool nativeFlag = false;
         bool entryReadable = false;
         bool entryExecutable = false;
         bool entryInModule = false;
+        [[nodiscard]] const char *EntryKind() const
+        {
+            if (!entryReadable)
+                return "unreadable";
+            if (execEntry == 0)
+                return "null";
+            if (!entryExecutable)
+                return nativeFlag ? "native-non-executable" : "non-native-non-executable";
+            if (!entryInModule)
+                return nativeFlag ? "native-external" : "non-native-external";
+            return nativeFlag ? "native-module-exec" : "non-native-module-exec";
+        }
         std::string name;
         std::string fullName;
         uint32_t flags = 0;
@@ -254,7 +278,7 @@ namespace anduefker::ir
         std::string fullName;
         int32_t size = 0;
         std::vector<PropertyIR> properties;
-        std::vector<FunctionIR> functions;
+        std::vector<uintptr_t> functionAddresses;
         std::vector<std::string> layoutConflicts;
         LayoutAnalysisIR layout;
         ParseStatus status = ParseStatus::Complete;
@@ -384,6 +408,39 @@ namespace anduefker::ir
         std::string outerFullName;
         bool outerReadable = false;
         bool exported = false;
+        bool ownerExported = false;
+        bool foundInChildren = false;
+        bool childrenRootReadable = false;
+        uintptr_t childrenRoot = 0;
+        int32_t childrenStatus = -1;
+        std::string definitionStatus = "not-read";
+        std::string discovery = "property-reference";
+    };
+
+    struct ContainerStorageObservation
+    {
+        uintptr_t propertyAddress = 0;
+        uintptr_t ownerAddress = 0;
+        bool ownerIsUObject = false;
+        std::string propertyName;
+        std::string propertyClass;
+        std::string innerClass;
+        std::string valueClass;
+        std::string member;
+        std::string basis;
+        int32_t offset = -1;
+        uintptr_t address = 0;
+        int32_t storageSize = 0;
+        int32_t innerSize = 0;
+        int32_t valueSize = 0;
+        bool readable = false;
+        int32_t readError = 0;
+        size_t requested = 0;
+        size_t transferred = 0;
+        std::optional<bool> sparseShapeConsistent;
+        std::optional<bool> compactShapeConsistent;
+        std::vector<uint8_t> bytes;
+        std::string status;
     };
 
     struct ReflectionIR
@@ -394,6 +451,11 @@ namespace anduefker::ir
         std::vector<std::string> diagnostics;
         std::vector<TypeIR> types;
         std::vector<EnumIR> enums;
+        // Own definitions once per capture attempt; types and properties reference addresses.
+        std::map<uintptr_t, FunctionIR> functions;
         std::vector<DelegateSignatureObservation> delegateSignatures;
+        std::vector<ContainerStorageObservation> containerStorageObservations;
+        std::map<std::string, size_t> containerStorageCandidates;
+        std::map<std::string, size_t> containerStorageNotObserved;
     };
 } // namespace anduefker::ir

@@ -1,7 +1,9 @@
 #include "anduefker/generation/CppTypeResolver.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
+#include <tuple>
 #include <unordered_set>
 
 namespace anduefker::generation
@@ -119,20 +121,36 @@ namespace anduefker::generation
                 info.values.push_back(UniqueName(valueNames, SanitizeIdentifier(value.name, "Value_")));
             result.enums.emplace(enumeration.address, std::move(info));
         }
-        for (const auto &type : reflection.types)
+        std::vector<const ir::FunctionIR *> functions;
+        functions.reserve(reflection.functions.size());
+        for (const auto &[address, function] : reflection.functions)
         {
-            for (const auto &function : type.functions)
+            (void)address;
+            if (function.headerReadable)
+                functions.push_back(&function);
+        }
+        std::sort(functions.begin(), functions.end(), [](const auto *left, const auto *right)
+                  { return std::tie(left->fullName, left->address) < std::tie(right->fullName, right->address); });
+        for (const auto *definition : functions)
+        {
+            const auto &function = *definition;
+            const auto owner = result.types.find(function.outerAddress);
+            const std::string ownerName = owner == result.types.end() ? function.outerFullName : owner->second.name;
+            const std::string stem = SanitizeIdentifier(ownerName + "_" + function.name, "Function_");
+            std::string name = stem;
+            size_t suffix = 0;
+            static constexpr std::array<const char *, 6> endings = {
+                "_Params", "_ParamsSize", "_ExecEntryRva", "_HasExecEntryRva", "_NativeExecRva", "_HasNativeExecRva"};
+            const auto conflicts = [&]
             {
-                const std::string stem = SanitizeIdentifier(result.types.at(type.address).name + "_" + function.name, "Function_");
-                std::string name = stem;
-                size_t suffix = 0;
-                while (used.contains(name + "_Params") || used.contains(name + "_NativeRva") || used.contains(name + "_ParamsSize"))
-                    name = stem + "_" + std::to_string(++suffix);
-                used.insert(name + "_Params");
-                used.insert(name + "_NativeRva");
-                used.insert(name + "_ParamsSize");
-                result.functions.emplace(std::pair{type.address, function.address}, std::move(name));
-            }
+                return std::any_of(endings.begin(), endings.end(), [&](const char *ending)
+                                   { return used.contains(name + ending); });
+            };
+            while (conflicts())
+                name = stem + "_" + std::to_string(++suffix);
+            for (const auto &ending : endings)
+                used.insert(name + ending);
+            result.functions.emplace(function.address, std::move(name));
         }
         return result;
     }

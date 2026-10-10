@@ -25,7 +25,7 @@ namespace anduefker::generation
     {
         std::unordered_map<uintptr_t, CppTypeInfo> types;
         std::unordered_map<uintptr_t, CppEnumInfo> enums;
-        std::map<std::pair<uintptr_t, uintptr_t>, std::string> functions;
+        std::map<uintptr_t, std::string> functions;
     };
 
     struct CppPropertyType

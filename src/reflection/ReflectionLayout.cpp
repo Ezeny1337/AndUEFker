@@ -205,9 +205,12 @@ namespace anduefker::ir
             types.emplace(type.address, &type);
         for (auto &type : reflection.types)
             AnalyzeType(type, types, reflection.stats);
-        for (auto &type : reflection.types)
-            for (auto &function : type.functions)
+        for (auto &[address, function] : reflection.functions)
+        {
+            (void)address;
+            if (function.headerReadable)
                 AnalyzeFunction(function, reflection.stats);
+        }
 
         // A base represented only by offset descriptors cannot provide a native C++
         // extent for a sequential derived declaration. Propagate that representation.

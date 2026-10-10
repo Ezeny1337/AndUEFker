@@ -34,6 +34,9 @@ namespace anduefker::generation
         std::string producerVersion = "unknown";
         std::string runId;
         std::string producerWorktree = "unknown";
+        std::string producerIdentityStatus = "not-reported";
+        std::string producerIdentityQueryResult = "not-reported";
+        std::string producerWorktreeStatus = "not-reported";
         int32_t targetPid = -1;
         uint64_t addressSpaceGeneration = 0;
     };
@@ -65,31 +68,42 @@ namespace anduefker::generation
         [[nodiscard]] ArtifactResult Write() const;
 
     private:
+        struct GenerationOwner
+        {
+            uintptr_t address = 0;
+            std::string fullName;
+            std::string scope;
+            uintptr_t superAddress = 0;
+            std::string superName;
+            int32_t size = 0;
+            int32_t baseSize = -1;
+            int32_t initialCursor = 0;
+        };
         struct LayoutEvent
         {
             std::string severity;
             std::string category;
             std::string message;
-            std::string owner;
             uintptr_t ownerAddress = 0;
-            std::string scope;
-            std::string super;
-            uintptr_t superAddress = 0;
-            int32_t typeSize = 0;
-            int32_t baseSize = -1;
-            int32_t initialCursor = 0;
-            std::string property;
-            uintptr_t propertyAddress = 0;
-            int32_t offset = 0;
-            int32_t elementSize = 0;
-            int32_t arrayDim = 0;
-            int64_t end = 0;
-            int32_t cursor = 0;
-            std::string cursorSource;
+            const PropertyIR *property = nullptr;
             uintptr_t conflictingAddress = 0;
             std::string conflictingProperty;
-            ::anduefker::ir::BoolLayoutIR boolean;
+            int32_t cursor = 0;
+            std::string cursorSource;
             std::string strategy;
+        };
+        struct OpaqueField
+        {
+            uintptr_t ownerAddress = 0;
+            const PropertyIR *property = nullptr;
+            std::string reason;
+            std::string cppFailure;
+            std::string cppType;
+            std::string representation;
+            bool validBounds = false;
+            bool arrayHeaderSizeMatches = false;
+            std::string failurePath;
+            const ::anduefker::ir::TypeReferenceIR *failureNode = nullptr;
         };
         struct GenerationReport
         {
@@ -99,29 +113,31 @@ namespace anduefker::generation
             size_t layoutEvents = 0;
             std::map<std::string, size_t> opaqueReasons;
             std::map<std::pair<std::string, std::string>, size_t> cppRepresentationFailures;
-            std::vector<std::string> opaqueDetails;
             std::function<void(const std::string &)> diagnostic;
-            std::vector<std::string> diagnostics;
+            std::map<uintptr_t, GenerationOwner> owners;
             std::map<std::string, size_t> counts;
+            // Non-owning property views remain valid during the const IR export.
+            std::vector<OpaqueField> opaqueDetails;
             std::vector<LayoutEvent> events;
             [[nodiscard]] ParseStatus Status() const
             {
-                // 不透明容器是有意的描述，而不是缺少字段
+                // Intentional opaque storage is not a missing field.
                 return omittedFields == 0 && layoutWarnings == 0 ? ParseStatus::Complete : ParseStatus::Partial;
             }
+            void RegisterOwner(GenerationOwner owner);
+            void RecordOpaque(OpaqueField field);
             void Warn(LayoutEvent event)
             {
                 event.severity = "error";
                 ++layoutEvents;
                 ++layoutWarnings;
                 Record(event);
-                if (diagnostics.size() < 32)
-                    diagnostics.push_back(event.message);
                 ++counts[event.category];
                 events.push_back(std::move(event));
             }
             void Warn(std::string category, std::string message)
             {
+                RegisterOwner({0, "<generation>", "generation", 0, "", 0, -1, 0});
                 LayoutEvent event;
                 event.category = std::move(category);
                 event.message = std::move(message);
@@ -133,18 +149,8 @@ namespace anduefker::generation
                 event.severity = "info";
                 ++layoutEvents;
                 Record(event);
-                if (diagnostics.size() < 32)
-                    diagnostics.push_back(event.message);
                 ++counts[event.category];
                 events.push_back(std::move(event));
-            }
-            void Info(std::string category, std::string message)
-            {
-                LayoutEvent event;
-                event.category = std::move(category);
-                event.message = std::move(message);
-                event.strategy = "offset-description";
-                Info(std::move(event));
             }
             void Record(const LayoutEvent &event) const;
         };

@@ -4,9 +4,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <limits>
 #include <iomanip>
 #include <sstream>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -14,6 +16,8 @@ namespace anduefker::reflection
 {
     namespace
     {
+        constexpr size_t kMaxFunctionDefinitions = 2 * 1024 * 1024;
+
         std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
         {
             if (offset < 0 || base > UINTPTR_MAX - static_cast<uintptr_t>(offset))
@@ -285,6 +289,14 @@ namespace anduefker::reflection
             semanticMatch = cls && IsFunctionFieldKind(::anduefker::ue::FieldKindFromRuntimeName(*cls, false));
             if (semanticMatch && !delegateSignatures_.contains(result.referencedObject))
             {
+                if (pendingSignatures_.size() >= kMaxFunctionDefinitions)
+                {
+                    semanticMatch = false;
+                    ++stats.failures;
+                    property.diagnostics.push_back("delegate signature worklist budget exhausted: signature=" +
+                                                   std::to_string(result.referencedObject));
+                    break;
+                }
                 ::anduefker::ir::DelegateSignatureObservation observation;
                 observation.address = result.referencedObject;
                 observation.reflectedClass = *cls;
@@ -295,6 +307,7 @@ namespace anduefker::reflection
                 observation.outerClass = outer && *outer != 0 ? objects_.ClassName(*outer).value_or("<unreadable>") : "<none>";
                 observation.outerFullName = outer && *outer != 0 ? objects_.FullName(*outer).value_or("<unreadable>") : "<none>";
                 delegateSignatures_.emplace(observation.address, std::move(observation));
+                pendingSignatures_.push_back(result.referencedObject);
             }
             break;
         }
@@ -324,6 +337,12 @@ namespace anduefker::reflection
                 reason = "object-property-class-metadata-null";
             RecordPropertyDetail(metadata, property, reason);
         }
+        // A validated child header/owner is sufficient for a raw candidate window;
+        // unsupported child semantics must not hide the enclosing container evidence.
+        if (metadata.elementSize > 0 &&
+            (((result.kind == PropertyKind::Array || result.kind == PropertyKind::Set) && result.inner) ||
+             (result.kind == PropertyKind::Map && result.key && result.value)))
+            ObserveContainerStorage(metadata, result);
         path.erase(metadata.address);
         return result;
     }
@@ -477,102 +496,284 @@ namespace anduefker::reflection
             function.status = ParseStatus::Partial;
     }
 
-    void ReflectionReader::ReadFunctions(uintptr_t first, TypeIR &type, ReflectionStats &stats) const
+    FunctionIR *ReflectionReader::ReadFunction(uintptr_t address, ReflectionIR &ir) const
+    {
+        if (const auto found = ir.functions.find(address); found != ir.functions.end())
+            return &found->second;
+        if (address == 0 || ir.functions.size() >= kMaxFunctionDefinitions)
+        {
+            ++ir.stats.failures;
+            ir.diagnostics.push_back("function registry budget or invalid address: address=" + std::to_string(address));
+            return nullptr;
+        }
+        FunctionIR &function = ir.functions.try_emplace(address).first->second;
+        function.address = address;
+        const auto fail = [&](const std::string &reason)
+        {
+            ++ir.stats.failures;
+            function.status = ParseStatus::Failed;
+            function.layoutConflicts.push_back(reason);
+            return &function;
+        };
+        if (memory_.LimitExceeded())
+            return fail("capture observation limit reached before function read");
+
+        const auto field = objects_.UField(address);
+        if (field)
+        {
+            function.name = field->name;
+            function.reflectedClass = field->className;
+            function.fullName = field->className + " " + field->name;
+        }
+        if (!field || !IsFunctionFieldKind(field->kind))
+            return fail("function field header unreadable or not a UFunction");
+        const auto classAddress = objects_.Class(address);
+        const auto outerAddress = objects_.Outer(address);
+        const auto internalIndex = objects_.InternalIndex(address);
+        const auto objectFlags = objects_.Flags(address);
+        if (!classAddress || !outerAddress || !internalIndex || !objectFlags)
+            return fail("function object header unreadable: class_readable=" + std::to_string(classAddress.has_value()) +
+                        " outer_readable=" + std::to_string(outerAddress.has_value()) +
+                        " index_readable=" + std::to_string(internalIndex.has_value()) +
+                        " flags_readable=" + std::to_string(objectFlags.has_value()));
+        function.outerAddress = *outerAddress;
+        function.objectFlags = *objectFlags;
+        const auto fullName = objects_.FullName(address);
+        if (fullName)
+            function.fullName = *fullName;
+        else
+        {
+            ++ir.stats.failures;
+            function.status = ParseStatus::Partial;
+            function.layoutConflicts.push_back("function full name could not be resolved; using field identity");
+        }
+        if (*outerAddress != 0)
+        {
+            function.outerClass = objects_.ClassName(*outerAddress).value_or("<unreadable>");
+            function.outerFullName = objects_.FullName(*outerAddress).value_or("<unreadable>");
+        }
+        if ((*objectFlags & (::anduefker::ue::kRFUnavailableDefinition | ::anduefker::ue::kRFClassDefaultObject)) != 0)
+            return fail("function definition unavailable: object_flags=" + std::to_string(*objectFlags));
+        const auto slot = objects_.Objects().ReadObject(*internalIndex, true);
+        const auto internalFlags = slot.IsValid() ? objects_.Objects().ReadInternalFlags(slot) : std::nullopt;
+        if (!slot.IsValid() || slot.address != address || !internalFlags || (*internalFlags & 0x80000000u) != 0 ||
+            objects_.InternalIndex(address, true) != internalIndex ||
+            objects_.Class(address, true) != classAddress)
+        {
+            ++ir.stats.identityFailures;
+            memory_.Invalidate();
+            return fail("function object identity changed or pending construction: index=" + std::to_string(*internalIndex));
+        }
+        const auto readMember = [&](int32_t offset, auto &value)
+        {
+            const auto member = Add(address, offset);
+            return member && memory_.Read(*member, value);
+        };
+        if (!readMember(schema_.ufunction.functionFlags, function.flags) ||
+            !readMember(schema_.ufunction.numParams, function.headerNumParams) ||
+            !readMember(schema_.ufunction.paramSize, function.headerParamSize) ||
+            !readMember(schema_.ufunction.returnValueOffset, function.returnValueOffset))
+            return fail("function header unreadable: flags_offset=" + std::to_string(schema_.ufunction.functionFlags) +
+                        " count_offset=" + std::to_string(schema_.ufunction.numParams) +
+                        " size_offset=" + std::to_string(schema_.ufunction.paramSize) +
+                        " return_offset=" + std::to_string(schema_.ufunction.returnValueOffset));
+
+        function.headerReadable = true;
+        function.numParams = function.headerNumParams;
+        function.paramSize = function.headerParamSize;
+        function.nativeFlag = (function.flags & ::anduefker::ue::kFUNCNative) != 0;
+        function.entryReadable = readMember(schema_.ufunction.nativeFunction, function.execEntry);
+        function.entryInModule = function.entryReadable && function.execEntry >= moduleBase_ && function.execEntry < moduleEnd_;
+        function.entryExecutable = function.entryReadable && function.execEntry != 0 &&
+                                   memory_.IsExecutable(function.execEntry, sizeof(uintptr_t));
+        if (function.entryInModule)
+            function.execEntryRva = function.execEntry - moduleBase_;
+        if (function.nativeFlag && function.entryInModule && function.entryExecutable)
+            function.nativeExecRva = function.execEntryRva;
+        if (!function.entryReadable || (function.nativeFlag && !function.entryExecutable))
+        {
+            ++ir.stats.failures;
+            function.status = ParseStatus::Partial;
+            function.layoutConflicts.push_back("function exec entry unreadable or invalid: offset=" +
+                                               std::to_string(schema_.ufunction.nativeFunction) +
+                                               " entry=" + std::to_string(function.execEntry) +
+                                               " native_flag=" + std::to_string(function.nativeFlag));
+        }
+        const auto parameters = objects_.StructProperties(address);
+        if (parameters)
+            ReadFunctionParameters(*parameters, function, ir.stats);
+        else
+        {
+            ++ir.stats.failures;
+            function.status = ParseStatus::Partial;
+            function.layoutConflicts.push_back("function parameter chain root unreadable: offset=" +
+                                               std::to_string(schema_.features.useFProperty ? schema_.ustruct.childProperties : schema_.ustruct.children));
+        }
+        ++ir.stats.parsedFunctions;
+        return &function;
+    }
+
+    void ReflectionReader::ReadFunctions(uintptr_t first, TypeIR &type, ReflectionIR &ir) const
     {
         const FieldChainResult chain = objects_.UFieldsWithStatus(first, 65536);
+        functionChains_[type.address] = {first, chain.status};
         if (!chain.Complete())
         {
-            ++stats.failures;
+            ++ir.stats.failures;
             type.status = ParseStatus::Partial;
             type.layoutConflicts.push_back("function field chain status=" + std::to_string(static_cast<int>(chain.status)) +
                                            " root=" + std::to_string(first));
         }
         for (const FieldMetadata &field : chain.fields)
         {
-            if (IsFunctionFieldKind(field.kind))
+            if (!IsFunctionFieldKind(field.kind))
+                continue;
+            FunctionIR *function = ReadFunction(field.address, ir);
+            if (!function)
             {
-                if (memory_.LimitExceeded())
-                {
-                    ++stats.failures;
-                    type.status = ParseStatus::Partial;
-                    type.layoutConflicts.push_back("capture observation limit reached in function chain");
-                    break;
-                }
-                const auto flags = objects_.Flags(field.address);
-                if (!flags || (*flags & (::anduefker::ue::kRFUnavailableDefinition | ::anduefker::ue::kRFClassDefaultObject)) != 0)
-                {
-                    ++stats.failures;
-                    type.layoutConflicts.push_back("function definition is unavailable: function=" + field.name +
-                                                   " address=" + std::to_string(field.address) +
-                                                   " flags=" + (flags ? std::to_string(*flags) : "unreadable"));
-                    continue;
-                }
-                FunctionIR function;
-                function.address = field.address;
-                function.name = field.name;
-                const auto fullName = objects_.FullName(field.address);
-                function.fullName = fullName ? *fullName : field.className + " " + field.name;
-                if (!fullName)
-                {
-                    ++stats.failures;
-                    function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("function full name could not be resolved");
-                }
-                const auto readMember = [&](int32_t offset, auto &value)
-                {
-                    const auto address = Add(field.address, offset);
-                    return address && memory_.Read(*address, value);
-                };
-                if (!readMember(schema_.ufunction.functionFlags, function.flags) ||
-                    !readMember(schema_.ufunction.numParams, function.headerNumParams) ||
-                    !readMember(schema_.ufunction.paramSize, function.headerParamSize) ||
-                    !readMember(schema_.ufunction.returnValueOffset, function.returnValueOffset))
-                {
-                    ++stats.failures;
-                    type.layoutConflicts.push_back("function header unreadable: function=" + field.name +
-                                                   " address=" + std::to_string(field.address));
-                    continue;
-                }
-                function.numParams = function.headerNumParams;
-                function.paramSize = function.headerParamSize;
-                uintptr_t native = 0;
-                function.entryReadable = readMember(schema_.ufunction.nativeFunction, native);
-                function.entryInModule = function.entryReadable && native >= moduleBase_ && native < moduleEnd_;
-                function.entryExecutable = function.entryReadable && native != 0 && memory_.IsExecutable(native, sizeof(uintptr_t));
-                if (!function.entryReadable)
-                {
-                    ++stats.failures;
-                    function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("function native pointer unreadable: address=" +
-                                                       std::to_string(field.address) +
-                                                       " offset=" + std::to_string(schema_.ufunction.nativeFunction));
-                }
-                else if (function.entryInModule && function.entryExecutable)
-                    function.nativeRva = native - moduleBase_;
-                else if ((function.flags & ::anduefker::ue::kFUNCNative) != 0 &&
-                          !function.entryExecutable)
-                {
-                    ++stats.failures;
-                    function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("native function pointer is invalid: pointer=" + std::to_string(native) +
-                                                       " flags=" + std::to_string(function.flags));
-                }
-                function.nativeAddress = native;
-                const auto parameters = objects_.StructProperties(field.address);
-                if (parameters)
-                    ReadFunctionParameters(*parameters, function, stats);
-                else
-                {
-                    ++stats.failures;
-                    function.status = ParseStatus::Partial;
-                    function.layoutConflicts.push_back("function parameter chain root unreadable: address=" +
-                                                       std::to_string(field.address) +
-                                                       " offset=" + std::to_string(schema_.features.useFProperty ? schema_.ustruct.childProperties : schema_.ustruct.children));
-                }
-                type.functions.push_back(std::move(function));
-                ++stats.parsedFunctions;
+                type.status = ParseStatus::Partial;
+                break;
+            }
+            function->discoveredFromChildren = true;
+            type.functionAddresses.push_back(field.address);
+            if (function->status != ParseStatus::Complete)
+                type.status = ParseStatus::Partial;
+            if (function->outerAddress != type.address)
+            {
+                ++ir.stats.failures;
+                type.status = ParseStatus::Partial;
+                type.layoutConflicts.push_back("function Children owner mismatch: address=" + std::to_string(field.address) +
+                                               " actual_outer=" + std::to_string(function->outerAddress));
             }
         }
+    }
+
+    void ReflectionReader::CloseDelegateSignatures(ReflectionIR &ir) const
+    {
+        // Reading a signature can discover more signatures in its parameters. Drain a
+        // bounded worklist, not recursive function reads or a map-order-dependent scan.
+        while (nextSignature_ < pendingSignatures_.size())
+        {
+            FunctionIR *function = ReadFunction(pendingSignatures_[nextSignature_++], ir);
+            if (function)
+                function->referencedAsSignature = true;
+            if (memory_.LimitExceeded())
+                break;
+        }
+    }
+
+    void ReflectionReader::ObserveContainerStorage(const PropertyMetadata &metadata, const TypeReferenceIR &reference) const
+    {
+        if (!observedContainers_.insert(metadata.address).second)
+            return;
+        ++containerCandidates_[metadata.normalizedClassName];
+        if (containerObservations_.size() >= 512)
+        {
+            ++containerNotObserved_[metadata.normalizedClassName + ":global-observation-budget"];
+            return;
+        }
+        const auto *element = reference.kind == PropertyKind::Map ? reference.key.get() : reference.inner.get();
+        const auto *value = reference.value.get();
+        const std::string shape = metadata.normalizedClassName + ":" + std::to_string(metadata.elementSize) +
+                                  ":" + (element ? element->reflectedClass : "none") +
+                                  ":" + std::to_string(element ? element->elementSize : 0) +
+                                  ":" + (value ? value->reflectedClass : "none") +
+                                  ":" + std::to_string(value ? value->elementSize : 0);
+        auto &owners = containerSampleOwners_[shape];
+        // These are discovery observations, not selected ABI fields. Bound both
+        // shape diversity and owner samples; report every omitted observation.
+        if (owners.size() >= 2 || owners.contains(metadata.ownerAddress))
+        {
+            ++containerNotObserved_[metadata.normalizedClassName + ":sample-budget-or-repeated-owner"];
+            return;
+        }
+        owners.insert(metadata.ownerAddress);
+        ::anduefker::ir::ContainerStorageObservation observation;
+        observation.propertyAddress = metadata.address;
+        observation.ownerAddress = metadata.ownerAddress;
+        observation.ownerIsUObject = metadata.ownerIsUObject;
+        observation.propertyName = metadata.name;
+        observation.propertyClass = metadata.normalizedClassName;
+        observation.innerClass = element ? element->reflectedClass : "";
+        observation.valueClass = value ? value->reflectedClass : "";
+        observation.storageSize = metadata.elementSize;
+        observation.innerSize = element ? element->elementSize : 0;
+        observation.valueSize = value ? value->elementSize : 0;
+        int32_t referenceOffset = -1;
+        size_t referenceCount = 1;
+        size_t windowSize = 0;
+        if (reference.kind == PropertyKind::Array)
+        {
+            referenceOffset = schema_.propertySubtypes.arrayInner;
+            observation.member = "ArrayFlags";
+            observation.basis = "after-validated-inner; flag-width=1-or-4; candidate-only";
+            windowSize = 4;
+            if (!schema_.features.useFProperty)
+                observation.status = "not-applicable-to-uproperty";
+        }
+        else if (reference.kind == PropertyKind::Map)
+        {
+            referenceOffset = schema_.propertySubtypes.mapBase;
+            referenceCount = 2;
+            observation.member = "MapLayout-and-possible-MapFlags";
+            observation.basis = "after-validated-key-value; sparse=24 compact=12; flag-width=1-or-4; candidate-only";
+            windowSize = schema_.features.useFProperty ? 28 : 24;
+        }
+        else
+        {
+            referenceOffset = schema_.propertySubtypes.setElement;
+            observation.member = "SetLayout";
+            observation.basis = "after-validated-element; sparse=20 compact=8; candidate-only";
+            windowSize = 20;
+        }
+        const size_t delta = referenceCount * sizeof(uintptr_t);
+        observation.requested = windowSize;
+        if (observation.status.empty() && referenceOffset >= 0 &&
+            static_cast<size_t>(referenceOffset) <= static_cast<size_t>(INT32_MAX) - delta)
+        {
+            observation.offset = referenceOffset + static_cast<int32_t>(delta);
+            const auto address = Add(metadata.address, observation.offset);
+            observation.address = address.value_or(0);
+            if (!address || memory_.LimitExceeded() || !memory_.IsReadable(*address, windowSize))
+                observation.status = "candidate-window-unreadable-or-budget-exhausted";
+            else
+            {
+                observation.bytes.resize(windowSize);
+                const auto read = memory_.ReadBytes(*address, observation.bytes.data(), windowSize);
+                observation.readError = static_cast<int32_t>(read.error);
+                observation.transferred = read.transferred;
+                observation.readable = read.Ok();
+                observation.status = read.Ok() ? "observed-not-selected" : "candidate-read-failed";
+                if (!read.Ok())
+                    observation.bytes.clear();
+            }
+        }
+        else if (observation.status.empty())
+            observation.status = "candidate-offset-unrepresentable";
+        if (observation.readable && reference.kind != PropertyKind::Array)
+        {
+            const auto word = [&](size_t index)
+            {
+                int32_t result = 0;
+                std::memcpy(&result, observation.bytes.data() + index * sizeof(result), sizeof(result));
+                return static_cast<int64_t>(result);
+            };
+            const size_t start = reference.kind == PropertyKind::Map ? 1 : 0;
+            const int64_t valueOffset = start == 1 ? word(0) : 0;
+            const int64_t payloadEnd = start == 1 ? valueOffset + observation.valueSize : observation.innerSize;
+            const bool pairFits = start == 0 || valueOffset >= observation.innerSize;
+            const auto alignmentValid = [](int64_t alignment)
+            {
+                return alignment > 0 && (alignment & (alignment - 1)) == 0;
+            };
+            observation.sparseShapeConsistent =
+                pairFits && word(start) >= payloadEnd && word(start + 1) >= word(start) + 4 &&
+                word(start + 2) >= word(start + 1) + 4 &&
+                alignmentValid(word(start + 3)) && word(start + 4) >= word(start + 2);
+            observation.compactShapeConsistent =
+                pairFits && word(start) >= payloadEnd && alignmentValid(word(start + 1));
+        }
+        containerObservations_.push_back(std::move(observation));
     }
 
     std::optional<TypeIR> ReflectionReader::ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const
@@ -624,15 +825,14 @@ namespace anduefker::reflection
         }
         const auto children = objects_.StructChildren(object);
         if (children)
-            ReadFunctions(*children, type, ir.stats);
+            ReadFunctions(*children, type, ir);
         else
         {
             ++ir.stats.failures;
             type.status = ParseStatus::Partial;
             type.layoutConflicts.push_back("function chain root unreadable");
         }
-        if (!type.layoutConflicts.empty() || std::any_of(type.functions.begin(), type.functions.end(), [](const FunctionIR &function)
-                                                         { return function.status != ParseStatus::Complete; }))
+        if (!type.layoutConflicts.empty())
             type.status = ParseStatus::Partial;
         return type;
     }
@@ -702,15 +902,28 @@ namespace anduefker::reflection
             ::anduefker::memory::CaptureValidation validation;
             ::anduefker::ir::CaptureInfo::Attempt details;
             result = ReadAttempt(validation, details);
-            std::unordered_set<uintptr_t> exportedFunctions;
+            std::unordered_set<uintptr_t> exportedTypes;
             for (const auto &type : result.types)
-                for (const auto &function : type.functions)
-                    exportedFunctions.insert(function.address);
+                exportedTypes.insert(type.address);
             for (auto &[address, observation] : delegateSignatures_)
             {
-                observation.exported = exportedFunctions.contains(address);
+                const auto definition = result.functions.find(address);
+                observation.exported = definition != result.functions.end() && definition->second.headerReadable;
+                observation.ownerExported = exportedTypes.contains(observation.outerAddress);
+                observation.foundInChildren = definition != result.functions.end() && definition->second.discoveredFromChildren;
+                observation.definitionStatus = definition == result.functions.end() ? "not-read" : ParseStatusName(definition->second.status);
+                observation.discovery = observation.foundInChildren ? "children+property-reference" : "property-reference";
+                if (const auto chain = functionChains_.find(observation.outerAddress); chain != functionChains_.end())
+                {
+                    observation.childrenRootReadable = true;
+                    observation.childrenRoot = chain->second.first;
+                    observation.childrenStatus = static_cast<int32_t>(chain->second.second);
+                }
                 result.delegateSignatures.push_back(observation);
             }
+            result.containerStorageObservations = std::move(containerObservations_);
+            result.containerStorageCandidates = containerCandidates_;
+            result.containerStorageNotObserved = containerNotObserved_;
             if (diagnostic_)
             {
                 diagnostic_("reflection_evidence attempt=" + std::to_string(attempt) + " begin");
@@ -790,49 +1003,69 @@ namespace anduefker::reflection
     {
         if (!diagnostic_)
             return;
-        std::map<std::string, size_t> entryKinds;
-        std::map<uintptr_t, size_t> sharedEntries;
-        size_t functions = 0;
-        for (const auto &type : reflection.types)
+        std::unordered_set<uintptr_t> owners;
+        const auto logOwner = [&](uintptr_t address, const std::string &name)
         {
-            for (const auto &function : type.functions)
+            if (owners.insert(address).second)
             {
-                ++functions;
-                const bool isNative = (function.flags & ::anduefker::ue::kFUNCNative) != 0;
-                std::string kind;
-                if (!function.entryReadable)
-                    kind = "unreadable";
-                else if (!function.entryExecutable)
-                    kind = isNative ? "native-non-executable" : "non-native-non-executable";
-                else if (!function.entryInModule)
-                    kind = isNative ? "native-external" : "non-native-external";
-                else
-                    kind = isNative ? "native-module-exec" : "non-native-module-exec";
-                ++entryKinds[kind];
-                if (function.entryReadable && function.entryExecutable)
-                    ++sharedEntries[function.nativeAddress];
+                std::ostringstream line;
+                line << "reflection_owner address=0x" << std::hex << address << " full_name=" << std::quoted(name);
+                diagnostic_(line.str());
             }
+        };
+        std::map<std::string, size_t> entryKinds;
+        using EntryKey = std::tuple<uintptr_t, bool, bool, bool>;
+        std::map<EntryKey, size_t> entryIds;
+        std::map<EntryKey, size_t> entryCounts;
+        for (const auto &[address, function] : reflection.functions)
+        {
+            (void)address;
+            logOwner(function.outerAddress, function.outerFullName);
+            ++entryKinds[function.EntryKind()];
+            const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
+            ++entryCounts[key];
         }
-        diagnostic_("function_entry_summary functions=" + std::to_string(functions));
+        diagnostic_("function_entry_summary definitions=" + std::to_string(reflection.functions.size()) +
+                    " parsed=" + std::to_string(reflection.stats.parsedFunctions) +
+                    " rva_semantics=reflected-exec-entry-not-business-implementation");
         for (const auto &[kind, count] : entryKinds)
             diagnostic_("function_entry_kind kind=" + kind + " count=" + std::to_string(count));
-        for (const auto &[address, count] : sharedEntries)
+        for (const auto &[key, count] : entryCounts)
         {
-            if (address == 0 || count < 2)
-                continue;
-            diagnostic_("function_entry_shared address=" + std::to_string(address) +
-                        " count=" + std::to_string(count));
+            const auto &[entry, readable, executable, inModule] = key;
+            const size_t id = entryIds.size();
+            entryIds.emplace(key, id);
+            std::ostringstream line;
+            line << "exec_entry_context id=" << id << " entry=0x" << std::hex << entry << std::dec
+                 << " readable=" << readable << " executable=" << executable << " in_module=" << inModule
+                 << " functions=" << count;
+            if (inModule)
+                line << " rva=0x" << std::hex << (entry - moduleBase_);
+            diagnostic_(line.str());
         }
         diagnostic_("delegate_signature_summary total=" + std::to_string(reflection.delegateSignatures.size()) +
-                    " exported=" + std::to_string(std::count_if(reflection.delegateSignatures.begin(), reflection.delegateSignatures.end(),
-                                                                  [](const auto &item) { return item.exported; })));
+                    " exported=" + std::to_string(std::count_if(reflection.delegateSignatures.begin(), reflection.delegateSignatures.end(), [](const auto &item)
+                                                                { return item.exported; })));
+        std::map<std::string, size_t> definitionStatuses;
         for (const auto &signature : reflection.delegateSignatures)
-            diagnostic_("delegate_signature address=" + std::to_string(signature.address) +
-                        " full_name=" + signature.fullName + " class=" + signature.reflectedClass +
-                        " outer_address=" + std::to_string(signature.outerAddress) +
-                        " outer_class=" + signature.outerClass + " outer_full_name=" + signature.outerFullName +
-                        " outer_readable=" + std::to_string(signature.outerReadable) +
-                        " exported=" + std::to_string(signature.exported));
+            ++definitionStatuses[signature.definitionStatus];
+        for (const auto &[status, count] : definitionStatuses)
+            diagnostic_("delegate_signature_definition_status status=" + status + " count=" + std::to_string(count));
+        for (const auto &signature : reflection.delegateSignatures)
+        {
+            std::ostringstream line;
+            line << "delegate_signature address=0x" << std::hex << signature.address << " outer=0x" << signature.outerAddress
+                 << " children_root=0x" << signature.childrenRoot << std::dec
+                 << " exported=" << signature.exported << " owner_exported=" << signature.ownerExported
+                 << " found_in_children=" << signature.foundInChildren << " children_root_readable=" << signature.childrenRootReadable
+                 << " children_status=" << signature.childrenStatus << " definition_status=" << signature.definitionStatus
+                 << " discovery=" << signature.discovery;
+            if (!signature.exported)
+                line << " full_name=" << std::quoted(signature.fullName) << " class=" << signature.reflectedClass
+                     << " outer_class=" << signature.outerClass << " outer_full_name=" << std::quoted(signature.outerFullName)
+                     << " outer_readable=" << signature.outerReadable;
+            diagnostic_(line.str());
+        }
         const auto propertyEvidence = [&](const PropertyIR &property, const std::string &owner, uintptr_t ownerAddress, const char *scope)
         {
             for (const auto &message : property.diagnostics)
@@ -881,8 +1114,9 @@ namespace anduefker::reflection
                 --remaining;
                 if (reference.kind == PropertyKind::Delegate || reference.kind == PropertyKind::MulticastDelegate)
                 {
+                    logOwner(ownerAddress, owner);
                     std::ostringstream line;
-                    line << "delegate_reference owner=" << std::quoted(owner) << " scope=" << scope
+                    line << "delegate_reference owner=0x" << std::hex << ownerAddress << std::dec << " scope=" << scope
                          << " root=" << std::quoted(property.name) << " root_address=" << property.address
                          << " path=" << path << " node=" << reference.metadataAddress
                          << " class=" << reference.reflectedClass << " signature=" << reference.referencedObject
@@ -904,33 +1138,60 @@ namespace anduefker::reflection
                 diagnostic_("type_conflict owner=" + type.fullName + " address=" + std::to_string(type.address) + " message=" + message);
             for (const auto &property : type.properties)
                 propertyEvidence(property, type.fullName, type.address, "type-field");
-            for (const auto &function : type.functions)
-            {
-                std::ostringstream line;
-                line << "function_entry function=" << std::quoted(function.fullName) << " owner=" << std::quoted(type.fullName)
-                     << " address=" << function.address << " flags=" << function.flags
-                     << " native_flag=" << ((function.flags & ::anduefker::ue::kFUNCNative) != 0)
-                     << " raw_entry=" << function.nativeAddress << " readable=" << function.entryReadable
-                     << " executable=" << function.entryExecutable << " in_module=" << function.entryInModule
-                     << " module_base=" << moduleBase_ << " module_end=" << moduleEnd_;
-                if (function.entryInModule)
-                    line << " module_rva=" << (function.nativeAddress - moduleBase_);
-                else
-                    line << " module_rva=not-applicable";
-                line << " exported_native_rva=" << function.nativeRva
-                     << " status=" << ::anduefker::ir::ParseStatusName(function.status)
-                     << " header_num_params=" << static_cast<unsigned int>(function.headerNumParams)
-                     << " derived_num_params=" << function.derivedNumParams
-                     << " header_param_size=" << function.headerParamSize << " derived_param_size=" << function.derivedParamSize
-                     << " return_offset=" << function.returnValueOffset;
-                diagnostic_(line.str());
-                for (const auto &message : function.layoutConflicts)
-                    diagnostic_("function_conflict address=" + std::to_string(function.address) + " message=" + message);
-                for (const auto &property : function.parameters)
-                    propertyEvidence(property, function.fullName, function.address, "function-parameter");
-                for (const auto &property : function.locals)
-                    propertyEvidence(property, function.fullName, function.address, "function-local");
-            }
+        }
+        for (const auto &[address, function] : reflection.functions)
+        {
+            const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
+            std::ostringstream line;
+            line << "function_entry address=0x" << std::hex << address << " owner=0x" << function.outerAddress
+                 << " flags=0x" << function.flags << std::dec << " entry_id=" << entryIds.at(key)
+                 << " name=" << std::quoted(function.name) << " class=" << function.reflectedClass
+                 << " native=" << function.nativeFlag << " native_exec_available=" << function.nativeExecRva.has_value()
+                 << " header_readable=" << function.headerReadable
+                 << " params=" << static_cast<unsigned int>(function.headerNumParams) << '/' << function.headerParamSize
+                 << " return=" << function.returnValueOffset
+                 << " consistent=" << function.parameterSemanticsConsistent
+                 << " status=" << ParseStatusName(function.status);
+            if (function.defaultInitializerCount != 0)
+                line << " default_initializers=" << function.defaultInitializerCount;
+            if (!function.parameterSemanticsConsistent)
+                line << " derived_params=" << function.derivedNumParams << '/' << function.derivedParamSize
+                     << " semantics_valid=" << function.parameterSemanticsValid;
+            diagnostic_(line.str());
+            for (const auto &message : function.layoutConflicts)
+                diagnostic_("function_conflict address=" + std::to_string(address) + " message=" + message);
+            for (const auto &property : function.parameters)
+                propertyEvidence(property, function.fullName, address, "function-parameter");
+            for (const auto &property : function.locals)
+                propertyEvidence(property, function.fullName, address, "function-local");
+        }
+        diagnostic_("container_storage_probe abi_selected=0 max_observations=512 max_owners_per_shape=2");
+        for (const auto &[kind, count] : reflection.containerStorageCandidates)
+            diagnostic_("container_storage_candidates class=" + kind + " count=" + std::to_string(count));
+        for (const auto &[reason, count] : reflection.containerStorageNotObserved)
+            diagnostic_("container_storage_not_observed reason=" + reason + " count=" + std::to_string(count));
+        for (const auto &observation : reflection.containerStorageObservations)
+        {
+            std::ostringstream line;
+            line << "container_storage_candidate property=0x" << std::hex << observation.propertyAddress
+                 << " owner=0x" << observation.ownerAddress << " address=0x" << observation.address << std::dec
+                 << " owner_is_uobject=" << observation.ownerIsUObject
+                 << " name=" << std::quoted(observation.propertyName) << " class=" << observation.propertyClass
+                 << " member=" << observation.member << " offset=" << observation.offset
+                 << " storage_size=" << observation.storageSize << " inner_size=" << observation.innerSize
+                 << " inner_class=" << observation.innerClass << " value_size=" << observation.valueSize
+                 << " value_class=" << observation.valueClass << " readable=" << observation.readable
+                 << " read_error=" << observation.readError << " requested=" << observation.requested
+                 << " transferred=" << observation.transferred
+                 << " status=" << observation.status << " basis=" << std::quoted(observation.basis);
+            if (observation.sparseShapeConsistent)
+                line << " sparse_shape_consistent=" << *observation.sparseShapeConsistent;
+            if (observation.compactShapeConsistent)
+                line << " compact_shape_consistent=" << *observation.compactShapeConsistent;
+            line << " bytes=" << std::hex << std::setfill('0');
+            for (uint8_t byte : observation.bytes)
+                line << std::setw(2) << static_cast<unsigned int>(byte);
+            diagnostic_(line.str());
         }
         for (const auto &enumeration : reflection.enums)
             for (const auto &message : enumeration.diagnostics)
@@ -942,6 +1203,14 @@ namespace anduefker::reflection
     {
         ReflectionIR result;
         delegateSignatures_.clear();
+        pendingSignatures_.clear();
+        nextSignature_ = 0;
+        functionChains_.clear();
+        observedContainers_.clear();
+        containerSampleOwners_.clear();
+        containerCandidates_.clear();
+        containerNotObserved_.clear();
+        containerObservations_.clear();
         ::anduefker::memory::CaptureObservationScope observe(memory_);
         if (!objects_.Initialize())
         {
@@ -1004,6 +1273,7 @@ namespace anduefker::reflection
                 details.enumeratedCount = index;
                 if (progress_)
                     progress_("capture: validating observed bytes; enumerated=" + std::to_string(index));
+                CloseDelegateSignatures(result);
                 validation = memory_.Validate();
                 const auto boundary = objects_.RefreshObjectCount();
                 details.countAddress = boundary.countAddress;
@@ -1273,16 +1543,15 @@ namespace anduefker::reflection
                 self(self, *reference.value, depth + 1);
         };
         for (const TypeIR &type : result.types)
-        {
             for (const PropertyIR &property : type.properties)
                 inferEnumType(inferEnumType, property.type, 0);
-            for (const FunctionIR &function : type.functions)
-            {
-                for (const PropertyIR &parameter : function.parameters)
-                    inferEnumType(inferEnumType, parameter.type, 0);
-                for (const PropertyIR &local : function.locals)
-                    inferEnumType(inferEnumType, local.type, 0);
-            }
+        for (const auto &[address, function] : result.functions)
+        {
+            (void)address;
+            for (const PropertyIR &parameter : function.parameters)
+                inferEnumType(inferEnumType, parameter.type, 0);
+            for (const PropertyIR &local : function.locals)
+                inferEnumType(inferEnumType, local.type, 0);
         }
 
         std::unordered_map<std::string, size_t> detailCounts;
@@ -1302,16 +1571,15 @@ namespace anduefker::reflection
             }
         };
         for (const TypeIR &type : result.types)
-        {
             for (const auto &property : type.properties)
                 noteDetails(property, type.fullName, type.address);
-            for (const auto &function : type.functions)
-            {
-                for (const auto &property : function.parameters)
-                    noteDetails(property, function.fullName, function.address);
-                for (const auto &property : function.locals)
-                    noteDetails(property, function.fullName, function.address);
-            }
+        for (const auto &[address, function] : result.functions)
+        {
+            (void)address;
+            for (const auto &property : function.parameters)
+                noteDetails(property, function.fullName, function.address);
+            for (const auto &property : function.locals)
+                noteDetails(property, function.fullName, function.address);
         }
         for (const auto &[reason, count] : detailCounts)
             result.diagnostics.push_back("property detail summary: reason_and_class=" + reason + " total=" + std::to_string(count) +

@@ -83,26 +83,107 @@ namespace anduefker::generation
     {
     }
 
+    void ArtifactWriter::GenerationReport::RegisterOwner(GenerationOwner owner)
+    {
+        const uintptr_t address = owner.address;
+        if (!owners.try_emplace(address, std::move(owner)).second || !diagnostic)
+            return;
+        const auto &context = owners.at(address);
+        std::ostringstream line;
+        line << "sdk_owner address=" << Hex(address) << " full_name=" << std::quoted(context.fullName)
+             << " scope=" << context.scope << " size=" << context.size
+             << " super=" << Hex(context.superAddress) << " base_size=" << context.baseSize
+             << " initial_cursor=" << context.initialCursor;
+        diagnostic(line.str());
+    }
+
     void ArtifactWriter::GenerationReport::Record(const LayoutEvent &event) const
     {
         if (!diagnostic)
             return;
         std::ostringstream line;
-        line << "sdk_layout_event severity=" << event.severity << " category=" << event.category
-             << " scope=" << event.scope << " owner=" << std::quoted(event.owner) << " owner_address=" << Hex(event.ownerAddress)
-             << " type_size=" << event.typeSize << " super=" << std::quoted(event.super) << " super_address=" << Hex(event.superAddress)
-             << " base_size=" << event.baseSize << " initial_cursor=" << event.initialCursor
-             << " property=" << std::quoted(event.property) << " property_address=" << Hex(event.propertyAddress)
-             << " offset=" << event.offset << " element_size=" << event.elementSize << " array_dim=" << event.arrayDim
-             << " end=" << event.end << " conflicting_property=" << std::quoted(event.conflictingProperty)
-             << " conflicting_address=" << Hex(event.conflictingAddress) << " cursor=" << event.cursor
-             << " cursor_source=" << event.cursorSource << " strategy=" << event.strategy
-             << " bool_field_size=" << static_cast<unsigned int>(event.boolean.fieldSize)
-             << " bool_byte_offset=" << static_cast<unsigned int>(event.boolean.byteOffset)
-             << " bool_byte_mask=" << static_cast<unsigned int>(event.boolean.byteMask)
-             << " bool_field_mask=" << static_cast<unsigned int>(event.boolean.fieldMask)
-             << " message=" << std::quoted(event.message);
+        line << "sdk_layout_event owner=" << Hex(event.ownerAddress) << " severity=" << event.severity
+             << " category=" << event.category << " strategy=" << event.strategy
+             << " cursor_source=" << event.cursorSource;
+        if (event.property)
+        {
+            const auto &property = *event.property;
+            line << " property=" << Hex(property.address) << " name=" << std::quoted(property.name)
+                 << " offset=" << property.offset << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim;
+            if (property.type.kind == PropertyKind::Bool)
+                line << " bool=" << static_cast<unsigned int>(property.boolean.fieldSize) << '/'
+                     << static_cast<unsigned int>(property.boolean.byteOffset) << '/'
+                     << static_cast<unsigned int>(property.boolean.byteMask) << '/'
+                     << static_cast<unsigned int>(property.boolean.fieldMask);
+        }
+        if (event.conflictingAddress != 0)
+            line << " conflicting=" << Hex(event.conflictingAddress) << " conflicting_name=" << std::quoted(event.conflictingProperty);
+        if (event.cursorSource != "layout-analysis")
+            line << " cursor=" << event.cursor;
+        if (event.severity == "error")
+            line << " message=" << std::quoted(event.message);
         diagnostic(line.str());
+    }
+
+    void ArtifactWriter::GenerationReport::RecordOpaque(OpaqueField field)
+    {
+        ++opaqueFields;
+        ++opaqueReasons[field.reason];
+        if (field.reason == "no-sized-cpp-representation")
+            ++cppRepresentationFailures[{field.cppFailure, field.property->reflectedClass}];
+        const auto *node = &field.property->type;
+        std::string_view failure = field.cppFailure;
+        field.failurePath = "type";
+        for (size_t depth = 0; depth < 32; ++depth)
+        {
+            const ::anduefker::ir::TypeReferenceIR *next = nullptr;
+            const char *part = nullptr;
+            size_t prefix = 0;
+            if (failure.starts_with("inner:"))
+            {
+                next = node->inner.get();
+                part = ".inner";
+                prefix = 6;
+            }
+            else if (failure.starts_with("key:"))
+            {
+                next = node->key.get();
+                part = ".key";
+                prefix = 4;
+            }
+            else if (failure.starts_with("value:"))
+            {
+                next = node->value.get();
+                part = ".value";
+                prefix = 6;
+            }
+            if (!next)
+                break;
+            node = next;
+            field.failurePath += part;
+            failure.remove_prefix(prefix);
+        }
+        field.failureNode = node;
+        if (diagnostic)
+        {
+            const auto &property = *field.property;
+            std::ostringstream line;
+            line << "sdk_opaque owner=" << Hex(field.ownerAddress) << " property=" << Hex(property.address)
+                 << " name=" << std::quoted(property.name) << " class=" << property.reflectedClass
+                 << " reason=" << field.reason << " cpp_reason=" << std::quoted(field.cppFailure)
+                 << " representation=" << field.representation << " semantics_resolved=" << property.typeDetailsResolved
+                 << " valid_bounds=" << field.validBounds << " offset=" << property.offset
+                 << " element_size=" << property.elementSize << " array_dim=" << property.arrayDim;
+            if (!field.cppType.empty())
+                line << " cpp_type=" << std::quoted(field.cppType);
+            if (property.type.kind == PropertyKind::Array)
+                line << " array_header_size_matches=" << field.arrayHeaderSizeMatches;
+            if (!field.cppFailure.empty())
+                line << " failure_path=" << field.failurePath << " failure_node=" << Hex(node->metadataAddress)
+                     << " failure_class=" << node->reflectedClass << " failure_size=" << node->elementSize;
+            diagnostic(line.str());
+        }
+        opaqueDetails.push_back(std::move(field));
     }
 
     void ArtifactWriter::BasicTypes(std::ostream &stream) const
@@ -155,7 +236,7 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 4,\n";
+        stream << "  \"schema_version\": 5,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
@@ -174,6 +255,9 @@ namespace anduefker::generation
                << "\",\"producer_version\":\"" << EscapeJson(provenance_.producerVersion)
                << "\",\"producer_worktree_at_configure\":\"" << EscapeJson(provenance_.producerWorktree) << '"'
                << ",\"producer_identity_source\":\"cmake-configure\""
+               << ",\"producer_identity_status\":\"" << EscapeJson(provenance_.producerIdentityStatus)
+               << "\",\"producer_identity_query_result\":\"" << EscapeJson(provenance_.producerIdentityQueryResult)
+               << "\",\"producer_worktree_status\":\"" << EscapeJson(provenance_.producerWorktreeStatus) << '"'
                << ",\"run_id\":\"" << EscapeJson(provenance_.runId) << "\",\"target_pid\":" << provenance_.targetPid
                << ",\"address_space_generation\":" << provenance_.addressSpaceGeneration
                << ",\"architecture\":\"" << ArchitectureName(context_.Module().architecture)
@@ -215,7 +299,7 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 4,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 5,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
@@ -264,11 +348,23 @@ namespace anduefker::generation
                    << EscapeJson(key.second) << "\",\"count\":" << count << '}';
         }
         stream << ']';
-        stream << ",\n  \"generation_report\":{\"total\":" << report.layoutEvents
-               << ",\"warnings\":" << report.layoutWarnings
-               << ",\"sample_limit_per_category\":null,\"samples_omitted\":0"
-               << ",\"legacy_messages_omitted\":" << (report.layoutWarnings > report.diagnostics.size() ? report.layoutWarnings - report.diagnostics.size() : 0)
-               << ",\"counts_by_category\":{";
+        stream << ",\n  \"generation_owners\":[";
+        bool firstOwner = true;
+        for (const auto &[address, owner] : report.owners)
+        {
+            if (!firstOwner)
+                stream << ',';
+            firstOwner = false;
+            stream << "{\"address\":\"" << Hex(address) << "\",\"full_name\":\"" << EscapeJson(owner.fullName)
+                   << "\",\"scope\":\"" << EscapeJson(owner.scope) << "\",\"size\":" << owner.size
+                   << ",\"initial_cursor\":" << owner.initialCursor;
+            if (owner.superAddress != 0)
+                stream << ",\"super_address\":\"" << Hex(owner.superAddress)
+                       << "\",\"super_name\":\"" << EscapeJson(owner.superName) << "\",\"base_size\":" << owner.baseSize;
+            stream << '}';
+        }
+        stream << "],\n  \"generation_report\":{\"total\":" << report.layoutEvents
+               << ",\"warnings\":" << report.layoutWarnings << ",\"records_omitted\":0,\"counts_by_category\":{";
         bool firstCategory = true;
         for (const auto &[category, count] : report.counts)
         {
@@ -277,7 +373,7 @@ namespace anduefker::generation
             firstCategory = false;
             stream << '"' << EscapeJson(category) << "\":" << count;
         }
-        stream << "},\"samples\":[";
+        stream << "},\"records\":[";
         for (size_t index = 0; index < report.events.size(); ++index)
         {
             if (index != 0)
@@ -285,43 +381,61 @@ namespace anduefker::generation
             const auto &event = report.events[index];
             stream << "{\"severity\":\"" << EscapeJson(event.severity)
                    << "\",\"category\":\"" << EscapeJson(event.category)
-                   << "\",\"message\":\"" << EscapeJson(event.message)
-                   << "\",\"owner_full_name\":\"" << EscapeJson(event.owner)
-                   << "\",\"owner_address\":\"" << Hex(event.ownerAddress)
-                   << "\",\"scope\":\"" << EscapeJson(event.scope)
-                   << "\",\"super_type\":\"" << EscapeJson(event.super)
-                   << "\",\"super_address\":\"" << Hex(event.superAddress)
-                   << "\",\"type_size\":" << event.typeSize << ",\"base_size\":" << event.baseSize
-                   << ",\"initial_cursor\":" << event.initialCursor
-                   << ",\"property_name\":\"" << EscapeJson(event.property)
-                   << "\",\"property_address\":\"" << Hex(event.propertyAddress)
-                   << "\",\"property_offset\":" << event.offset << ",\"element_size\":" << event.elementSize
-                   << ",\"array_dim\":" << event.arrayDim << ",\"property_end\":" << event.end
-                   << ",\"cursor_before\":" << event.cursor << ",\"cursor_source\":\"" << EscapeJson(event.cursorSource)
-                   << "\",\"conflicting_property\":\"" << EscapeJson(event.conflictingProperty)
-                   << "\",\"conflicting_address\":\"" << Hex(event.conflictingAddress)
-                   << "\",\"bool_layout\":{\"field_size\":" << static_cast<unsigned int>(event.boolean.fieldSize)
-                   << ",\"byte_offset\":" << static_cast<unsigned int>(event.boolean.byteOffset)
-                   << ",\"byte_mask\":" << static_cast<unsigned int>(event.boolean.byteMask)
-                   << ",\"field_mask\":" << static_cast<unsigned int>(event.boolean.fieldMask)
-                   << "},\"emission_strategy\":\"" << EscapeJson(event.strategy) << "\"}";
+                   << "\",\"owner\":\"" << Hex(event.ownerAddress)
+                   << "\",\"cursor_source\":\"" << EscapeJson(event.cursorSource)
+                   << "\",\"emission_strategy\":\"" << EscapeJson(event.strategy) << '"';
+            if (event.severity == "error")
+                stream << ",\"message\":\"" << EscapeJson(event.message) << '"';
+            if (event.property)
+            {
+                const auto &property = *event.property;
+                stream << ",\"property\":\"" << Hex(property.address) << "\",\"name\":\"" << EscapeJson(property.name)
+                       << "\",\"offset\":" << property.offset << ",\"element_size\":" << property.elementSize
+                       << ",\"array_dim\":" << property.arrayDim;
+                if (property.type.kind == PropertyKind::Bool)
+                    stream << ",\"bool_layout\":{\"field_size\":" << static_cast<unsigned int>(property.boolean.fieldSize)
+                           << ",\"byte_offset\":" << static_cast<unsigned int>(property.boolean.byteOffset)
+                           << ",\"byte_mask\":" << static_cast<unsigned int>(property.boolean.byteMask)
+                           << ",\"field_mask\":" << static_cast<unsigned int>(property.boolean.fieldMask) << '}';
+            }
+            if (event.conflictingAddress != 0)
+                stream << ",\"conflicting_address\":\"" << Hex(event.conflictingAddress)
+                       << "\",\"conflicting_name\":\"" << EscapeJson(event.conflictingProperty) << '"';
+            if (event.cursorSource != "layout-analysis")
+                stream << ",\"cursor_before\":" << event.cursor;
+            stream << '}';
         }
-        stream << "]}";
-        stream << ",\n  \"opaque_field_details\":[";
+        stream << "]},\n  \"opaque_fields\":[";
         for (size_t index = 0; index < report.opaqueDetails.size(); ++index)
         {
             if (index != 0)
                 stream << ',';
-            stream << '"' << EscapeJson(report.opaqueDetails[index]) << '"';
+            const auto &field = report.opaqueDetails[index];
+            const auto &property = *field.property;
+            stream << "{\"owner\":\"" << Hex(field.ownerAddress) << "\",\"property\":\"" << Hex(property.address)
+                   << "\",\"name\":\"" << EscapeJson(property.name) << "\",\"class\":\"" << EscapeJson(property.reflectedClass)
+                   << "\",\"offset\":" << property.offset << ",\"element_size\":" << property.elementSize
+                   << ",\"array_dim\":" << property.arrayDim << ",\"reason\":\"" << EscapeJson(field.reason)
+                   << "\",\"representation\":\"" << EscapeJson(field.representation)
+                   << "\",\"semantics_resolved\":" << (property.typeDetailsResolved ? "true" : "false")
+                   << ",\"valid_bounds\":" << (field.validBounds ? "true" : "false");
+            if (!field.cppType.empty())
+                stream << ",\"cpp_type\":\"" << EscapeJson(field.cppType) << '"';
+            if (property.type.kind == PropertyKind::Array)
+                stream << ",\"array_header_size_matches\":" << (field.arrayHeaderSizeMatches ? "true" : "false");
+            if (!field.cppFailure.empty())
+                stream << ",\"cpp_reason\":\"" << EscapeJson(field.cppFailure)
+                       << "\",\"failure_path\":\"" << EscapeJson(field.failurePath)
+                       << "\",\"failure_node\":\"" << Hex(field.failureNode->metadataAddress)
+                       << "\",\"failure_class\":\"" << EscapeJson(field.failureNode->reflectedClass)
+                       << "\",\"failure_size\":" << field.failureNode->elementSize;
+            stream << '}';
         }
-        stream << "],\n  \"generation_diagnostics\":[";
-        for (size_t index = 0; index < report.diagnostics.size(); ++index)
-        {
-            if (index != 0)
-                stream << ',';
-            stream << '"' << EscapeJson(report.diagnostics[index]) << '"';
-        }
-        stream << "],\n";
+        stream << "],\n  \"delegate_signatures\":";
+        WriteDelegateDiagnosticsJson(stream, reflection_);
+        stream << ",\n  \"container_storage_evidence\":";
+        WriteContainerStorageJson(stream, reflection_);
+        stream << ",\n";
         stream << "  \"diagnostics\": [";
         for (size_t index = 0; index < reflection_.diagnostics.size(); ++index)
         {
@@ -345,18 +459,14 @@ namespace anduefker::generation
         }
         stream << "\n  ],\n  \"function_conflicts\": [\n";
         conflictCount = 0;
-        for (const TypeIR &type : reflection_.types)
+        for (const auto &[address, function] : reflection_.functions)
         {
-            for (const FunctionIR &function : type.functions)
+            for (const std::string &conflict : function.layoutConflicts)
             {
-                for (const std::string &conflict : function.layoutConflicts)
-                {
-                    if (conflictCount++ != 0)
-                        stream << ",\n";
-                    stream << "    {\"function\":\"" << EscapeJson(function.fullName) << "\",\"address\":\"" << Hex(function.address)
-                           << "\",\"message\":\""
-                           << EscapeJson(conflict) << "\"}";
-                }
+                if (conflictCount++ != 0)
+                    stream << ",\n";
+                stream << "    {\"function\":\"" << EscapeJson(function.fullName) << "\",\"address\":\"" << Hex(address)
+                       << "\",\"message\":\"" << EscapeJson(conflict) << "\"}";
             }
         }
         stream << "\n  ],\n  \"enum_conflicts\": [\n";
@@ -414,7 +524,6 @@ namespace anduefker::generation
                                      const CppSymbols &symbols,
                                      GenerationReport &report) const
     {
-        size_t &opaqueFields = report.opaqueFields;
         const int32_t size = plan.size;
         const int32_t initialOffset = plan.initialOffset;
         const auto &analysis = function ? function->layout : owner.layout;
@@ -434,53 +543,29 @@ namespace anduefker::generation
                 return "container-internals-not-expanded";
             return "none";
         };
+        const auto registerOwner = [&]
+        {
+            const auto super = function ? symbols.types.end() : symbols.types.find(owner.superAddress);
+            report.RegisterOwner({function ? function->address : owner.address,
+                                  function ? function->fullName : owner.fullName, scope,
+                                  function ? 0 : owner.superAddress,
+                                  super == symbols.types.end() ? "" : super->second.name,
+                                  size, super == symbols.types.end() ? -1 : super->second.size, initialOffset});
+        };
         const auto recordOpaque = [&](const FieldGenerationEntry &entry)
         {
-            ++opaqueFields;
-            const std::string reason = opaqueReasonFor(entry);
-            ++report.opaqueReasons[reason];
-            if (reason == "no-sized-cpp-representation")
-                ++report.cppRepresentationFailures[{entry.cppTypeFailure, entry.property->reflectedClass}];
-            size_t remaining = 256;
-            const auto describeReference = [&](const auto &self, const ::anduefker::ir::TypeReferenceIR *reference,
-                                               const std::string &path, size_t depth) -> std::string
-            {
-                if (reference == nullptr || depth >= 32 || remaining == 0)
-                    return reference == nullptr ? "none" : "depth-limit";
-                --remaining;
-                std::string value = path + "=[class=" + reference->reflectedClass +
-                                    ",size=" + std::to_string(reference->elementSize) +
-                                    ",resolved=" + std::to_string(reference->detailsResolved) +
-                                    ",metadata=" + Hex(reference->metadataAddress) +
-                                    ",owner=" + Hex(reference->immediateOwner) +
-                                    ",owner_is_uobject=" + std::to_string(reference->ownerIsUObject) +
-                                    ",array_dim=" + std::to_string(reference->arrayDim) +
-                                    ",reference=" + Hex(reference->referencedObject) +
-                                    ",secondary=" + Hex(reference->secondaryObject) + "]";
-                if (reference->inner)
-                    value += " " + self(self, reference->inner.get(), path + ".inner", depth + 1);
-                if (reference->key)
-                    value += " " + self(self, reference->key.get(), path + ".key", depth + 1);
-                if (reference->value)
-                    value += " " + self(self, reference->value.get(), path + ".value", depth + 1);
-                return value;
-            };
-            report.opaqueDetails.push_back("sdk_opaque owner=" + (function ? function->fullName : owner.fullName) +
-                                           " owner_address=" + std::to_string(function ? function->address : owner.address) +
-                                           " scope=" + scope + " property=" + entry.property->name +
-                                           " property_address=" + std::to_string(entry.property->address) +
-                                           " class=" + entry.property->reflectedClass + " reason=" + reason +
-                                           " cpp_reason=" + entry.cppTypeFailure +
-                                           " representation=" + (plan.forceOffsetDescription ? "offset-description" : LayoutRepresentationName(analysis.representation)) +
-                                           " semantics_resolved=" + std::to_string(entry.property->typeDetailsResolved) +
-                                           " valid_bounds=" + std::to_string(entry.validBounds) +
-                                           " cpp_type=" + entry.cppType +
-                                           " outer_array_header_size_matches=" + std::to_string(entry.property->type.kind == PropertyKind::Array &&
-                                                                                                  entry.property->elementSize == context_.Module().pointerWidth + 8) +
-                                           " offset=" + std::to_string(entry.property->offset) +
-                                           " element_size=" + std::to_string(entry.property->elementSize) +
-                                           " array_dim=" + std::to_string(entry.property->arrayDim) +
-                                           " " + describeReference(describeReference, &entry.property->type, "type", 0));
+            registerOwner();
+            OpaqueField field;
+            field.ownerAddress = function ? function->address : owner.address;
+            field.property = entry.property;
+            field.reason = opaqueReasonFor(entry);
+            field.cppFailure = entry.cppTypeFailure;
+            field.cppType = entry.cppType;
+            field.representation = plan.forceOffsetDescription ? "offset-description" : LayoutRepresentationName(analysis.representation);
+            field.validBounds = entry.validBounds;
+            field.arrayHeaderSizeMatches = entry.property->type.kind == PropertyKind::Array &&
+                                           entry.property->elementSize == context_.Module().pointerWidth + 8;
+            report.RecordOpaque(std::move(field));
         };
         const auto describe = [&](const FieldGenerationEntry &entry)
         {
@@ -502,36 +587,17 @@ namespace anduefker::generation
         };
         for (const auto &issue : analysis.issues)
         {
+            registerOwner();
             LayoutEvent event;
             event.category = LayoutIssueKindName(issue.kind);
             event.message = issue.message;
-            event.owner = function ? function->fullName : owner.fullName;
             event.ownerAddress = function ? function->address : owner.address;
-            event.scope = scope;
-            event.superAddress = function ? 0 : owner.superAddress;
-            event.typeSize = size;
-            event.initialCursor = initialOffset;
             event.conflictingAddress = issue.conflictingAddress;
             event.cursorSource = "layout-analysis";
-            const auto base = symbols.types.find(event.superAddress);
-            if (!function && base != symbols.types.end())
-            {
-                event.super = base->second.name;
-                event.baseSize = base->second.size;
-            }
             const auto property = std::find_if(plan.fields.begin(), plan.fields.end(), [&](const FieldGenerationEntry &entry)
                                                { return entry.property->address == issue.propertyAddress; });
             if (property != plan.fields.end())
-            {
-                event.property = property->property->name;
-                event.propertyAddress = property->property->address;
-                event.offset = property->property->offset;
-                event.elementSize = property->property->elementSize;
-                event.arrayDim = property->property->arrayDim;
-                event.end = static_cast<int64_t>(property->property->offset) +
-                            static_cast<int64_t>(property->property->elementSize) * property->property->arrayDim;
-                event.boolean = property->property->boolean;
-            }
+                event.property = property->property;
             const auto conflicting = std::find_if(plan.fields.begin(), plan.fields.end(), [&](const FieldGenerationEntry &entry)
                                                   { return entry.property->address == issue.conflictingAddress; });
             if (conflicting != plan.fields.end())
@@ -544,23 +610,13 @@ namespace anduefker::generation
         }
         if (plan.forceOffsetDescription || analysis.representation == LayoutRepresentation::OffsetDescription)
         {
+            registerOwner();
             LayoutEvent event;
             event.category = "offset-description";
             event.message = "fields use explicit offset descriptions; sequential member order is not asserted";
-            event.owner = function ? function->fullName : owner.fullName;
             event.ownerAddress = function ? function->address : owner.address;
-            event.scope = scope;
-            event.superAddress = function ? 0 : owner.superAddress;
-            event.typeSize = size;
-            event.initialCursor = initialOffset;
             event.strategy = "offset-description";
             event.cursorSource = plan.forceOffsetDescription ? "declaration-dependency" : "layout-analysis";
-            const auto base = symbols.types.find(event.superAddress);
-            if (!function && base != symbols.types.end())
-            {
-                event.super = base->second.name;
-                event.baseSize = base->second.size;
-            }
             report.Info(std::move(event));
             stream << "    // Representation: offset-description; reflected order is not asserted.\n";
             stream << "    // Native data size is the reflected type/parameter size; unreflected bytes are not inferred as padding.\n";
@@ -777,19 +833,13 @@ namespace anduefker::generation
             {
                 LayoutEvent event;
                 event.severity = "error";
+                report.RegisterOwner({type.address, type.fullName, "type-fields", type.superAddress,
+                                      base == types.end() ? "" : base->second.name, type.size,
+                                      base == types.end() ? -1 : base->second.size, 0});
                 event.category = "missing-base-extent";
                 event.message = "base size unavailable: " + type.fullName;
-                event.owner = type.fullName;
                 event.ownerAddress = type.address;
-                event.superAddress = type.superAddress;
-                event.typeSize = type.size;
-                event.scope = "type-fields";
                 event.strategy = "offset-description";
-                if (base != types.end())
-                {
-                    event.super = base->second.name;
-                    event.baseSize = base->second.size;
-                }
                 report.Warn(std::move(event));
                 stream << "// Base extent is unavailable or inconsistent; fields use explicit target offsets where required.\n";
             }
@@ -813,23 +863,36 @@ namespace anduefker::generation
         stream << "namespace AndUE\n{\n";
         if (reflection_.stats.parsedFunctions == 0)
             stream << "// No UFunction metadata was resolved in this dump.\n";
-        for (const TypeIR &type : reflection_.types)
+        stream << "// RVAs describe reflected execution entries, not original C++ business implementations.\n";
+        for (const auto &[address, function] : reflection_.functions)
         {
-            for (const FunctionIR &function : type.functions)
+            if (!function.headerReadable)
             {
-                const std::string &functionName = symbols.functions.at({type.address, function.address});
-                stream << "// " << EscapeJson(function.fullName) << " address=" << Hex(function.address)
-                       << " native_address=" << Hex(function.nativeAddress) << " flags=" << Hex(function.flags)
-                       << " status=" << ParseStatusName(function.status) << "\n";
-                stream << "inline constexpr std::uintptr_t " << functionName
-                       << "_NativeRva = " << Hex(function.nativeRva) << ";\n";
-                stream << "inline constexpr std::size_t " << functionName << "_ParamsSize = " << function.paramSize << ";\n";
-                stream << "struct " << functionName << "_Params\n{\n";
-                stream << "    static constexpr std::size_t ReflectedSize = " << function.paramSize << ";\n";
-                const FieldGenerationPlan plan = BuildFieldGenerationPlan(type, &function, function.parameters,
-                                                                          function.paramSize, symbols);
-                WriteFields(stream, type, &function, plan, symbols, report);
+                stream << "// Unavailable function definition: " << EscapeJson(function.fullName)
+                       << " address=" << Hex(address) << "; see reflection.json and diagnostics.json.\n";
+                continue;
             }
+            const std::string &functionName = symbols.functions.at(address);
+            stream << "// " << EscapeJson(function.fullName) << " address=" << Hex(address)
+                   << " exec_entry=" << Hex(function.execEntry) << " flags=" << Hex(function.flags)
+                   << " entry_kind=" << function.EntryKind() << " status=" << ParseStatusName(function.status) << "\n";
+            stream << "inline constexpr bool " << functionName << "_HasExecEntryRva = "
+                   << (function.execEntryRva ? "true" : "false") << ";\n";
+            stream << "inline constexpr TargetAddress " << functionName << "_ExecEntryRva = "
+                   << Hex(function.execEntryRva.value_or(0)) << ";\n";
+            stream << "inline constexpr bool " << functionName << "_HasNativeExecRva = "
+                   << (function.nativeExecRva ? "true" : "false") << ";\n";
+            stream << "inline constexpr TargetAddress " << functionName << "_NativeExecRva = "
+                   << Hex(function.nativeExecRva.value_or(0)) << ";\n";
+            stream << "inline constexpr std::size_t " << functionName << "_ParamsSize = " << function.paramSize << ";\n";
+            stream << "struct " << functionName << "_Params\n{\n";
+            stream << "    static constexpr std::size_t ReflectedSize = " << function.paramSize << ";\n";
+            TypeIR owner;
+            owner.address = function.outerAddress;
+            owner.fullName = function.outerFullName;
+            const FieldGenerationPlan plan = BuildFieldGenerationPlan(owner, &function, function.parameters,
+                                                                      function.paramSize, symbols);
+            WriteFields(stream, owner, &function, plan, symbols, report);
         }
         stream << "}\n";
     }
@@ -1143,27 +1206,12 @@ namespace anduefker::generation
         result.layoutWarnings = report.layoutWarnings;
         for (const auto &[reason, count] : report.opaqueReasons)
             result.generationDiagnostics.push_back("SDK opaque summary: reason=" + reason + " total=" + std::to_string(count));
-        result.generationDiagnostics.insert(result.generationDiagnostics.end(), report.opaqueDetails.begin(), report.opaqueDetails.end());
         for (const auto &[key, count] : report.cppRepresentationFailures)
             result.generationDiagnostics.push_back("SDK C++ representation summary: reason=" + key.first +
                                                    " property_class=" + key.second + " total=" + std::to_string(count));
         for (const auto &[category, count] : report.counts)
             result.generationDiagnostics.push_back("SDK layout summary: category=" + category +
-                                                    " total=" + std::to_string(count));
-        for (const auto &event : report.events)
-        {
-            if (diagnostic_)
-                break;
-            const std::string fieldDetails = event.propertyAddress == 0 ? "" : " property=" + event.property + " property_address=" + Hex(event.propertyAddress) + " offset=" + std::to_string(event.offset) + " end=" + std::to_string(event.end);
-            result.generationDiagnostics.push_back("SDK layout event: severity=" + event.severity +
-                                                   " category=" + event.category + " scope=" + event.scope +
-                                                   " owner=" + event.owner + " owner_address=" + Hex(event.ownerAddress) +
-                                                   " type_size=" + std::to_string(event.typeSize) + fieldDetails +
-                                                   " base_size=" + std::to_string(event.baseSize) +
-                                                   " cursor=" + std::to_string(event.cursor) +
-                                                   " cursor_source=" + event.cursorSource +
-                                                   " strategy=" + event.strategy);
-        }
+                                                   " total=" + std::to_string(count));
         const std::string artifactStem = packageStem + (status == ParseStatus::Partial ? ".partial" : "");
         const std::filesystem::path finalPath = outputRoot_ / artifactStem;
         if (std::filesystem::exists(finalPath, error))

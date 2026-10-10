@@ -165,7 +165,7 @@ The output directory also receives the session log:
 | `BasicTypes.hpp` | Generated SDK primitives and container descriptions. |
 | `Types.hpp` | Reflected Unreal classes and structs with identities and target layout information. |
 | `Enums.hpp` | Reflected enum declarations and values. |
-| `Functions.hpp` | Native function addresses and reflected parameter layouts. |
+| `Functions.hpp` | Reflected execution-entry RVAs and parameter layouts. |
 | `reflection.json` | Detailed reflection IR, including properties, functions, enums, inheritance, and addresses. |
 | `manifest.json` | Artifact status and parsing statistics. |
 | `diagnostics.json` | Reflection diagnostics, conflicts, and failure counters. |
@@ -173,7 +173,7 @@ The output directory also receives the session log:
 
 The generated headers use the `AndUE` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
 
-JSON schema versions are `5` for `reflection.json`, `4` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`.
+JSON schema versions are `6` for `reflection.json`, `5` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`.
 
 ## Common object addresses
 

@@ -117,7 +117,6 @@ namespace anduefker::app
         message = std::move(escaped);
         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_).count();
         message = "[" + std::to_string(elapsedMs) + "] " + message;
-        logEntries_.push_back({level, message});
         if (liveLog_.is_open())
         {
             liveLog_ << '[' << LevelName(level) << "] " << message << '\n';
@@ -135,27 +134,16 @@ namespace anduefker::app
         }
     }
 
-    bool RuntimeSession::FlushDiagnostics() const
+    bool RuntimeSession::FlushDiagnostics()
     {
-        const std::string path = LogPath();
-        if (path.empty())
+        if (LogPath().empty())
             return true;
-        std::error_code error;
-        const std::filesystem::path logPath(path);
-        if (logPath.has_parent_path())
-            std::filesystem::create_directories(logPath.parent_path(), error);
-        if (error)
+        if (!liveLog_.is_open())
             return false;
-        std::ofstream stream(path, std::ios::out | std::ios::trunc);
-        if (!stream.is_open())
-            return false;
-        for (const RuntimeLogEntry &entry : logEntries_)
-            stream << '[' << LevelName(entry.level) << "] " << entry.message << '\n';
-        stream.flush();
-        if (!stream.good())
-            return false;
-        stream.close();
-        return !stream.fail();
+        liveLog_.flush();
+        liveLog_.close();
+        liveLogFailed_ = liveLogFailed_ || liveLog_.fail();
+        return !liveLogFailed_;
     }
 
     RuntimeSessionStatus RuntimeSession::Run()
@@ -189,12 +177,6 @@ namespace anduefker::app
         }
         try
         {
-            if (liveLog_.is_open())
-            {
-                liveLog_.flush();
-                liveLog_.close();
-                liveLogFailed_ = liveLogFailed_ || liveLog_.fail();
-            }
             diagnosticsWritten = FlushDiagnostics();
             if (!diagnosticsWritten)
             {
@@ -207,24 +189,25 @@ namespace anduefker::app
             std::fprintf(stderr, "Runtime log could not be flushed\n");
             status = RuntimeSessionStatus::Failed;
         }
-        if (liveLogFailed_)
-            std::fprintf(stderr, "Live runtime log write failed; final diagnostics rewrite %s\n",
-                         diagnosticsWritten ? "succeeded" : "failed");
         return status;
     }
 
     RuntimeSessionStatus RuntimeSession::RunImpl()
     {
         failures_.clear();
-        logEntries_.clear();
         reflection_ = {};
         artifacts_ = {};
         provenance_ = {};
         provenance_.producerCommit = kProducerCommit;
         provenance_.producerVersion = kProducerVersion;
         provenance_.producerWorktree = kProducerWorktreeAtConfigure;
+        provenance_.producerIdentityStatus = kProducerIdentityStatus;
+        provenance_.producerIdentityQueryResult = kProducerIdentityQueryResult;
+        provenance_.producerWorktreeStatus = kProducerWorktreeStatus;
         provenance_.runId = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            std::chrono::system_clock::now().time_since_epoch()).count()) + "-" +
+                                               std::chrono::system_clock::now().time_since_epoch())
+                                               .count()) +
+                            "-" +
                             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         context_ = RuntimeContext(memory_);
         started_ = std::chrono::steady_clock::now();
@@ -237,6 +220,12 @@ namespace anduefker::app
             if (!error)
                 liveLog_.open(LogPath(), std::ios::out | std::ios::trunc);
             liveLogFailed_ = error || !liveLog_.is_open();
+            if (liveLogFailed_)
+            {
+                failures_.push_back("Runtime log open failed" + (error ? ": " + error.message() : std::string{}));
+                Note(RuntimeLogLevel::Error, failures_.back());
+                return RuntimeSessionStatus::Failed;
+            }
         }
         const auto progress = [&](const std::string &message)
         { Note(message); };
@@ -256,7 +245,11 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Debug, "run_provenance producer_commit=" + provenance_.producerCommit +
                                          " producer_version=" + provenance_.producerVersion +
                                          " producer_worktree_at_configure=" + provenance_.producerWorktree +
+                                         " identity_status=" + provenance_.producerIdentityStatus +
+                                         " identity_query_result=" + provenance_.producerIdentityQueryResult +
+                                         " worktree_status=" + provenance_.producerWorktreeStatus +
                                          " identity_source=cmake-configure run_id=" + provenance_.runId);
+        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=2 owner_contexts=address-keyed exec_entries=context-keyed");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);
@@ -554,7 +547,8 @@ namespace anduefker::app
         const ReadStats beforeReflection = memory_->Stats();
         ReflectionReader reader(*memory_, context_.Binding(), context_.Schema(),
                                 context_.Module().base, context_.Module().end, progress,
-                                [&](const std::string &message) { Note(RuntimeLogLevel::Debug, message); });
+                                [&](const std::string &message)
+                                { Note(RuntimeLogLevel::Debug, message); });
         reflection_ = reader.Read();
         finishStage("reflection");
         const ReadStats afterReflection = memory_->Stats();
@@ -607,7 +601,8 @@ namespace anduefker::app
         {
             provenance_.addressSpaceGeneration = memory_->AddressSpaceGeneration();
             ArtifactWriter writer(context_, reflection_, config_.outputRoot, config_.packageName, provenance_,
-                                  [&](const std::string &message) { Note(RuntimeLogLevel::Debug, message); });
+                                  [&](const std::string &message)
+                                  { Note(RuntimeLogLevel::Debug, message); });
             artifacts_ = writer.Write();
             finishStage("artifact-generation");
             for (const auto &diagnostic : artifacts_.generationDiagnostics)

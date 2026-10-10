@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <iomanip>
+#include <sstream>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -603,7 +605,7 @@ namespace anduefker::ue::schema_probe
                 size_t nulls = 0;
                 size_t unreadable = 0;
                 size_t mismatches = 0;
-                size_t printed = 0;
+                std::ostringstream observations;
                 std::set<uintptr_t> owners;
                 std::set<uintptr_t> rawReferences;
                 std::set<std::string> targetClasses;
@@ -611,7 +613,6 @@ namespace anduefker::ue::schema_probe
                 for (const auto &sample : samples)
                 {
                     uintptr_t rawReference = 0;
-                    const auto physicalAddress = Add(sample.metadata.address, candidate.offset);
                     std::string targetName = "<unobserved>";
                     std::string reason;
                     Observation state = Observation::Unreadable;
@@ -645,21 +646,14 @@ namespace anduefker::ue::schema_probe
                     rawReferences.insert(rawReference);
                     targetClasses.insert(targetName);
                     rejectionReasons.insert(reason);
-                    if (printed++ < 2)
-                    {
-                        report.evidence.push_back("property class candidate observation: member=" + std::string(spec.name) +
-                                                  " offset=" + std::to_string(candidate.offset) +
-                                                  " physical_position=" +
-                                                  (physicalAddress ? std::to_string(*physicalAddress) : "unrepresentable") +
-                                                  " basis=" + candidate.basis +
-                                                  " property=" + std::to_string(sample.metadata.address) +
-                                                  " owner=" + std::to_string(sample.rootOwner) +
-                                                  " raw_reference=" + std::to_string(rawReference) +
-                                                  " target_ffield_class=" + targetName +
-                                                  " state=" + ObservationName(state) +
-                                                  " rejection_reason=" + reason);
-                    }
+                    observations << " {property=0x" << std::hex << sample.metadata.address
+                                 << " owner=0x" << sample.rootOwner << " raw=0x" << rawReference << std::dec
+                                 << " target=" << std::quoted(targetName) << " state=" << ObservationName(state)
+                                 << " reason=" << std::quoted(reason) << '}';
                 }
+                report.evidence.push_back("property class observations: member=" + std::string(spec.name) +
+                                          " offset=" + std::to_string(candidate.offset) + " basis=" + candidate.basis +
+                                          " rows=" + observations.str());
                 const bool valid = matches >= 2 && owners.size() >= 2 && mismatches == 0 && unreadable == 0 &&
                                    !budget.exhausted && !probeMemory.Exhausted();
                 if (valid)
@@ -735,7 +729,7 @@ namespace anduefker::ue::schema_probe
                 size_t nulls = 0;
                 size_t unreadable = 0;
                 size_t mismatches = 0;
-                size_t printed = 0;
+                std::ostringstream observations;
                 std::set<uintptr_t> owners;
                 const auto tailForOffset = std::find_if(tails.begin(), tails.end(), [offset](const PropertyTailCandidate &tail)
                                                         { return tail.completeSize == offset; });
@@ -798,25 +792,16 @@ namespace anduefker::ue::schema_probe
                         }
                     }
 
-                    if (printed++ < 4)
-                    {
-                        report.evidence.push_back("optional candidate: property_address=" + std::to_string(sample.metadata.address) +
-                                                  " owner_address=" + std::to_string(sample.metadata.ownerAddress) +
-                                                  " root_owner_address=" + std::to_string(sample.rootOwner) +
-                                                  " property_class=" + sample.metadata.normalizedClassName +
-                                                  " tail_layout=" + tailLayout + " data_end=" + std::to_string(dataEnd) +
-                                                  " complete_size=" + std::to_string(completeSize) +
-                                                  " candidate_offset=" + std::to_string(offset) +
-                                                  " raw_reference=" + std::to_string(rawReference) +
-                                                  " child_property_address=" + std::to_string(rawReference) +
-                                                  " child_property_name=" + childName +
-                                                  " child_property_class=" + childClass +
-                                                  " child_owner_address=" + std::to_string(childOwner) +
-                                                  " child_owner_is_uobject=" + std::to_string(childOwnerIsUObject) +
-                                                  " match_state=" + matchState +
-                                                  " rejection_reason=" + rejectionReason);
-                    }
+                    observations << " {property=0x" << std::hex << sample.metadata.address
+                                 << " owner=0x" << sample.metadata.ownerAddress << " root_owner=0x" << sample.rootOwner
+                                 << " raw=0x" << rawReference << " child_owner=0x" << childOwner << std::dec
+                                 << " child_owner_is_uobject=" << childOwnerIsUObject
+                                 << " child_name=" << std::quoted(childName) << " child_class=" << std::quoted(childClass)
+                                 << " state=" << matchState << " reason=" << std::quoted(rejectionReason) << '}';
                 }
+                report.evidence.push_back("optional observations: offset=" + std::to_string(offset) +
+                                          " tail_layout=" + tailLayout + " data_end=" + std::to_string(dataEnd) +
+                                          " complete_size=" + std::to_string(completeSize) + " rows=" + observations.str());
 
                 const bool budgetExhausted = budget.exhausted || probeMemory.Exhausted();
                 const bool valid = matches != 0 && nulls == 0 && mismatches == 0 && unreadable == 0 && !budgetExhausted;
@@ -887,7 +872,7 @@ namespace anduefker::ue::schema_probe
                 size_t nulls = 0;
                 size_t unreadable = 0;
                 size_t mismatches = 0;
-                size_t printed = 0;
+                std::ostringstream observations;
                 std::set<uintptr_t> owners;
                 for (const auto &sample : samples)
                 {
@@ -911,15 +896,14 @@ namespace anduefker::ue::schema_probe
                         ++mismatches;
                         break;
                     }
-                    if (printed++ < 2)
-                        report.evidence.push_back("property subtype observation: member=" + std::string(spec.name) +
-                                                  " class=" + sample.metadata.normalizedClassName + " name=" + sample.metadata.name +
-                                                  " sample=" + std::to_string(sample.metadata.address) + " scope=" + sample.scope +
-                                                  " root_owner=" + std::to_string(sample.rootOwner) +
-                                                  " owner=" + std::to_string(sample.metadata.ownerAddress) + " offset=" + std::to_string(offset) +
-                                                  " raw_value=" + std::to_string(first) + " secondary_value=" + std::to_string(second) +
-                                                  " state=" + ObservationName(state));
+                    observations << " {property=0x" << std::hex << sample.metadata.address
+                                 << " owner=0x" << sample.metadata.ownerAddress << " root_owner=0x" << sample.rootOwner
+                                 << " raw=0x" << first << " secondary=0x" << second << std::dec
+                                 << " class=" << sample.metadata.normalizedClassName << " name=" << std::quoted(sample.metadata.name)
+                                 << " scope=" << sample.scope << " state=" << ObservationName(state) << '}';
                 }
+                report.evidence.push_back("property subtype observations: member=" + std::string(spec.name) +
+                                          " offset=" + std::to_string(offset) + " rows=" + observations.str());
                 const size_t positives = matches + (spec.payload == Payload::Byte ? nulls : 0);
                 if (positives >= 2 && owners.size() >= 2 && mismatches == 0 && unreadable == 0 &&
                     (spec.payload != Payload::Byte || matches != 0 || offsets.size() == 1) &&
@@ -930,7 +914,7 @@ namespace anduefker::ue::schema_probe
                                           " matches=" + std::to_string(matches) + " independent_owners=" + std::to_string(owners.size()) +
                                           " null=" + std::to_string(nulls) + " unreadable=" + std::to_string(unreadable) +
                                           " mismatches=" + std::to_string(mismatches) +
-                                          " observation_samples_omitted=" + std::to_string(samples.size() > 2 ? samples.size() - 2 : 0) +
+                                          " observation_samples_omitted=0" +
                                           " read_budget_exhausted=" + std::to_string(budget.exhausted || budget.memory.Exhausted()));
             }
             if (accepted.size() == 1 && !budget.exhausted && !budget.memory.Exhausted())
@@ -1044,7 +1028,8 @@ namespace anduefker::ue::schema_probe
         }
         report.evidence.push_back("property tail selection: accepted_candidates=" + std::to_string(tails.size()) +
                                   " selected_layout=" + std::string(PropertyTailName(schema.features.propertyTailLayout)) +
-                                  " reason=" + (tails.empty() ? "no-validated-tail" : tails.size() == 1 ? "unique-validated-tail" : "multiple-validated-tails") +
+                                  " reason=" + (tails.empty() ? "no-validated-tail" : tails.size() == 1 ? "unique-validated-tail"
+                                                                                                        : "multiple-validated-tails") +
                                   "; subtype candidates remain constrained to validated tails");
         probeMemory.ResetBudget(4 * kMaxReads);
         Budget expansionBudget{probeMemory};

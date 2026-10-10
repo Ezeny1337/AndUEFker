@@ -5,4 +5,7 @@ namespace anduefker::app
     inline constexpr const char *kProducerCommit = "@ANDUEFKER_PRODUCER_COMMIT@";
     inline constexpr const char *kProducerWorktreeAtConfigure = "@ANDUEFKER_PRODUCER_WORKTREE@";
     inline constexpr const char *kProducerVersion = "@PROJECT_VERSION@";
+    inline constexpr const char *kProducerIdentityStatus = "@ANDUEFKER_PRODUCER_IDENTITY_STATUS@";
+    inline constexpr const char *kProducerIdentityQueryResult = "@ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT@";
+    inline constexpr const char *kProducerWorktreeStatus = "@ANDUEFKER_PRODUCER_WORKTREE_STATUS@";
 }

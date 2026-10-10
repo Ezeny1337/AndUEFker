@@ -1,5 +1,7 @@
 #include "anduefker/generation/JsonExport.hpp"
 
+#include <algorithm>
+#include <iomanip>
 #include <iterator>
 #include <map>
 #include <ostream>
@@ -182,6 +184,61 @@ namespace anduefker::generation
             Strings(stream, property.diagnostics);
             stream << '}';
         }
+
+        void Function(std::ostream &stream, const ir::FunctionIR &function)
+        {
+            stream << "{\"address\":\"" << Hex(function.address) << "\",\"name\":\"" << EscapeJson(function.name)
+                   << "\",\"full_name\":\"" << EscapeJson(function.fullName)
+                   << "\",\"class\":\"" << EscapeJson(function.reflectedClass)
+                   << "\",\"outer_address\":\"" << Hex(function.outerAddress)
+                   << "\",\"outer_full_name\":\"" << EscapeJson(function.outerFullName)
+                   << "\",\"outer_class\":\"" << EscapeJson(function.outerClass)
+                   << "\",\"object_flags\":\"" << Hex(function.objectFlags)
+                   << "\",\"header_readable\":" << (function.headerReadable ? "true" : "false")
+                   << ",\"discovered_from_children\":" << (function.discoveredFromChildren ? "true" : "false")
+                   << ",\"referenced_as_signature\":" << (function.referencedAsSignature ? "true" : "false")
+                   << ",\"native_flag\":" << (function.nativeFlag ? "true" : "false")
+                   << ",\"exec_entry\":\"" << Hex(function.execEntry) << "\",\"exec_entry_rva\":";
+            if (function.execEntryRva)
+                stream << '"' << Hex(*function.execEntryRva) << '"';
+            else
+                stream << "null";
+            stream << ",\"native_exec_rva\":";
+            if (function.nativeExecRva)
+                stream << '"' << Hex(*function.nativeExecRva) << '"';
+            else
+                stream << "null";
+            stream << ",\"entry_kind\":\"" << function.EntryKind()
+                   << "\",\"entry_observation\":{\"readable\":" << (function.entryReadable ? "true" : "false")
+                   << ",\"executable\":" << (function.entryExecutable ? "true" : "false")
+                   << ",\"in_module\":" << (function.entryInModule ? "true" : "false") << '}'
+                   << ",\"flags\":\"" << Hex(function.flags) << "\",\"status\":\"" << ir::ParseStatusName(function.status)
+                   << "\",\"num_params\":" << static_cast<unsigned int>(function.numParams) << ",\"param_size\":" << function.paramSize
+                   << ",\"return_value_offset\":" << function.returnValueOffset << ",\"header_num_params\":"
+                   << static_cast<unsigned int>(function.headerNumParams) << ",\"header_param_size\":" << function.headerParamSize
+                   << ",\"derived_num_params\":" << function.derivedNumParams << ",\"derived_param_size\":" << function.derivedParamSize
+                   << ",\"default_initializer_count\":" << function.defaultInitializerCount << ",\"parameter_semantics_valid\":"
+                   << (function.parameterSemanticsValid ? "true" : "false") << ",\"parameter_semantics_consistent\":"
+                   << (function.parameterSemanticsConsistent ? "true" : "false") << ",\"parameters\":[";
+            for (size_t parameter = 0; parameter < function.parameters.size(); ++parameter)
+            {
+                if (parameter != 0)
+                    stream << ',';
+                Property(stream, function.parameters[parameter], &function.layout);
+            }
+            stream << "],\"locals\":[";
+            for (size_t local = 0; local < function.locals.size(); ++local)
+            {
+                if (local != 0)
+                    stream << ',';
+                Property(stream, function.locals[local], &function.layout);
+            }
+            stream << "],\"layout_analysis\":";
+            LayoutAnalysis(stream, function.layout);
+            stream << ",\"layout_conflicts\":";
+            Strings(stream, function.layoutConflicts);
+            stream << '}';
+        }
     } // namespace
 
     void WriteSchemaIdentityJson(std::ostream &stream, const ::anduefker::ue::SchemaIdentity &identity)
@@ -327,31 +384,32 @@ namespace anduefker::generation
         std::vector<Sample> samples;
         size_t total = 0;
         size_t unresolvedRoots = 0;
-        const auto collect = [&](const ir::TypeIR &type, const ir::FunctionIR *function,
+        const auto collect = [&](const ir::TypeIR *type, const ir::FunctionIR *function,
                                  const ir::PropertyIR &property, const char *scope)
         {
             unresolvedRoots += property.typeDetailsResolved ? 0u : 1u;
             for (const auto &detail : property.detailDiagnostics)
             {
                 ++total;
-                if (++counts[detail.reason + ":" + detail.normalizedClass] <= 8)
-                    samples.push_back({&type, function, &property, &detail, scope});
+                ++counts[detail.reason + ":" + detail.normalizedClass];
+                samples.push_back({type, function, &property, &detail, scope});
             }
         };
         for (const auto &type : reflection.types)
         {
             for (const auto &property : type.properties)
-                collect(type, nullptr, property, "type-field");
-            for (const auto &function : type.functions)
-            {
-                for (const auto &property : function.parameters)
-                    collect(type, &function, property, "function-parameter");
-                for (const auto &property : function.locals)
-                    collect(type, &function, property, "function-local");
-            }
+                collect(&type, nullptr, property, "type-field");
+        }
+        for (const auto &[address, function] : reflection.functions)
+        {
+            (void)address;
+            for (const auto &property : function.parameters)
+                collect(nullptr, &function, property, "function-parameter");
+            for (const auto &property : function.locals)
+                collect(nullptr, &function, property, "function-local");
         }
         stream << "{\"unresolved_roots_in_ir\":" << unresolvedRoots << ",\"total\":" << total
-               << ",\"sample_limit_per_reason_and_class\":8,\"samples_omitted\":" << (total - samples.size())
+               << ",\"records_omitted\":0"
                << ",\"counts_by_reason_and_class\":{";
         bool first = true;
         for (const auto &[reason, count] : counts)
@@ -361,7 +419,7 @@ namespace anduefker::generation
             first = false;
             stream << '"' << EscapeJson(reason) << "\":" << count;
         }
-        stream << "},\"samples\":[";
+        stream << "},\"records\":[";
         for (size_t index = 0; index < samples.size(); ++index)
         {
             if (index != 0)
@@ -412,9 +470,110 @@ namespace anduefker::generation
         stream << "]}";
     }
 
+    void WriteDelegateDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection)
+    {
+        const size_t exported = static_cast<size_t>(std::count_if(
+            reflection.delegateSignatures.begin(), reflection.delegateSignatures.end(),
+            [](const auto &signature) { return signature.exported; }));
+        stream << "{\"referenced\":" << reflection.delegateSignatures.size()
+               << ",\"exported\":" << exported << ",\"missing_definitions\":"
+               << (reflection.delegateSignatures.size() - exported) << ",\"counts_by_definition_status\":{";
+        std::map<std::string, size_t> statuses;
+        for (const auto &signature : reflection.delegateSignatures)
+            ++statuses[signature.definitionStatus];
+        bool first = true;
+        for (const auto &[status, count] : statuses)
+        {
+            if (!first)
+                stream << ',';
+            first = false;
+            stream << '"' << EscapeJson(status) << "\":" << count;
+        }
+        stream << "},\"records\":[";
+        for (size_t index = 0; index < reflection.delegateSignatures.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const auto &signature = reflection.delegateSignatures[index];
+            stream << "{\"address\":\"" << Hex(signature.address)
+                   << "\",\"outer\":\"" << Hex(signature.outerAddress)
+                   << "\",\"exported\":" << (signature.exported ? "true" : "false")
+                   << ",\"owner_exported\":" << (signature.ownerExported ? "true" : "false")
+                   << ",\"found_in_children\":" << (signature.foundInChildren ? "true" : "false")
+                   << ",\"children_root_readable\":" << (signature.childrenRootReadable ? "true" : "false")
+                   << ",\"children_status\":" << signature.childrenStatus
+                   << ",\"definition_status\":\"" << EscapeJson(signature.definitionStatus)
+                   << "\",\"discovery\":\"" << EscapeJson(signature.discovery) << '"';
+            if (signature.childrenRootReadable)
+                stream << ",\"children_root\":\"" << Hex(signature.childrenRoot) << '"';
+            if (!signature.exported)
+                stream << ",\"full_name\":\"" << EscapeJson(signature.fullName)
+                       << "\",\"class\":\"" << EscapeJson(signature.reflectedClass)
+                       << "\",\"outer_class\":\"" << EscapeJson(signature.outerClass)
+                       << "\",\"outer_full_name\":\"" << EscapeJson(signature.outerFullName)
+                       << "\",\"outer_readable\":" << (signature.outerReadable ? "true" : "false");
+            stream << '}';
+        }
+        stream << "]}";
+    }
+
+    void WriteContainerStorageJson(std::ostream &stream, const ir::ReflectionIR &reflection)
+    {
+        stream << "{\"abi_selected\":false,\"max_observations\":512,\"max_owners_per_shape\":2,\"candidates_by_class\":{";
+        bool first = true;
+        for (const auto &[kind, count] : reflection.containerStorageCandidates)
+        {
+            if (!first)
+                stream << ',';
+            first = false;
+            stream << '"' << EscapeJson(kind) << "\":" << count;
+        }
+        stream << "},\"not_observed_by_reason\":{";
+        first = true;
+        for (const auto &[reason, count] : reflection.containerStorageNotObserved)
+        {
+            if (!first)
+                stream << ',';
+            first = false;
+            stream << '"' << EscapeJson(reason) << "\":" << count;
+        }
+        stream << "},\"observations\":[";
+        for (size_t index = 0; index < reflection.containerStorageObservations.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const auto &observation = reflection.containerStorageObservations[index];
+            std::ostringstream bytes;
+            bytes << std::hex << std::setfill('0');
+            for (uint8_t byte : observation.bytes)
+                bytes << std::setw(2) << static_cast<unsigned int>(byte);
+            stream << "{\"property\":\"" << Hex(observation.propertyAddress)
+                   << "\",\"owner\":\"" << Hex(observation.ownerAddress)
+                   << "\",\"owner_is_uobject\":" << (observation.ownerIsUObject ? "true" : "false")
+                   << ",\"name\":\"" << EscapeJson(observation.propertyName)
+                   << "\",\"class\":\"" << EscapeJson(observation.propertyClass)
+                   << "\",\"member\":\"" << EscapeJson(observation.member)
+                   << "\",\"basis\":\"" << EscapeJson(observation.basis)
+                   << "\",\"offset\":" << observation.offset << ",\"address\":\"" << Hex(observation.address)
+                   << "\",\"storage_size\":" << observation.storageSize << ",\"inner_size\":" << observation.innerSize
+                   << ",\"inner_class\":\"" << EscapeJson(observation.innerClass)
+                   << "\",\"value_size\":" << observation.valueSize << ",\"value_class\":\"" << EscapeJson(observation.valueClass) << '"'
+                   << ",\"readable\":" << (observation.readable ? "true" : "false")
+                   << ",\"read_error\":" << observation.readError << ",\"requested\":" << observation.requested
+                   << ",\"transferred\":" << observation.transferred
+                   << ",\"status\":\"" << EscapeJson(observation.status) << "\",\"bytes\":\"" << bytes.str() << '"';
+            if (observation.sparseShapeConsistent)
+                stream << ",\"sparse_shape_consistent\":" << (*observation.sparseShapeConsistent ? "true" : "false");
+            if (observation.compactShapeConsistent)
+                stream << ",\"compact_shape_consistent\":" << (*observation.compactShapeConsistent ? "true" : "false");
+            stream << '}';
+        }
+        stream << "]}";
+    }
+
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
     {
-        stream << "{\n\"schema_version\":5,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":6,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"}";
@@ -449,46 +608,24 @@ namespace anduefker::generation
             LayoutAnalysis(stream, type.layout);
             stream << ",\"layout_conflicts\":";
             Strings(stream, type.layoutConflicts);
-            stream << ",\"functions\":[";
-            for (size_t item = 0; item < type.functions.size(); ++item)
+            stream << ",\"function_addresses\":[";
+            for (size_t item = 0; item < type.functionAddresses.size(); ++item)
             {
                 if (item != 0)
                     stream << ',';
-                const auto &function = type.functions[item];
-                stream << "{\"address\":\"" << Hex(function.address) << "\",\"name\":\"" << EscapeJson(function.name)
-                       << "\",\"full_name\":\"" << EscapeJson(function.fullName) << "\",\"native_rva\":\"" << Hex(function.nativeRva)
-                        << "\",\"native_address\":\"" << Hex(function.nativeAddress)
-                        << "\",\"entry_observation\":{\"readable\":" << (function.entryReadable ? "true" : "false")
-                        << ",\"executable\":" << (function.entryExecutable ? "true" : "false")
-                        << ",\"in_module\":" << (function.entryInModule ? "true" : "false") << '}'
-                        << ",\"flags\":\"" << Hex(function.flags) << "\",\"status\":\"" << ir::ParseStatusName(function.status)
-                       << "\",\"num_params\":" << static_cast<unsigned int>(function.numParams) << ",\"param_size\":" << function.paramSize
-                       << ",\"return_value_offset\":" << function.returnValueOffset << ",\"header_num_params\":"
-                       << static_cast<unsigned int>(function.headerNumParams) << ",\"header_param_size\":" << function.headerParamSize
-                       << ",\"derived_num_params\":" << function.derivedNumParams << ",\"derived_param_size\":" << function.derivedParamSize
-                       << ",\"default_initializer_count\":" << function.defaultInitializerCount << ",\"parameter_semantics_valid\":"
-                       << (function.parameterSemanticsValid ? "true" : "false") << ",\"parameter_semantics_consistent\":"
-                       << (function.parameterSemanticsConsistent ? "true" : "false") << ",\"parameters\":[";
-                for (size_t parameter = 0; parameter < function.parameters.size(); ++parameter)
-                {
-                    if (parameter != 0)
-                        stream << ',';
-                    Property(stream, function.parameters[parameter], &function.layout);
-                }
-                stream << "],\"locals\":[";
-                for (size_t local = 0; local < function.locals.size(); ++local)
-                {
-                    if (local != 0)
-                        stream << ',';
-                    Property(stream, function.locals[local], &function.layout);
-                }
-                stream << "],\"layout_analysis\":";
-                LayoutAnalysis(stream, function.layout);
-                stream << ",\"layout_conflicts\":";
-                Strings(stream, function.layoutConflicts);
-                stream << '}';
+                stream << '"' << Hex(type.functionAddresses[item]) << '"';
             }
             stream << "]}";
+        }
+        stream << "\n],\n\"functions\":[\n";
+        bool firstFunction = true;
+        for (const auto &[address, function] : reflection.functions)
+        {
+            (void)address;
+            if (!firstFunction)
+                stream << ",\n";
+            firstFunction = false;
+            Function(stream, function);
         }
         stream << "\n],\n\"enums\":[\n";
         for (size_t index = 0; index < reflection.enums.size(); ++index)
@@ -511,20 +648,10 @@ namespace anduefker::generation
             }
             stream << "]}";
         }
-        stream << "\n],\n\"delegate_signature_observations\":[";
-        for (size_t index = 0; index < reflection.delegateSignatures.size(); ++index)
-        {
-            if (index != 0)
-                stream << ',';
-            const auto &signature = reflection.delegateSignatures[index];
-            stream << "{\"address\":\"" << Hex(signature.address) << "\",\"full_name\":\"" << EscapeJson(signature.fullName)
-                   << "\",\"class\":\"" << EscapeJson(signature.reflectedClass)
-                   << "\",\"outer_address\":\"" << Hex(signature.outerAddress)
-                   << "\",\"outer_class\":\"" << EscapeJson(signature.outerClass)
-                   << "\",\"outer_full_name\":\"" << EscapeJson(signature.outerFullName)
-                   << "\",\"outer_readable\":" << (signature.outerReadable ? "true" : "false")
-                   << ",\"exported\":" << (signature.exported ? "true" : "false") << '}';
-        }
-        stream << "]\n}\n";
+        stream << "\n],\n\"delegate_signatures\":";
+        WriteDelegateDiagnosticsJson(stream, reflection);
+        stream << ",\n\"container_storage_evidence\":";
+        WriteContainerStorageJson(stream, reflection);
+        stream << "\n}\n";
     }
 } // namespace anduefker::generation
