@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdio>
 #include <queue>
+#include <iomanip>
 
 namespace anduefker::generation
 {
@@ -74,9 +75,34 @@ namespace anduefker::generation
     ArtifactWriter::ArtifactWriter(const RuntimeContext &context,
                                    const ReflectionIR &reflection,
                                    std::filesystem::path outputRoot,
-                                   std::string packageName)
-        : context_(context), reflection_(reflection), outputRoot_(std::move(outputRoot)), packageName_(std::move(packageName))
+                                   std::string packageName,
+                                   ArtifactProvenance provenance,
+                                   std::function<void(const std::string &)> diagnostic)
+        : context_(context), reflection_(reflection), outputRoot_(std::move(outputRoot)), packageName_(std::move(packageName)),
+          provenance_(std::move(provenance)), diagnostic_(std::move(diagnostic))
     {
+    }
+
+    void ArtifactWriter::GenerationReport::Record(const LayoutEvent &event) const
+    {
+        if (!diagnostic)
+            return;
+        std::ostringstream line;
+        line << "sdk_layout_event severity=" << event.severity << " category=" << event.category
+             << " scope=" << event.scope << " owner=" << std::quoted(event.owner) << " owner_address=" << Hex(event.ownerAddress)
+             << " type_size=" << event.typeSize << " super=" << std::quoted(event.super) << " super_address=" << Hex(event.superAddress)
+             << " base_size=" << event.baseSize << " initial_cursor=" << event.initialCursor
+             << " property=" << std::quoted(event.property) << " property_address=" << Hex(event.propertyAddress)
+             << " offset=" << event.offset << " element_size=" << event.elementSize << " array_dim=" << event.arrayDim
+             << " end=" << event.end << " conflicting_property=" << std::quoted(event.conflictingProperty)
+             << " conflicting_address=" << Hex(event.conflictingAddress) << " cursor=" << event.cursor
+             << " cursor_source=" << event.cursorSource << " strategy=" << event.strategy
+             << " bool_field_size=" << static_cast<unsigned int>(event.boolean.fieldSize)
+             << " bool_byte_offset=" << static_cast<unsigned int>(event.boolean.byteOffset)
+             << " bool_byte_mask=" << static_cast<unsigned int>(event.boolean.byteMask)
+             << " bool_field_mask=" << static_cast<unsigned int>(event.boolean.fieldMask)
+             << " message=" << std::quoted(event.message);
+        diagnostic(line.str());
     }
 
     void ArtifactWriter::BasicTypes(std::ostream &stream) const
@@ -129,7 +155,7 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 3,\n";
+        stream << "  \"schema_version\": 4,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
@@ -144,6 +170,16 @@ namespace anduefker::generation
         stream << "  \"sdk_status\": \"" << ParseStatusName(report.Status()) << "\",\n";
         stream << "  \"artifact_kind\": \"" << (status == ParseStatus::Partial ? "partial" : "complete") << "\",\n";
         stream << "  \"module\": \"" << EscapeJson(context_.Module().name) << "\",\n";
+        stream << "  \"provenance\":{\"producer_commit\":\"" << EscapeJson(provenance_.producerCommit)
+               << "\",\"producer_version\":\"" << EscapeJson(provenance_.producerVersion)
+               << "\",\"producer_worktree_at_configure\":\"" << EscapeJson(provenance_.producerWorktree) << '"'
+               << ",\"producer_identity_source\":\"cmake-configure\""
+               << ",\"run_id\":\"" << EscapeJson(provenance_.runId) << "\",\"target_pid\":" << provenance_.targetPid
+               << ",\"address_space_generation\":" << provenance_.addressSpaceGeneration
+               << ",\"architecture\":\"" << ArchitectureName(context_.Module().architecture)
+               << "\",\"pointer_width\":" << static_cast<unsigned int>(context_.Module().pointerWidth)
+               << ",\"module_base\":\"" << Hex(context_.Module().base) << "\",\"module_end\":\"" << Hex(context_.Module().end)
+               << "\",\"module_identity\":\"mapped-segments; not a content hash\"},\n";
         stream << "  \"stats\": {\n";
         stream << "    \"object_slots\": " << stats.objectSlots << ",\n";
         stream << "    \"valid_objects\": " << stats.validObjects << ",\n";
@@ -179,7 +215,7 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 3,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 4,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
@@ -230,7 +266,7 @@ namespace anduefker::generation
         stream << ']';
         stream << ",\n  \"generation_report\":{\"total\":" << report.layoutEvents
                << ",\"warnings\":" << report.layoutWarnings
-               << ",\"sample_limit_per_category\":8,\"samples_omitted\":" << (report.layoutEvents > report.events.size() ? report.layoutEvents - report.events.size() : 0)
+               << ",\"sample_limit_per_category\":null,\"samples_omitted\":0"
                << ",\"legacy_messages_omitted\":" << (report.layoutWarnings > report.diagnostics.size() ? report.layoutWarnings - report.diagnostics.size() : 0)
                << ",\"counts_by_category\":{";
         bool firstCategory = true;
@@ -271,7 +307,14 @@ namespace anduefker::generation
                    << "},\"emission_strategy\":\"" << EscapeJson(event.strategy) << "\"}";
         }
         stream << "]}";
-        stream << ",\n  \"generation_diagnostics\":[";
+        stream << ",\n  \"opaque_field_details\":[";
+        for (size_t index = 0; index < report.opaqueDetails.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            stream << '"' << EscapeJson(report.opaqueDetails[index]) << '"';
+        }
+        stream << "],\n  \"generation_diagnostics\":[";
         for (size_t index = 0; index < report.diagnostics.size(); ++index)
         {
             if (index != 0)
@@ -394,9 +437,50 @@ namespace anduefker::generation
         const auto recordOpaque = [&](const FieldGenerationEntry &entry)
         {
             ++opaqueFields;
-            ++report.opaqueReasons[opaqueReasonFor(entry)];
-            if (std::string_view(opaqueReasonFor(entry)) == "no-sized-cpp-representation")
+            const std::string reason = opaqueReasonFor(entry);
+            ++report.opaqueReasons[reason];
+            if (reason == "no-sized-cpp-representation")
                 ++report.cppRepresentationFailures[{entry.cppTypeFailure, entry.property->reflectedClass}];
+            size_t remaining = 256;
+            const auto describeReference = [&](const auto &self, const ::anduefker::ir::TypeReferenceIR *reference,
+                                               const std::string &path, size_t depth) -> std::string
+            {
+                if (reference == nullptr || depth >= 32 || remaining == 0)
+                    return reference == nullptr ? "none" : "depth-limit";
+                --remaining;
+                std::string value = path + "=[class=" + reference->reflectedClass +
+                                    ",size=" + std::to_string(reference->elementSize) +
+                                    ",resolved=" + std::to_string(reference->detailsResolved) +
+                                    ",metadata=" + Hex(reference->metadataAddress) +
+                                    ",owner=" + Hex(reference->immediateOwner) +
+                                    ",owner_is_uobject=" + std::to_string(reference->ownerIsUObject) +
+                                    ",array_dim=" + std::to_string(reference->arrayDim) +
+                                    ",reference=" + Hex(reference->referencedObject) +
+                                    ",secondary=" + Hex(reference->secondaryObject) + "]";
+                if (reference->inner)
+                    value += " " + self(self, reference->inner.get(), path + ".inner", depth + 1);
+                if (reference->key)
+                    value += " " + self(self, reference->key.get(), path + ".key", depth + 1);
+                if (reference->value)
+                    value += " " + self(self, reference->value.get(), path + ".value", depth + 1);
+                return value;
+            };
+            report.opaqueDetails.push_back("sdk_opaque owner=" + (function ? function->fullName : owner.fullName) +
+                                           " owner_address=" + std::to_string(function ? function->address : owner.address) +
+                                           " scope=" + scope + " property=" + entry.property->name +
+                                           " property_address=" + std::to_string(entry.property->address) +
+                                           " class=" + entry.property->reflectedClass + " reason=" + reason +
+                                           " cpp_reason=" + entry.cppTypeFailure +
+                                           " representation=" + (plan.forceOffsetDescription ? "offset-description" : LayoutRepresentationName(analysis.representation)) +
+                                           " semantics_resolved=" + std::to_string(entry.property->typeDetailsResolved) +
+                                           " valid_bounds=" + std::to_string(entry.validBounds) +
+                                           " cpp_type=" + entry.cppType +
+                                           " outer_array_header_size_matches=" + std::to_string(entry.property->type.kind == PropertyKind::Array &&
+                                                                                                  entry.property->elementSize == context_.Module().pointerWidth + 8) +
+                                           " offset=" + std::to_string(entry.property->offset) +
+                                           " element_size=" + std::to_string(entry.property->elementSize) +
+                                           " array_dim=" + std::to_string(entry.property->arrayDim) +
+                                           " " + describeReference(describeReference, &entry.property->type, "type", 0));
         };
         const auto describe = [&](const FieldGenerationEntry &entry)
         {
@@ -992,6 +1076,7 @@ namespace anduefker::generation
         }
         const std::string packageStem = SanitizeIdentifier(packageName_, "Package");
         GenerationReport report;
+        report.diagnostic = diagnostic_;
         const CppSymbols symbols = BuildCppSymbols(reflection_);
         TemporaryDirectory transaction;
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1058,15 +1143,17 @@ namespace anduefker::generation
         result.layoutWarnings = report.layoutWarnings;
         for (const auto &[reason, count] : report.opaqueReasons)
             result.generationDiagnostics.push_back("SDK opaque summary: reason=" + reason + " total=" + std::to_string(count));
+        result.generationDiagnostics.insert(result.generationDiagnostics.end(), report.opaqueDetails.begin(), report.opaqueDetails.end());
         for (const auto &[key, count] : report.cppRepresentationFailures)
             result.generationDiagnostics.push_back("SDK C++ representation summary: reason=" + key.first +
                                                    " property_class=" + key.second + " total=" + std::to_string(count));
         for (const auto &[category, count] : report.counts)
             result.generationDiagnostics.push_back("SDK layout summary: category=" + category +
-                                                   " total=" + std::to_string(count) +
-                                                   " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
+                                                    " total=" + std::to_string(count));
         for (const auto &event : report.events)
         {
+            if (diagnostic_)
+                break;
             const std::string fieldDetails = event.propertyAddress == 0 ? "" : " property=" + event.property + " property_address=" + Hex(event.propertyAddress) + " offset=" + std::to_string(event.offset) + " end=" + std::to_string(event.end);
             result.generationDiagnostics.push_back("SDK layout event: severity=" + event.severity +
                                                    " category=" + event.category + " scope=" + event.scope +

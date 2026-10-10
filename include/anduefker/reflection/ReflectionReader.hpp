@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <unordered_set>
 
 #include "anduefker/ir/ReflectionIR.hpp"
@@ -47,7 +48,8 @@ namespace anduefker::reflection
                          const EngineSchema &schema,
                          uintptr_t moduleBase,
                          uintptr_t moduleEnd,
-                         std::function<void(const std::string &)> progress = {});
+                         std::function<void(const std::string &)> progress = {},
+                         std::function<void(const std::string &)> diagnostic = {});
 
         [[nodiscard]] ReflectionIR Read();
 
@@ -73,6 +75,7 @@ namespace anduefker::reflection
         [[nodiscard]] ReflectionIR ReadAttempt(::anduefker::memory::CaptureValidation &validation,
                                                ::anduefker::ir::CaptureInfo::Attempt &details);
         [[nodiscard]] EnumIR ReadEnum(uintptr_t object, ReflectionStats &stats) const;
+        void LogEvidence(const ReflectionIR &reflection) const;
 
         ::anduefker::memory::CaptureMemorySource memory_;
         const EngineSchema &schema_;
@@ -80,5 +83,7 @@ namespace anduefker::reflection
         uintptr_t moduleEnd_ = 0;
         ObjectModelReader objects_;
         std::function<void(const std::string &)> progress_;
+        std::function<void(const std::string &)> diagnostic_;
+        mutable std::map<uintptr_t, ::anduefker::ir::DelegateSignatureObservation> delegateSignatures_;
     };
 } // namespace anduefker::reflection

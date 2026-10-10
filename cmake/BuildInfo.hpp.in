@@ -1,0 +1,8 @@
+#pragma once
+
+namespace anduefker::app
+{
+    inline constexpr const char *kProducerCommit = "@ANDUEFKER_PRODUCER_COMMIT@";
+    inline constexpr const char *kProducerWorktreeAtConfigure = "@ANDUEFKER_PRODUCER_WORKTREE@";
+    inline constexpr const char *kProducerVersion = "@PROJECT_VERSION@";
+}

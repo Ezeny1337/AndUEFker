@@ -1042,6 +1042,10 @@ namespace anduefker::ue::schema_probe
             schema.property.propertyLinksEnd = tail.linksEnd;
             schema.property.subtypeStart = tail.dataEnd;
         }
+        report.evidence.push_back("property tail selection: accepted_candidates=" + std::to_string(tails.size()) +
+                                  " selected_layout=" + std::string(PropertyTailName(schema.features.propertyTailLayout)) +
+                                  " reason=" + (tails.empty() ? "no-validated-tail" : tails.size() == 1 ? "unique-validated-tail" : "multiple-validated-tails") +
+                                  "; subtype candidates remain constrained to validated tails");
         probeMemory.ResetBudget(4 * kMaxReads);
         Budget expansionBudget{probeMemory};
         expansionBudget.remaining = 4 * kMaxReads;

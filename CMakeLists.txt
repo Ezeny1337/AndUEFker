@@ -14,6 +14,32 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(ANDUEFKER_PRODUCER_COMMIT "unknown")
+set(ANDUEFKER_PRODUCER_WORKTREE "unknown")
+find_package(Git QUIET)
+if(Git_FOUND)
+    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE ANDUEFKER_GIT_RESULT
+        OUTPUT_VARIABLE ANDUEFKER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    if(ANDUEFKER_GIT_RESULT EQUAL 0 AND ANDUEFKER_GIT_COMMIT MATCHES "^[0-9a-fA-F]+$")
+        set(ANDUEFKER_PRODUCER_COMMIT "${ANDUEFKER_GIT_COMMIT}")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            RESULT_VARIABLE ANDUEFKER_GIT_STATUS_RESULT
+            OUTPUT_VARIABLE ANDUEFKER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(ANDUEFKER_GIT_STATUS_RESULT EQUAL 0)
+            if(ANDUEFKER_GIT_STATUS STREQUAL "")
+                set(ANDUEFKER_PRODUCER_WORKTREE "clean")
+            else()
+                set(ANDUEFKER_PRODUCER_WORKTREE "dirty")
+            endif()
+        endif()
+    endif()
+endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/anduefker")
+configure_file(cmake/BuildInfo.hpp.in generated/anduefker/BuildInfo.hpp @ONLY)
+
 option(ANDUEFKER_ENABLE_THINLTO "Enable ThinLTO for native targets" ON)
 option(ANDUEFKER_OPTIMIZE_FOR_SIZE "Use Clang size optimization for native targets" OFF)
 option(ANDUEFKER_FORCE_NDEBUG "Define NDEBUG for all native targets" OFF)
@@ -87,6 +113,8 @@ add_library(anduefker_core STATIC
 target_include_directories(anduefker_core
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
 target_include_directories(anduefker_core SYSTEM PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party"

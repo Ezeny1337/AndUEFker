@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <iosfwd>
 #include <map>
 #include <string>
@@ -27,6 +28,16 @@ namespace anduefker::generation
     using ::anduefker::ir::ReflectionStats;
     using ::anduefker::ir::TypeIR;
 
+    struct ArtifactProvenance
+    {
+        std::string producerCommit = "unknown";
+        std::string producerVersion = "unknown";
+        std::string runId;
+        std::string producerWorktree = "unknown";
+        int32_t targetPid = -1;
+        uint64_t addressSpaceGeneration = 0;
+    };
+
     struct ArtifactResult
     {
         ParseStatus status = ParseStatus::Failed;
@@ -47,7 +58,9 @@ namespace anduefker::generation
         ArtifactWriter(const RuntimeContext &context,
                        const ReflectionIR &reflection,
                        std::filesystem::path outputRoot,
-                       std::string packageName);
+                       std::string packageName,
+                       ArtifactProvenance provenance = {},
+                       std::function<void(const std::string &)> diagnostic = {});
 
         [[nodiscard]] ArtifactResult Write() const;
 
@@ -86,6 +99,8 @@ namespace anduefker::generation
             size_t layoutEvents = 0;
             std::map<std::string, size_t> opaqueReasons;
             std::map<std::pair<std::string, std::string>, size_t> cppRepresentationFailures;
+            std::vector<std::string> opaqueDetails;
+            std::function<void(const std::string &)> diagnostic;
             std::vector<std::string> diagnostics;
             std::map<std::string, size_t> counts;
             std::vector<LayoutEvent> events;
@@ -99,10 +114,11 @@ namespace anduefker::generation
                 event.severity = "error";
                 ++layoutEvents;
                 ++layoutWarnings;
+                Record(event);
                 if (diagnostics.size() < 32)
                     diagnostics.push_back(event.message);
-                if (++counts[event.category] <= 8)
-                    events.push_back(std::move(event));
+                ++counts[event.category];
+                events.push_back(std::move(event));
             }
             void Warn(std::string category, std::string message)
             {
@@ -116,10 +132,11 @@ namespace anduefker::generation
             {
                 event.severity = "info";
                 ++layoutEvents;
+                Record(event);
                 if (diagnostics.size() < 32)
                     diagnostics.push_back(event.message);
-                if (++counts[event.category] <= 8)
-                    events.push_back(std::move(event));
+                ++counts[event.category];
+                events.push_back(std::move(event));
             }
             void Info(std::string category, std::string message)
             {
@@ -129,6 +146,7 @@ namespace anduefker::generation
                 event.strategy = "offset-description";
                 Info(std::move(event));
             }
+            void Record(const LayoutEvent &event) const;
         };
         struct FieldGenerationEntry
         {
@@ -169,5 +187,7 @@ namespace anduefker::generation
         const ReflectionIR &reflection_;
         std::filesystem::path outputRoot_;
         std::string packageName_;
+        ArtifactProvenance provenance_;
+        std::function<void(const std::string &)> diagnostic_;
     };
 } // namespace anduefker::generation

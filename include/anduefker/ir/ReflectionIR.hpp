@@ -133,6 +133,10 @@ namespace anduefker::ir
 
     struct TypeReferenceIR
     {
+        uintptr_t metadataAddress = 0;
+        uintptr_t immediateOwner = 0;
+        bool ownerIsUObject = false;
+        int32_t arrayDim = 0;
         PropertyKind kind = PropertyKind::Unknown;
         std::string reflectedClass;
         uintptr_t referencedObject = 0;
@@ -218,6 +222,9 @@ namespace anduefker::ir
         uintptr_t address = 0;
         uintptr_t nativeRva = 0;
         uintptr_t nativeAddress = 0;
+        bool entryReadable = false;
+        bool entryExecutable = false;
+        bool entryInModule = false;
         std::string name;
         std::string fullName;
         uint32_t flags = 0;
@@ -367,6 +374,18 @@ namespace anduefker::ir
         std::vector<Attempt> history;
     };
 
+    struct DelegateSignatureObservation
+    {
+        uintptr_t address = 0;
+        std::string fullName;
+        std::string reflectedClass;
+        uintptr_t outerAddress = 0;
+        std::string outerClass;
+        std::string outerFullName;
+        bool outerReadable = false;
+        bool exported = false;
+    };
+
     struct ReflectionIR
     {
         ParseStatus status = ParseStatus::Failed;
@@ -375,5 +394,6 @@ namespace anduefker::ir
         std::vector<std::string> diagnostics;
         std::vector<TypeIR> types;
         std::vector<EnumIR> enums;
+        std::vector<DelegateSignatureObservation> delegateSignatures;
     };
 } // namespace anduefker::ir

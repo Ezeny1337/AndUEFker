@@ -88,8 +88,7 @@ namespace anduefker::binding
 
     std::optional<RuntimeBinding> BindingBuilder::Build(const BindingCandidates &candidates,
                                                         const DecodePlan &decode,
-                                                        const std::function<void(const std::string &)> &progress,
-                                                        bool detailedDiagnostics) const
+                                                        const std::function<void(const std::string &)> &progress) const
     {
         const uint64_t generation = memory_.AddressSpaceGeneration();
         const auto objectRoots = ResolveRoots(candidates.objectRoots);
@@ -141,19 +140,21 @@ namespace anduefker::binding
                 progress("binding_name_root root=" + std::to_string(nameRoot) +
                          " candidates=" + std::to_string(group.layouts.size()) +
                          " validated=" + std::to_string(accepted) + " ambiguous=" + std::to_string(accepted > 1));
-                if (detailedDiagnostics)
-                    for (size_t index = 0; index < group.layouts.size(); ++index)
-                    {
-                        const auto &report = group.reports[index];
-                        progress("binding_name_candidate root=" + std::to_string(nameRoot) +
-                                 " index=" + std::to_string(index) + " " + DescribeNameLayout(group.layouts[index].first) +
-                                 " accepted=" + std::to_string(report.accepted) +
-                                 " tested=" + std::to_string(report.tested) + " valid=" + std::to_string(report.valid) +
-                                 " reason=" + (report.failures.empty() ? "validated" : report.failures.front()));
-                        for (const auto &evidence : report.evidence)
-                            progress("binding_name_evidence root=" + std::to_string(nameRoot) +
-                                     " index=" + std::to_string(index) + " " + evidence);
-                    }
+                for (size_t index = 0; index < group.layouts.size(); ++index)
+                {
+                    const auto &report = group.reports[index];
+                    progress("binding_name_candidate root=" + std::to_string(nameRoot) +
+                             " index=" + std::to_string(index) + " " + DescribeNameLayout(group.layouts[index].first) +
+                             " score=" + std::to_string(group.layouts[index].second) +
+                             " accepted=" + std::to_string(report.accepted) +
+                             " tested=" + std::to_string(report.tested) + " valid=" + std::to_string(report.valid));
+                    for (const auto &failure : report.failures)
+                        progress("binding_name_failure root=" + std::to_string(nameRoot) +
+                                 " index=" + std::to_string(index) + " " + failure);
+                    for (const auto &evidence : report.evidence)
+                        progress("binding_name_evidence root=" + std::to_string(nameRoot) +
+                                 " index=" + std::to_string(index) + " " + evidence);
+                }
             }
             discoveredNames.push_back(std::move(group));
         }
@@ -184,6 +185,17 @@ namespace anduefker::binding
             for (const auto &[objectLayout, objectScore] : objectLayouts)
             {
                 const LayoutProbeReport objectReport = objectProbe.Validate(objectRoot, objectLayout, decode);
+                if (progress)
+                {
+                    progress("binding_object_candidate root=" + std::to_string(objectRoot) + " " +
+                             DescribeObjectLayout(objectLayout) + " score=" + std::to_string(objectScore) +
+                             " accepted=" + std::to_string(objectReport.accepted) +
+                             " tested=" + std::to_string(objectReport.tested) + " valid=" + std::to_string(objectReport.valid));
+                    for (const auto &failure : objectReport.failures)
+                        progress("binding_object_failure root=" + std::to_string(objectRoot) + " " + failure);
+                    for (const auto &evidence : objectReport.evidence)
+                        progress("binding_object_evidence root=" + std::to_string(objectRoot) + " " + evidence);
+                }
                 if (!objectReport.accepted)
                     continue;
                 ++acceptedObjectLayouts;
@@ -216,8 +228,14 @@ namespace anduefker::binding
                         {
                             ++semanticRejections;
                             if (progress)
-                                progress("binding_semantics status=rejected reason=" +
-                                         (semantics.failures.empty() ? std::string("insufficient-object-name-evidence") : semantics.failures.front()));
+                            {
+                                progress("binding_semantics status=rejected object_root=" + std::to_string(objectRoot) +
+                                         " name_root=" + std::to_string(nameRoot));
+                                for (const auto &failure : semantics.failures)
+                                    progress("binding_semantics failure=" + failure);
+                                for (const auto &evidence : semantics.evidence)
+                                    progress("binding_semantics evidence=" + evidence);
+                            }
                             continue;
                         }
                         binding.report.evidence.insert(binding.report.evidence.end(), semantics.evidence.begin(), semantics.evidence.end());

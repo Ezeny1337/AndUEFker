@@ -1,6 +1,9 @@
 #pragma once
 
 #include <map>
+#include <functional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "anduefker/memory/MemorySource.hpp"
@@ -38,7 +41,9 @@ namespace anduefker::memory
     class CaptureMemorySource final : public IMemorySource
     {
     public:
-        explicit CaptureMemorySource(IMemorySource &source) : source_(source) {}
+        explicit CaptureMemorySource(IMemorySource &source,
+                                     std::function<void(const std::string &)> diagnostic = {})
+            : source_(source), diagnostic_(std::move(diagnostic)) {}
 
         void Reset() const;
         void Observe(bool enabled) const { observing_ = enabled; }
@@ -66,6 +71,11 @@ namespace anduefker::memory
                 ++readFailures_;
                 if (readFailureSamples_.size() < 16)
                     readFailureSamples_.push_back(read);
+                if (diagnostic_)
+                    diagnostic_("capture_read_failure address=" + std::to_string(read.address) +
+                                " error=" + std::to_string(static_cast<int32_t>(read.error)) +
+                                " requested=" + std::to_string(read.requested) +
+                                " transferred=" + std::to_string(read.transferred));
             }
             return read;
         }
@@ -77,6 +87,7 @@ namespace anduefker::memory
         static constexpr size_t kMaxReadSize = 2048;
 
         IMemorySource &source_;
+        std::function<void(const std::string &)> diagnostic_;
         mutable std::map<uintptr_t, std::vector<uint8_t>> observations_;
         mutable size_t observedBytes_ = 0;
         mutable bool observing_ = false;

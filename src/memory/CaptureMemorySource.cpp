@@ -60,6 +60,11 @@ namespace anduefker::memory
             if (std::memcmp(bytes + newOffset, overlap->second.data() + oldOffset, length) != 0)
             {
                 changedDuringRead_ = true;
+                if (diagnostic_)
+                    diagnostic_("capture_overlap_change address=" + std::to_string(start) +
+                                " size=" + std::to_string(length) +
+                                " previous_range=" + std::to_string(overlap->first) +
+                                " current_range=" + std::to_string(address));
                 if (changesDuringRead_.size() < 8)
                 {
                     const size_t sampleSize = std::min<size_t>(length, 16);
@@ -108,6 +113,13 @@ namespace anduefker::memory
                 ++result.changedRanges;
             else
                 return;
+            if (diagnostic_)
+                diagnostic_("capture_validation_range address=" + std::to_string(address) +
+                            " size=" + std::to_string(bytes.size()) +
+                            " changed=" + std::to_string(read.Ok()) +
+                            " error=" + std::to_string(static_cast<int32_t>(read.error)) +
+                            " requested=" + std::to_string(read.requested) +
+                            " transferred=" + std::to_string(read.transferred));
             if (result.failedAddresses.size() < 8)
                 result.failedAddresses.push_back(address);
             if (result.changes.size() < 8)

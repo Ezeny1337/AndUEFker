@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <iomanip>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -18,6 +20,7 @@ namespace anduefker::reflection
                 return std::nullopt;
             return base + static_cast<uintptr_t>(offset);
         }
+
     } // namespace
 
     ReflectionReader::ReflectionReader(IMemorySource &memory,
@@ -25,13 +28,15 @@ namespace anduefker::reflection
                                        const EngineSchema &schema,
                                        uintptr_t moduleBase,
                                        uintptr_t moduleEnd,
-                                       std::function<void(const std::string &)> progress)
-        : memory_(memory),
+                                       std::function<void(const std::string &)> progress,
+                                       std::function<void(const std::string &)> diagnostic)
+        : memory_(memory, diagnostic),
           schema_(schema),
           moduleBase_(moduleBase),
           moduleEnd_(moduleEnd),
           objects_(memory_, binding, schema),
-          progress_(std::move(progress))
+          progress_(std::move(progress)),
+          diagnostic_(std::move(diagnostic))
     {
     }
 
@@ -167,6 +172,10 @@ namespace anduefker::reflection
                                                         size_t depth, size_t &remaining) const
     {
         TypeReferenceIR result;
+        result.metadataAddress = metadata.address;
+        result.immediateOwner = metadata.ownerAddress;
+        result.ownerIsUObject = metadata.ownerIsUObject;
+        result.arrayDim = metadata.arrayDim;
         result.kind = PropertyKindFromName(metadata.className);
         result.reflectedClass = metadata.className;
         result.elementSize = metadata.elementSize;
@@ -274,6 +283,19 @@ namespace anduefker::reflection
         {
             const auto cls = objects_.ClassName(result.referencedObject);
             semanticMatch = cls && IsFunctionFieldKind(::anduefker::ue::FieldKindFromRuntimeName(*cls, false));
+            if (semanticMatch && !delegateSignatures_.contains(result.referencedObject))
+            {
+                ::anduefker::ir::DelegateSignatureObservation observation;
+                observation.address = result.referencedObject;
+                observation.reflectedClass = *cls;
+                observation.fullName = objects_.FullName(observation.address).value_or("<unreadable>");
+                const auto outer = objects_.Outer(observation.address);
+                observation.outerReadable = outer.has_value();
+                observation.outerAddress = outer.value_or(0);
+                observation.outerClass = outer && *outer != 0 ? objects_.ClassName(*outer).value_or("<unreadable>") : "<none>";
+                observation.outerFullName = outer && *outer != 0 ? objects_.FullName(*outer).value_or("<unreadable>") : "<none>";
+                delegateSignatures_.emplace(observation.address, std::move(observation));
+            }
             break;
         }
         case PropertyKind::Bool:
@@ -514,7 +536,10 @@ namespace anduefker::reflection
                 function.numParams = function.headerNumParams;
                 function.paramSize = function.headerParamSize;
                 uintptr_t native = 0;
-                if (!readMember(schema_.ufunction.nativeFunction, native))
+                function.entryReadable = readMember(schema_.ufunction.nativeFunction, native);
+                function.entryInModule = function.entryReadable && native >= moduleBase_ && native < moduleEnd_;
+                function.entryExecutable = function.entryReadable && native != 0 && memory_.IsExecutable(native, sizeof(uintptr_t));
+                if (!function.entryReadable)
                 {
                     ++stats.failures;
                     function.status = ParseStatus::Partial;
@@ -522,10 +547,10 @@ namespace anduefker::reflection
                                                        std::to_string(field.address) +
                                                        " offset=" + std::to_string(schema_.ufunction.nativeFunction));
                 }
-                else if (native >= moduleBase_ && native < moduleEnd_ && memory_.IsExecutable(native, sizeof(uintptr_t)))
+                else if (function.entryInModule && function.entryExecutable)
                     function.nativeRva = native - moduleBase_;
                 else if ((function.flags & ::anduefker::ue::kFUNCNative) != 0 &&
-                         (native == 0 || !memory_.IsExecutable(native, sizeof(uintptr_t))))
+                          !function.entryExecutable)
                 {
                     ++stats.failures;
                     function.status = ParseStatus::Partial;
@@ -677,6 +702,23 @@ namespace anduefker::reflection
             ::anduefker::memory::CaptureValidation validation;
             ::anduefker::ir::CaptureInfo::Attempt details;
             result = ReadAttempt(validation, details);
+            std::unordered_set<uintptr_t> exportedFunctions;
+            for (const auto &type : result.types)
+                for (const auto &function : type.functions)
+                    exportedFunctions.insert(function.address);
+            for (auto &[address, observation] : delegateSignatures_)
+            {
+                observation.exported = exportedFunctions.contains(address);
+                result.delegateSignatures.push_back(observation);
+            }
+            if (diagnostic_)
+            {
+                diagnostic_("reflection_evidence attempt=" + std::to_string(attempt) + " begin");
+                LogEvidence(result);
+                for (const auto &message : result.diagnostics)
+                    diagnostic_("reflection: " + message);
+                diagnostic_("reflection_evidence attempt=" + std::to_string(attempt) + " end");
+            }
             memory_.CopyReadFailures(validation);
             details.number = attempt;
             details.elapsedMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -744,10 +786,162 @@ namespace anduefker::reflection
         return result;
     }
 
+    void ReflectionReader::LogEvidence(const ReflectionIR &reflection) const
+    {
+        if (!diagnostic_)
+            return;
+        std::map<std::string, size_t> entryKinds;
+        std::map<uintptr_t, size_t> sharedEntries;
+        size_t functions = 0;
+        for (const auto &type : reflection.types)
+        {
+            for (const auto &function : type.functions)
+            {
+                ++functions;
+                const bool isNative = (function.flags & ::anduefker::ue::kFUNCNative) != 0;
+                std::string kind;
+                if (!function.entryReadable)
+                    kind = "unreadable";
+                else if (!function.entryExecutable)
+                    kind = isNative ? "native-non-executable" : "non-native-non-executable";
+                else if (!function.entryInModule)
+                    kind = isNative ? "native-external" : "non-native-external";
+                else
+                    kind = isNative ? "native-module-exec" : "non-native-module-exec";
+                ++entryKinds[kind];
+                if (function.entryReadable && function.entryExecutable)
+                    ++sharedEntries[function.nativeAddress];
+            }
+        }
+        diagnostic_("function_entry_summary functions=" + std::to_string(functions));
+        for (const auto &[kind, count] : entryKinds)
+            diagnostic_("function_entry_kind kind=" + kind + " count=" + std::to_string(count));
+        for (const auto &[address, count] : sharedEntries)
+        {
+            if (address == 0 || count < 2)
+                continue;
+            diagnostic_("function_entry_shared address=" + std::to_string(address) +
+                        " count=" + std::to_string(count));
+        }
+        diagnostic_("delegate_signature_summary total=" + std::to_string(reflection.delegateSignatures.size()) +
+                    " exported=" + std::to_string(std::count_if(reflection.delegateSignatures.begin(), reflection.delegateSignatures.end(),
+                                                                  [](const auto &item) { return item.exported; })));
+        for (const auto &signature : reflection.delegateSignatures)
+            diagnostic_("delegate_signature address=" + std::to_string(signature.address) +
+                        " full_name=" + signature.fullName + " class=" + signature.reflectedClass +
+                        " outer_address=" + std::to_string(signature.outerAddress) +
+                        " outer_class=" + signature.outerClass + " outer_full_name=" + signature.outerFullName +
+                        " outer_readable=" + std::to_string(signature.outerReadable) +
+                        " exported=" + std::to_string(signature.exported));
+        const auto propertyEvidence = [&](const PropertyIR &property, const std::string &owner, uintptr_t ownerAddress, const char *scope)
+        {
+            for (const auto &message : property.diagnostics)
+            {
+                std::ostringstream line;
+                line << "property_diagnostic owner=" << std::quoted(owner) << " owner_address=" << ownerAddress
+                     << " scope=" << scope << " property=" << std::quoted(property.name)
+                     << " address=" << property.address << " message=" << std::quoted(message);
+                diagnostic_(line.str());
+            }
+            for (const auto &detail : property.detailDiagnostics)
+            {
+                std::ostringstream line;
+                line << "property_detail owner=" << std::quoted(owner) << " scope=" << scope
+                     << " root=" << std::quoted(property.name) << " root_address=" << property.address
+                     << " node=" << std::quoted(detail.name) << " address=" << detail.address
+                     << " class=" << std::quoted(detail.reflectedClass) << " class_address=" << detail.classAddress
+                     << " next=" << detail.nextAddress << " immediate_owner=" << detail.immediateOwner
+                     << " owner_is_uobject=" << detail.ownerIsUObject << " header_available=" << detail.headerAvailable
+                     << " reason=" << detail.reason << " status=" << detail.detailsStatus
+                     << " offset=" << detail.offset << " element_size=" << detail.elementSize << " array_dim=" << detail.arrayDim
+                     << " flags=" << detail.flags << " reference=" << detail.referencedAddress << " secondary=" << detail.secondaryAddress
+                     << " reference_class=" << std::quoted(detail.referencedClass) << " secondary_class=" << std::quoted(detail.secondaryClass)
+                     << " object_class_null=" << detail.objectPropertyClassNull
+                     << " object_class_pointer_address=" << detail.objectPropertyClassPointerAddress
+                     << " bool_field_size=" << static_cast<unsigned int>(detail.boolean.fieldSize)
+                     << " bool_byte_offset=" << static_cast<unsigned int>(detail.boolean.byteOffset)
+                     << " bool_byte_mask=" << static_cast<unsigned int>(detail.boolean.byteMask)
+                     << " bool_field_mask=" << static_cast<unsigned int>(detail.boolean.fieldMask);
+                diagnostic_(line.str());
+                for (const auto &read : detail.reads)
+                    diagnostic_("property_detail_read node=" + std::to_string(detail.address) +
+                                " member=" + read.member + " selected_offset=" + std::to_string(read.offset) +
+                                " address=" + std::to_string(read.address) + " raw=" + std::to_string(read.rawValue) +
+                                " error=" + std::to_string(read.error) + " requested=" + std::to_string(read.requested) +
+                                " transferred=" + std::to_string(read.transferred) + " status=" + read.status);
+            }
+            size_t remaining = 256;
+            const auto references = [&](const auto &self, const TypeReferenceIR &reference, const std::string &path, size_t depth) -> void
+            {
+                if (depth >= 32 || remaining == 0)
+                {
+                    diagnostic_("delegate_reference traversal_limit=1 root=" + std::to_string(property.address) + " path=" + path);
+                    return;
+                }
+                --remaining;
+                if (reference.kind == PropertyKind::Delegate || reference.kind == PropertyKind::MulticastDelegate)
+                {
+                    std::ostringstream line;
+                    line << "delegate_reference owner=" << std::quoted(owner) << " scope=" << scope
+                         << " root=" << std::quoted(property.name) << " root_address=" << property.address
+                         << " path=" << path << " node=" << reference.metadataAddress
+                         << " class=" << reference.reflectedClass << " signature=" << reference.referencedObject
+                         << " details_resolved=" << reference.detailsResolved;
+                    diagnostic_(line.str());
+                }
+                if (reference.inner)
+                    self(self, *reference.inner, path + ".inner", depth + 1);
+                if (reference.key)
+                    self(self, *reference.key, path + ".key", depth + 1);
+                if (reference.value)
+                    self(self, *reference.value, path + ".value", depth + 1);
+            };
+            references(references, property.type, "type", 0);
+        };
+        for (const auto &type : reflection.types)
+        {
+            for (const auto &message : type.layoutConflicts)
+                diagnostic_("type_conflict owner=" + type.fullName + " address=" + std::to_string(type.address) + " message=" + message);
+            for (const auto &property : type.properties)
+                propertyEvidence(property, type.fullName, type.address, "type-field");
+            for (const auto &function : type.functions)
+            {
+                std::ostringstream line;
+                line << "function_entry function=" << std::quoted(function.fullName) << " owner=" << std::quoted(type.fullName)
+                     << " address=" << function.address << " flags=" << function.flags
+                     << " native_flag=" << ((function.flags & ::anduefker::ue::kFUNCNative) != 0)
+                     << " raw_entry=" << function.nativeAddress << " readable=" << function.entryReadable
+                     << " executable=" << function.entryExecutable << " in_module=" << function.entryInModule
+                     << " module_base=" << moduleBase_ << " module_end=" << moduleEnd_;
+                if (function.entryInModule)
+                    line << " module_rva=" << (function.nativeAddress - moduleBase_);
+                else
+                    line << " module_rva=not-applicable";
+                line << " exported_native_rva=" << function.nativeRva
+                     << " status=" << ::anduefker::ir::ParseStatusName(function.status)
+                     << " header_num_params=" << static_cast<unsigned int>(function.headerNumParams)
+                     << " derived_num_params=" << function.derivedNumParams
+                     << " header_param_size=" << function.headerParamSize << " derived_param_size=" << function.derivedParamSize
+                     << " return_offset=" << function.returnValueOffset;
+                diagnostic_(line.str());
+                for (const auto &message : function.layoutConflicts)
+                    diagnostic_("function_conflict address=" + std::to_string(function.address) + " message=" + message);
+                for (const auto &property : function.parameters)
+                    propertyEvidence(property, function.fullName, function.address, "function-parameter");
+                for (const auto &property : function.locals)
+                    propertyEvidence(property, function.fullName, function.address, "function-local");
+            }
+        }
+        for (const auto &enumeration : reflection.enums)
+            for (const auto &message : enumeration.diagnostics)
+                diagnostic_("enum_diagnostic owner=" + enumeration.fullName + " address=" + std::to_string(enumeration.address) + " message=" + message);
+    }
+
     ReflectionIR ReflectionReader::ReadAttempt(::anduefker::memory::CaptureValidation &validation,
                                                ::anduefker::ir::CaptureInfo::Attempt &details)
     {
         ReflectionIR result;
+        delegateSignatures_.clear();
         ::anduefker::memory::CaptureObservationScope observe(memory_);
         if (!objects_.Initialize())
         {
@@ -773,6 +967,8 @@ namespace anduefker::reflection
         constexpr int32_t maxObjectSamplesPerReason = 8;
         const auto recordObjectDiagnostic = [&](int32_t count, const auto &message)
         {
+            if (diagnostic_)
+                diagnostic_(message());
             if (count <= maxObjectSamplesPerReason)
                 result.diagnostics.push_back(message());
             else
@@ -794,6 +990,9 @@ namespace anduefker::reflection
         const auto recordFailure = [&](const std::string &reason, int32_t index, uintptr_t address)
         {
             const size_t count = ++failureReasons[reason];
+            if (diagnostic_)
+                diagnostic_("reflection_object_failure reason=" + reason +
+                            " index=" + std::to_string(index) + " address=" + std::to_string(address));
             if (count <= 8)
                 result.diagnostics.push_back("reflection object failure: reason=" + reason +
                                              " index=" + std::to_string(index) + " address=" + std::to_string(address));

@@ -1,4 +1,5 @@
 #include "anduefker/app/RuntimeSession.hpp"
+#include "anduefker/BuildInfo.hpp"
 
 #include <KittyMemoryEx.hpp>
 
@@ -98,6 +99,22 @@ namespace anduefker::app
 
     void RuntimeSession::Note(RuntimeLogLevel level, std::string message)
     {
+        // Keep target metadata on one physical log line without hiding control bytes.
+        std::string escaped;
+        escaped.reserve(message.size());
+        static constexpr char hex[] = "0123456789ABCDEF";
+        for (const unsigned char ch : message)
+        {
+            if (ch < 0x20 || ch == 0x7f)
+            {
+                escaped += "\\x";
+                escaped += hex[ch >> 4];
+                escaped += hex[ch & 15];
+            }
+            else
+                escaped += static_cast<char>(ch);
+        }
+        message = std::move(escaped);
         const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started_).count();
         message = "[" + std::to_string(elapsedMs) + "] " + message;
         logEntries_.push_back({level, message});
@@ -202,6 +219,13 @@ namespace anduefker::app
         logEntries_.clear();
         reflection_ = {};
         artifacts_ = {};
+        provenance_ = {};
+        provenance_.producerCommit = kProducerCommit;
+        provenance_.producerVersion = kProducerVersion;
+        provenance_.producerWorktree = kProducerWorktreeAtConfigure;
+        provenance_.runId = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::system_clock::now().time_since_epoch()).count()) + "-" +
+                            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         context_ = RuntimeContext(memory_);
         started_ = std::chrono::steady_clock::now();
         liveLogFailed_ = false;
@@ -229,6 +253,10 @@ namespace anduefker::app
             stageStats = stats;
         };
         Note("=== Runtime Session Started ===");
+        Note(RuntimeLogLevel::Debug, "run_provenance producer_commit=" + provenance_.producerCommit +
+                                         " producer_version=" + provenance_.producerVersion +
+                                         " producer_worktree_at_configure=" + provenance_.producerWorktree +
+                                         " identity_source=cmake-configure run_id=" + provenance_.runId);
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);
@@ -239,6 +267,7 @@ namespace anduefker::app
             return RuntimeSessionStatus::Failed;
         }
         Note(RuntimeLogLevel::Debug, "Target PID=" + std::to_string(pid));
+        provenance_.targetPid = pid;
         if (!memory_->Initialize(static_cast<pid_t>(pid)))
         {
             failures_.push_back("remote memory source initialization failed");
@@ -258,6 +287,19 @@ namespace anduefker::app
         Note("Module=" + context_.Module().name + " base=" + std::to_string(context_.Module().base) +
              " architecture=" + ModuleArchitectureName(context_.Module().architecture) +
              " pointer_width=" + std::to_string(context_.Module().pointerWidth));
+        Note(RuntimeLogLevel::Debug, "module_identity run_id=" + provenance_.runId +
+                                         " pid=" + std::to_string(pid) +
+                                         " base=" + HexAddress(context_.Module().base) +
+                                         " end=" + HexAddress(context_.Module().end) +
+                                         " address_space_generation=" + std::to_string(memory_->AddressSpaceGeneration()) +
+                                         " identity=mapped-segments-not-content-hash");
+        for (const auto &segment : context_.Module().segments)
+            Note(RuntimeLogLevel::Debug, "module_segment start=" + HexAddress(segment.start) +
+                                             " end=" + HexAddress(segment.end) + " file_offset=" + HexAddress(segment.fileOffset) +
+                                             " readable=" + std::to_string(segment.readable) +
+                                             " writable=" + std::to_string(segment.writable) +
+                                             " executable=" + std::to_string(segment.executable) +
+                                             " private=" + std::to_string(segment.privateMapping) + " path=" + segment.path);
 
         finishStage("module-discovery");
         GlobalLocator locator(*memory_, context_.Module());
@@ -266,14 +308,16 @@ namespace anduefker::app
             {"GNameBlocksDebug", "GFNameTableForDebuggerVisualizers_MT", "NamePoolData"}, progress);
         finishStage("symbol-locator");
         BindingBuilder builder(*memory_);
-        auto binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), progress, config_.detailedDiagnostics);
+        const auto bindingProgress = [&](const std::string &message)
+        { Note(message.starts_with("binding:") ? RuntimeLogLevel::Info : RuntimeLogLevel::Debug, message); };
+        auto binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), bindingProgress);
         finishStage("symbol-binding");
         if (!binding)
         {
             Note("locator_path source=analyzer reason=symbol-binding-incomplete");
             candidates = locator.LocateAnalysis(candidates, progress);
             finishStage("analyzer-locator");
-            binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), progress, config_.detailedDiagnostics);
+            binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), bindingProgress);
             finishStage("analyzer-binding");
         }
         else
@@ -349,6 +393,8 @@ namespace anduefker::app
                                                  " layout_score=" + std::to_string(candidateReport.layoutScore) +
                                                  " version_evidence_score=" + std::to_string(candidateReport.versionEvidenceScore) +
                                                  " reason=" + reason);
+                for (const auto &failure : candidateReport.failures)
+                    Note(RuntimeLogLevel::Debug, "schema_candidate_failure profile=" + profile.id + " reason=" + failure);
                 for (const auto &use : candidateReport.stages)
                 {
                     const auto &stage = *use.result;
@@ -365,7 +411,7 @@ namespace anduefker::app
                                                                                           " elapsed_ms=" + std::to_string(use.reused ? 0 : stage.elapsedMs) +
                                                                                           (use.reused ? std::string{} : ::anduefker::memory::DescribeReadStats(stage.readsAfter, stage.readsBefore)) +
                                                                                           (stage.selectedLayout.empty() ? std::string{} : " selected_layout={" + stage.selectedLayout + "}"));
-                    if (config_.detailedDiagnostics && !use.reused)
+                    if (!use.reused)
                         for (const auto &evidence : stage.evidence)
                             Note(RuntimeLogLevel::Debug, prefix + " evidence=" + evidence);
                     if (!use.reused)
@@ -507,7 +553,8 @@ namespace anduefker::app
 
         const ReadStats beforeReflection = memory_->Stats();
         ReflectionReader reader(*memory_, context_.Binding(), context_.Schema(),
-                                context_.Module().base, context_.Module().end, progress);
+                                context_.Module().base, context_.Module().end, progress,
+                                [&](const std::string &message) { Note(RuntimeLogLevel::Debug, message); });
         reflection_ = reader.Read();
         finishStage("reflection");
         const ReadStats afterReflection = memory_->Stats();
@@ -558,7 +605,9 @@ namespace anduefker::app
             Note(RuntimeLogLevel::Warning, "Reflection is partial; output will be written to a .partial artifact");
         if (!config_.outputRoot.empty())
         {
-            ArtifactWriter writer(context_, reflection_, config_.outputRoot, config_.packageName);
+            provenance_.addressSpaceGeneration = memory_->AddressSpaceGeneration();
+            ArtifactWriter writer(context_, reflection_, config_.outputRoot, config_.packageName, provenance_,
+                                  [&](const std::string &message) { Note(RuntimeLogLevel::Debug, message); });
             artifacts_ = writer.Write();
             finishStage("artifact-generation");
             for (const auto &diagnostic : artifacts_.generationDiagnostics)

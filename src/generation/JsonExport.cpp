@@ -83,7 +83,11 @@ namespace anduefker::generation
                 return;
             }
             --remaining;
-            stream << "{\"kind\":\"" << KindName(reference.kind) << "\",\"class\":\"" << EscapeJson(reference.reflectedClass)
+            stream << "{\"metadata_address\":\"" << Hex(reference.metadataAddress)
+                   << "\",\"immediate_owner\":\"" << Hex(reference.immediateOwner)
+                   << "\",\"owner_is_uobject\":" << (reference.ownerIsUObject ? "true" : "false")
+                   << ",\"array_dim\":" << reference.arrayDim
+                   << ",\"kind\":\"" << KindName(reference.kind) << "\",\"class\":\"" << EscapeJson(reference.reflectedClass)
                    << "\",\"element_size\":" << reference.elementSize << ",\"referenced_object\":\"" << Hex(reference.referencedObject)
                    << "\",\"secondary_object\":\"" << Hex(reference.secondaryObject) << "\",\"details_resolved\":"
                    << (reference.detailsResolved ? "true" : "false");
@@ -410,7 +414,7 @@ namespace anduefker::generation
 
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity)
     {
-        stream << "{\n\"schema_version\":4,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":5,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"}";
@@ -453,8 +457,11 @@ namespace anduefker::generation
                 const auto &function = type.functions[item];
                 stream << "{\"address\":\"" << Hex(function.address) << "\",\"name\":\"" << EscapeJson(function.name)
                        << "\",\"full_name\":\"" << EscapeJson(function.fullName) << "\",\"native_rva\":\"" << Hex(function.nativeRva)
-                       << "\",\"native_address\":\"" << Hex(function.nativeAddress)
-                       << "\",\"flags\":\"" << Hex(function.flags) << "\",\"status\":\"" << ir::ParseStatusName(function.status)
+                        << "\",\"native_address\":\"" << Hex(function.nativeAddress)
+                        << "\",\"entry_observation\":{\"readable\":" << (function.entryReadable ? "true" : "false")
+                        << ",\"executable\":" << (function.entryExecutable ? "true" : "false")
+                        << ",\"in_module\":" << (function.entryInModule ? "true" : "false") << '}'
+                        << ",\"flags\":\"" << Hex(function.flags) << "\",\"status\":\"" << ir::ParseStatusName(function.status)
                        << "\",\"num_params\":" << static_cast<unsigned int>(function.numParams) << ",\"param_size\":" << function.paramSize
                        << ",\"return_value_offset\":" << function.returnValueOffset << ",\"header_num_params\":"
                        << static_cast<unsigned int>(function.headerNumParams) << ",\"header_param_size\":" << function.headerParamSize
@@ -504,6 +511,20 @@ namespace anduefker::generation
             }
             stream << "]}";
         }
-        stream << "\n]\n}\n";
+        stream << "\n],\n\"delegate_signature_observations\":[";
+        for (size_t index = 0; index < reflection.delegateSignatures.size(); ++index)
+        {
+            if (index != 0)
+                stream << ',';
+            const auto &signature = reflection.delegateSignatures[index];
+            stream << "{\"address\":\"" << Hex(signature.address) << "\",\"full_name\":\"" << EscapeJson(signature.fullName)
+                   << "\",\"class\":\"" << EscapeJson(signature.reflectedClass)
+                   << "\",\"outer_address\":\"" << Hex(signature.outerAddress)
+                   << "\",\"outer_class\":\"" << EscapeJson(signature.outerClass)
+                   << "\",\"outer_full_name\":\"" << EscapeJson(signature.outerFullName)
+                   << "\",\"outer_readable\":" << (signature.outerReadable ? "true" : "false")
+                   << ",\"exported\":" << (signature.exported ? "true" : "false") << '}';
+        }
+        stream << "]\n}\n";
     }
 } // namespace anduefker::generation

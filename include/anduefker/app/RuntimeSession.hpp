@@ -62,7 +62,6 @@ namespace anduefker::app
         std::string packageName;
         std::string outputRoot;
         std::vector<std::string> moduleNames = {"libUnreal.so", "libUE4.so"};
-        bool detailedDiagnostics = false;
     };
 
     class RuntimeSession
@@ -89,6 +88,7 @@ namespace anduefker::app
         RuntimeContext context_;
         ReflectionIR reflection_;
         ArtifactResult artifacts_;
+        generation::ArtifactProvenance provenance_;
         std::vector<std::string> failures_;
         std::vector<RuntimeLogEntry> logEntries_;
         std::chrono::steady_clock::time_point started_;
