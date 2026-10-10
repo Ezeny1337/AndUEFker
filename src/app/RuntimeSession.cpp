@@ -253,7 +253,7 @@ namespace anduefker::app
                                          " identity_failure_reason=" + provenance_.producerIdentityFailureReason +
                                          " worktree_failure_reason=" + provenance_.producerWorktreeFailureReason +
                                          " identity_source=cmake-configure run_id=" + provenance_.runId);
-        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=3 owner_contexts=address-keyed exec_entries=shared-context-or-inline opaque_fields=context-keyed");
+        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=4 owner_contexts=address-keyed exec_entries=shared-context-or-inline-with-explicit-defaults opaque_fields=generation-type-keyed array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);

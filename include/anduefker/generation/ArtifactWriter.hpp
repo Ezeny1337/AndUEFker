@@ -5,6 +5,8 @@
 #include <functional>
 #include <iosfwd>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -76,7 +78,6 @@ namespace anduefker::generation
             std::string fullName;
             std::string scope;
             uintptr_t superAddress = 0;
-            std::string superName;
             int32_t size = 0;
             int32_t baseSize = -1;
             int32_t initialCursor = 0;
@@ -93,17 +94,13 @@ namespace anduefker::generation
             int32_t cursor = 0;
             std::string cursorSource;
             std::string strategy;
+            std::optional<size_t> layoutIssueIndex;
         };
         struct OpaqueField
         {
             uintptr_t ownerAddress = 0;
             const PropertyIR *property = nullptr;
             std::string reason;
-            std::string cppFailure;
-            std::string cppType;
-            std::string representation;
-            bool validBounds = false;
-            bool arrayHeaderSizeMatches = false;
             std::string failurePath;
             const ::anduefker::ir::TypeReferenceIR *failureNode = nullptr;
         };
@@ -124,7 +121,7 @@ namespace anduefker::generation
             std::vector<LayoutEvent> events;
             FieldDescriptions fields;
             std::map<std::string, size_t> typeIds;
-            std::map<std::string, size_t> opaqueContextIds;
+            std::set<size_t> loggedTypeIds;
             [[nodiscard]] ParseStatus Status() const
             {
                 // 有意设计的 Opaque storage 并不是缺失的字段
@@ -143,7 +140,7 @@ namespace anduefker::generation
             }
             void Warn(std::string category, std::string message)
             {
-                RegisterOwner({0, "<generation>", "generation", 0, "", 0, -1, 0});
+                RegisterOwner({0, "<generation>", "generation", 0, 0, -1, 0});
                 LayoutEvent event;
                 event.category = std::move(category);
                 event.message = std::move(message);
@@ -163,14 +160,15 @@ namespace anduefker::generation
         using FieldGenerationEntry = FieldDescription;
         struct FieldGenerationPlan
         {
-            bool forceOffsetDescription = false;
+            LayoutRepresentation representation = LayoutRepresentation::SequentialMembers;
+            bool declarationDependencyBlocked = false;
             int32_t initialOffset = 0;
             int32_t size = 0;
             std::vector<FieldGenerationEntry> fields;
         };
         [[nodiscard]] std::string ManifestJson(const GenerationReport &report, ParseStatus status) const;
         [[nodiscard]] std::string DiagnosticsJson(const GenerationReport &report, ParseStatus status) const;
-        void ReflectionJson(std::ostream &stream, const GenerationReport &report) const;
+        void ReflectionJson(std::ostream &stream, const GenerationReport &report, const CppSymbols &symbols) const;
         [[nodiscard]] std::string RuntimeJson() const;
         void BasicTypes(std::ostream &stream, const CppSymbols &symbols) const;
         void Types(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;

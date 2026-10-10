@@ -12,6 +12,9 @@ namespace anduefker::generation
     {
         std::string name;
         int32_t size = 0;
+        ir::LayoutRepresentation layout = ir::LayoutRepresentation::SequentialMembers;
+        bool declarationDependencyBlocked = false;
+        bool inheritsBase = false;
     };
 
     struct CppEnumInfo
@@ -27,6 +30,7 @@ namespace anduefker::generation
         std::unordered_map<uintptr_t, CppTypeInfo> types;
         std::unordered_map<uintptr_t, CppEnumInfo> enums;
         std::map<uintptr_t, std::string> functions;
+        std::vector<size_t> typeOrder;
     };
 
     enum class PropertyStorageKind
@@ -46,6 +50,7 @@ namespace anduefker::generation
             : name(std::move(typeName)), failureReason(std::move(reason)) {}
         std::string name;
         std::string failureReason;
+        std::string failurePath;
         std::string semanticName;
         PropertyStorageKind storage = PropertyStorageKind::Unavailable;
         bool semanticsResolved = false;

@@ -133,6 +133,33 @@ namespace anduefker::ir
         Optional,
     };
 
+    enum class DelegateStorageKind
+    {
+        None,
+        Unicast,
+        InlineMulticast,
+        SparseMulticast,
+        UnknownMulticast,
+    };
+
+    [[nodiscard]] inline const char *DelegateStorageKindName(DelegateStorageKind kind)
+    {
+        switch (kind)
+        {
+        case DelegateStorageKind::Unicast:
+            return "unicast";
+        case DelegateStorageKind::InlineMulticast:
+            return "inline-multicast";
+        case DelegateStorageKind::SparseMulticast:
+            return "sparse-multicast";
+        case DelegateStorageKind::UnknownMulticast:
+            return "unknown-multicast";
+        case DelegateStorageKind::None:
+            return "none";
+        }
+        return "none";
+    }
+
     struct TypeReferenceIR
     {
         uintptr_t metadataAddress = 0;
@@ -140,6 +167,7 @@ namespace anduefker::ir
         bool ownerIsUObject = false;
         int32_t arrayDim = 0;
         PropertyKind kind = PropertyKind::Unknown;
+        DelegateStorageKind delegateStorage = DelegateStorageKind::None;
         std::string reflectedClass;
         uintptr_t referencedObject = 0;
         uintptr_t secondaryObject = 0;
@@ -441,8 +469,9 @@ namespace anduefker::ir
         int32_t readError = 0;
         size_t requested = 0;
         size_t transferred = 0;
-        std::optional<bool> sparseShapeConsistent;
-        std::optional<bool> compactShapeConsistent;
+        std::optional<bool> sparseFormulaMatches;
+        std::optional<bool> compactNecessaryConditions;
+        std::string sampleReason;
         struct FlagCandidate
         {
             std::string basis;

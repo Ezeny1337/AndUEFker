@@ -173,7 +173,7 @@ AndUEFker -o <输出目录> -p <包名>
 
 生成的头文件使用 `AndUE` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
 
-`reflection.json` 的 JSON schema 版本为 `7`，`manifest.json` 和 `diagnostics.json` 为 `6`，`runtime.json` 为 `4`。字段生成类型在 `reflection.json` 中按 ID 共用；`diagnostics.json` 引用其中的委托和容器证据。
+`reflection.json` 的 JSON schema 版本为 `8`，`manifest.json` 和 `diagnostics.json` 为 `7`，`runtime.json` 为 `4`。生成元数据区分语义声明与存储描述，并标明委托形态；诊断引用共用的反射证据，不保证原生 C++ ABI 兼容。
 
 ## 常用对象类地址
 

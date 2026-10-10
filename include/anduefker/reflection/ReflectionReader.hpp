@@ -73,7 +73,13 @@ namespace anduefker::reflection
         [[nodiscard]] FunctionIR *ReadFunction(uintptr_t address, ReflectionIR &ir) const;
         void ReadFunctions(uintptr_t first, TypeIR &type, ReflectionIR &ir) const;
         void CloseDelegateSignatures(ReflectionIR &ir) const;
-        void ObserveContainerStorage(const PropertyMetadata &metadata, const TypeReferenceIR &reference) const;
+        struct ContainerCandidate
+        {
+            PropertyMetadata metadata;
+            TypeReferenceIR reference;
+            int priority = 2;
+        };
+        void ObserveContainerStorage(const ContainerCandidate &candidate) const;
         void CollectContainerStorage() const;
         [[nodiscard]] std::optional<TypeIR> ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const;
         [[nodiscard]] ReflectionIR ReadAttempt(::anduefker::memory::CaptureValidation &validation,
@@ -93,12 +99,6 @@ namespace anduefker::reflection
         mutable size_t nextSignature_ = 0;
         mutable std::map<uintptr_t, std::pair<uintptr_t, ::anduefker::ue::FieldChainStatus>> functionChains_;
         mutable std::unordered_set<uintptr_t> observedContainers_;
-        struct ContainerCandidate
-        {
-            PropertyMetadata metadata;
-            TypeReferenceIR reference;
-            int priority = 2;
-        };
         mutable std::vector<ContainerCandidate> pendingContainers_;
         mutable std::map<std::string, std::unordered_set<uintptr_t>> containerSampleOwners_;
         mutable std::map<std::string, size_t> containerCandidates_;

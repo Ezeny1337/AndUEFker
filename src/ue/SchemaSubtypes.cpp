@@ -1016,18 +1016,32 @@ namespace anduefker::ue::schema_probe
             report.evidence.push_back("property subtype result: reason=tail-read-budget-exhausted");
             return true;
         }
-        if (tails.size() == 1)
+        if (!tails.empty())
         {
-            const auto &tail = tails.front();
-            schema.features.propertyTailLayout = tail.layout;
-            schema.property.baseSize = tail.completeSize;
-            schema.property.repNotify = tail.repNotify;
-            schema.property.propertyLinks = tail.links;
-            schema.property.propertyLinksEnd = tail.linksEnd;
-            schema.property.subtypeStart = tail.dataEnd;
+            // 成员顺序存在歧义不会使独立达成一致的偏移量失效
+            const auto consensus = [&](int32_t PropertyTailCandidate::*member)
+            {
+                const int32_t value = tails.front().*member;
+                return std::all_of(tails.begin(), tails.end(), [&](const auto &tail)
+                                   { return tail.*member == value; })
+                           ? value
+                           : -1;
+            };
+            schema.property.baseSize = consensus(&PropertyTailCandidate::completeSize);
+            schema.property.repNotify = consensus(&PropertyTailCandidate::repNotify);
+            schema.property.propertyLinks = consensus(&PropertyTailCandidate::links);
+            schema.property.propertyLinksEnd = consensus(&PropertyTailCandidate::linksEnd);
+            schema.property.subtypeStart = consensus(&PropertyTailCandidate::dataEnd);
+            if (tails.size() == 1)
+                schema.features.propertyTailLayout = tails.front().layout;
         }
         report.evidence.push_back("property tail selection: accepted_candidates=" + std::to_string(tails.size()) +
                                   " selected_layout=" + std::string(PropertyTailName(schema.features.propertyTailLayout)) +
+                                  " consensus_complete_size=" + std::to_string(schema.property.baseSize) +
+                                  " consensus_rep_notify=" + std::to_string(schema.property.repNotify) +
+                                  " consensus_links=" + std::to_string(schema.property.propertyLinks) +
+                                  " consensus_links_end=" + std::to_string(schema.property.propertyLinksEnd) +
+                                  " consensus_data_end=" + std::to_string(schema.property.subtypeStart) +
                                   " reason=" + (tails.empty() ? "no-validated-tail" : tails.size() == 1 ? "unique-validated-tail"
                                                                                                         : "multiple-validated-tails") +
                                   "; subtype candidates remain constrained to validated tails");

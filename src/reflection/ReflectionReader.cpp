@@ -181,6 +181,14 @@ namespace anduefker::reflection
         result.ownerIsUObject = metadata.ownerIsUObject;
         result.arrayDim = metadata.arrayDim;
         result.kind = PropertyKindFromName(metadata.className);
+        if (result.kind == PropertyKind::Delegate)
+            result.delegateStorage = ::anduefker::ir::DelegateStorageKind::Unicast;
+        else if (result.kind == PropertyKind::MulticastDelegate)
+            result.delegateStorage = metadata.normalizedClassName == "MulticastSparseDelegateProperty"
+                                         ? ::anduefker::ir::DelegateStorageKind::SparseMulticast
+                                     : metadata.normalizedClassName == "MulticastInlineDelegateProperty"
+                                         ? ::anduefker::ir::DelegateStorageKind::InlineMulticast
+                                         : ::anduefker::ir::DelegateStorageKind::UnknownMulticast;
         result.reflectedClass = metadata.className;
         result.elementSize = metadata.elementSize;
         result.referencedObject = metadata.referencedAddress;
@@ -712,12 +720,14 @@ namespace anduefker::reflection
         std::stable_sort(pendingContainers_.begin(), pendingContainers_.end(), [](const auto &left, const auto &right)
                          { return left.priority < right.priority; });
         for (const auto &candidate : pendingContainers_)
-            ObserveContainerStorage(candidate.metadata, candidate.reference);
+            ObserveContainerStorage(candidate);
         pendingContainers_.clear();
     }
 
-    void ReflectionReader::ObserveContainerStorage(const PropertyMetadata &metadata, const TypeReferenceIR &reference) const
+    void ReflectionReader::ObserveContainerStorage(const ContainerCandidate &candidate) const
     {
+        const auto &metadata = candidate.metadata;
+        const auto &reference = candidate.reference;
         if (containerObservations_.size() >= 512)
         {
             ++containerNotObserved_[metadata.normalizedClassName + ":global-observation-budget"];
@@ -731,15 +741,17 @@ namespace anduefker::reflection
                                   ":" + (value ? value->reflectedClass : "none") +
                                   ":" + std::to_string(value ? value->elementSize : 0) + ":" + std::to_string(value ? value->arrayDim : 0) +
                                   ":" + std::to_string(reference.detailsResolved);
-        auto &owners = containerSampleOwners_[shape];
-        // 这些是发现阶段的观测结果，而非选定的 ABI 字段
-        // 必须对形状多样性与 Owner 样本的数量进行边界限制，同时必须报告每一个被省略的观测项
-        if (owners.size() >= 2 || owners.contains(metadata.ownerAddress))
+        // 将异常字段单独控制在全局 budget 内，类/大小形态去重不得掩盖不同的未解析嵌套路径
+        if (candidate.priority == 2)
         {
-            ++containerNotObserved_[metadata.normalizedClassName + ":sample-budget-or-repeated-owner"];
-            return;
+            auto &owners = containerSampleOwners_[shape];
+            if (owners.size() >= 2 || owners.contains(metadata.ownerAddress))
+            {
+                ++containerNotObserved_[metadata.normalizedClassName + ":normal-shape-budget-or-repeated-owner"];
+                return;
+            }
+            owners.insert(metadata.ownerAddress);
         }
-        owners.insert(metadata.ownerAddress);
         ::anduefker::ir::ContainerStorageObservation observation;
         observation.propertyAddress = metadata.address;
         observation.ownerAddress = metadata.ownerAddress;
@@ -749,6 +761,9 @@ namespace anduefker::reflection
         observation.innerClass = element ? element->reflectedClass : "";
         observation.valueClass = value ? value->reflectedClass : "";
         observation.storageSize = metadata.elementSize;
+        observation.sampleReason = candidate.priority == 0   ? "unresolved-semantics"
+                                   : candidate.priority == 1 ? "representation-gap"
+                                                             : "normal-shape-representative";
         observation.propertyDataEnd = schema_.property.subtypeStart;
         observation.referenceOffset = reference.kind == PropertyKind::Array ? schema_.propertySubtypes.arrayInner : reference.kind == PropertyKind::Map ? schema_.propertySubtypes.mapBase
                                                                                                                                                         : schema_.propertySubtypes.setElement;
@@ -874,14 +889,30 @@ namespace anduefker::reflection
             {
                 return alignment > 0 && (alignment & (alignment - 1)) == 0;
             };
-            observation.sparseShapeConsistent =
+            const int64_t recordedAlignment = word(start + 3);
+            // FStructBuilder -> FScriptSparseSet -> FScriptSparseArray
+            // 映射键值对的大小/对齐取决于已记录的元数据，而非独立确立的键/值 ABI
+            const auto align = [](int64_t size, int64_t alignment)
+            {
+                return (size + alignment - 1) / alignment * alignment;
+            };
+            bool sparseMatches = false;
+            if (observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
+                alignmentValid(recordedAlignment) && recordedAlignment >= 4)
+            {
+                const int64_t hashNext = align(payloadEnd, start == 0 ? 4 : recordedAlignment);
+                const int64_t hashIndex = hashNext + 4;
+                const int64_t setSize = align(hashIndex + 4, recordedAlignment);
+                const int64_t sparseSize = std::max<int64_t>(setSize, 8);
+                sparseMatches = sparseSize <= INT32_MAX && word(start) == hashNext &&
+                                word(start + 1) == hashIndex && word(start + 2) == setSize &&
+                                word(start + 4) == sparseSize;
+            }
+            observation.sparseFormulaMatches = sparseMatches;
+            observation.compactNecessaryConditions =
                 observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
-                word(start) >= payloadEnd && word(start) % 4 == 0 && word(start + 1) == word(start) + 4 &&
-                word(start + 2) >= word(start + 1) + 4 && alignmentValid(word(start + 3)) && word(start + 3) >= 4 &&
-                word(start + 4) >= word(start + 2) && word(start + 4) >= 8;
-            observation.compactShapeConsistent =
-                observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
-                word(start) >= payloadEnd && alignmentValid(word(start + 1));
+                (start == 0 ? word(start) == payloadEnd : word(start) >= payloadEnd) &&
+                alignmentValid(word(start + 1)) && word(start + 1) >= 4;
         }
         containerObservations_.push_back(std::move(observation));
     }
@@ -1138,6 +1169,7 @@ namespace anduefker::reflection
         diagnostic_("function_entry_summary definitions=" + std::to_string(reflection.functions.size()) +
                     " parsed=" + std::to_string(reflection.stats.parsedFunctions) +
                     " rva_semantics=reflected-exec-entry-not-business-implementation");
+        diagnostic_("function_entry_defaults class=Function header_readable=1 consistent=1 semantics_valid=1 status=Complete return=65535 default_initializers=0 readable=1 executable=1 in_module=1 native=flags&0x400 native_exec_available=native&&in_module&&executable");
         for (const auto &[kind, count] : entryKinds)
             diagnostic_("function_entry_kind kind=" + kind + " count=" + std::to_string(count));
         for (const auto &[key, count] : entryCounts)
@@ -1148,9 +1180,13 @@ namespace anduefker::reflection
             const size_t id = entryIds.size();
             entryIds.emplace(key, id);
             std::ostringstream line;
-            line << "exec_entry_context id=" << id << " entry=0x" << std::hex << entry << std::dec
-                 << " readable=" << readable << " executable=" << executable << " in_module=" << inModule
-                 << " functions=" << count;
+            line << "exec_entry_context id=" << id << " entry=0x" << std::hex << entry << std::dec << " functions=" << count;
+            if (!readable)
+                line << " readable=0";
+            if (!executable)
+                line << " executable=0";
+            if (!inModule)
+                line << " in_module=0";
             if (inModule)
                 line << " rva=0x" << std::hex << (entry - moduleBase_);
             diagnostic_(line.str());
@@ -1231,7 +1267,9 @@ namespace anduefker::reflection
                     line << "delegate_reference owner=0x" << std::hex << ownerAddress << std::dec << " scope=" << scope
                          << " root=" << std::quoted(property.name) << " root_address=" << property.address
                          << " path=" << path << " node=" << reference.metadataAddress
-                         << " class=" << reference.reflectedClass << " signature=" << reference.referencedObject
+                         << " class=" << reference.reflectedClass
+                         << " storage_kind=" << ::anduefker::ir::DelegateStorageKindName(reference.delegateStorage)
+                         << " signature=" << reference.referencedObject
                          << " details_resolved=" << reference.detailsResolved;
                     diagnostic_(line.str());
                 }
@@ -1261,24 +1299,39 @@ namespace anduefker::reflection
                 line << " entry_id=" << id->second;
             else
             {
-                line << " entry=0x" << std::hex << function.execEntry << std::dec
-                     << " readable=" << function.entryReadable << " executable=" << function.entryExecutable
-                     << " in_module=" << function.entryInModule;
+                line << " entry=0x" << std::hex << function.execEntry << std::dec;
+                if (!function.entryReadable)
+                    line << " readable=0";
+                if (!function.entryExecutable)
+                    line << " executable=0";
+                if (!function.entryInModule)
+                    line << " in_module=0";
                 if (function.execEntryRva)
                     line << " rva=0x" << std::hex << *function.execEntryRva << std::dec;
             }
-            line << " name=" << std::quoted(function.name) << " class=" << function.reflectedClass
-                 << " native=" << function.nativeFlag << " native_exec_available=" << function.nativeExecRva.has_value()
-                 << " header_readable=" << function.headerReadable
-                 << " params=" << static_cast<unsigned int>(function.headerNumParams) << '/' << function.headerParamSize
-                 << " return=" << function.returnValueOffset
-                 << " consistent=" << function.parameterSemanticsConsistent
-                 << " status=" << ParseStatusName(function.status);
+            line << " name=" << std::quoted(function.name)
+                 << " params=" << static_cast<unsigned int>(function.headerNumParams) << '/' << function.headerParamSize;
+            if (function.reflectedClass != "Function")
+                line << " class=" << function.reflectedClass;
+            if (!function.headerReadable)
+                line << " header_readable=0";
+            if (!function.parameterSemanticsConsistent)
+                line << " consistent=0";
+            if (!function.parameterSemanticsValid)
+                line << " semantics_valid=0";
+            if (function.nativeFlag != ((function.flags & ::anduefker::ue::kFUNCNative) != 0))
+                line << " native=" << function.nativeFlag;
+            if (function.nativeExecRva.has_value() !=
+                (function.nativeFlag && function.entryInModule && function.entryExecutable))
+                line << " native_exec_available=" << function.nativeExecRva.has_value();
+            if (function.status != ParseStatus::Complete)
+                line << " status=" << ParseStatusName(function.status);
+            if (function.returnValueOffset != 0xFFFFu)
+                line << " return=" << function.returnValueOffset;
             if (function.defaultInitializerCount != 0)
                 line << " default_initializers=" << function.defaultInitializerCount;
             if (!function.parameterSemanticsConsistent)
-                line << " derived_params=" << function.derivedNumParams << '/' << function.derivedParamSize
-                     << " semantics_valid=" << function.parameterSemanticsValid;
+                line << " derived_params=" << function.derivedNumParams << '/' << function.derivedParamSize;
             diagnostic_(line.str());
             for (const auto &message : function.layoutConflicts)
                 diagnostic_("function_conflict address=" + std::to_string(address) + " message=" + message);
@@ -1287,7 +1340,7 @@ namespace anduefker::reflection
             for (const auto &property : function.locals)
                 propertyEvidence(property, function.fullName, address, "function-local");
         }
-        diagnostic_("container_storage_probe abi_selected=0 max_observations=512 max_owners_per_shape=2 max_candidates=8192 priority=representation-gaps-first shape_checks=necessary-not-sufficient");
+        diagnostic_("container_storage_probe abi_selected=0 max_observations=512 max_normal_owners_per_shape=2 exceptional_fields=individual-within-global-budget max_candidates=8192 priority=representation-gaps-first sparse_check=conditional-formula-with-recorded-alignment compact_check=necessary-only");
         for (const auto &[kind, count] : reflection.containerStorageCandidates)
             diagnostic_("container_storage_candidates class=" + kind + " count=" + std::to_string(count));
         for (const auto &[reason, count] : reflection.containerStorageNotObserved)
@@ -1307,10 +1360,11 @@ namespace anduefker::reflection
                  << " read_error=" << observation.readError << " requested=" << observation.requested
                  << " transferred=" << observation.transferred
                  << " status=" << observation.status << " basis=" << std::quoted(observation.basis);
-            if (observation.sparseShapeConsistent)
-                line << " sparse_shape_consistent=" << *observation.sparseShapeConsistent;
-            if (observation.compactShapeConsistent)
-                line << " compact_shape_consistent=" << *observation.compactShapeConsistent;
+            line << " sample_reason=" << observation.sampleReason;
+            if (observation.sparseFormulaMatches)
+                line << " sparse_formula_matches=" << *observation.sparseFormulaMatches;
+            if (observation.compactNecessaryConditions)
+                line << " compact_necessary_conditions=" << *observation.compactNecessaryConditions;
             line << " bytes=" << std::hex << std::setfill('0');
             for (uint8_t byte : observation.bytes)
                 line << std::setw(2) << static_cast<unsigned int>(byte);

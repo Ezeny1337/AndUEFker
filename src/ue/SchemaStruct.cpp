@@ -1,6 +1,7 @@
 #include "ProbeContext.hpp"
 
 #include <array>
+#include <cstring>
 
 namespace anduefker::ue::schema_probe
 {
@@ -76,6 +77,54 @@ namespace anduefker::ue::schema_probe
             return false;
         }
 
+        // 源码变体将 int16/int32 的 MinAlignment 置于 PropertiesSize 之后
+        // 高位为零的小值无法确立成员宽度
+        if (!sizeCandidates.empty())
+        {
+            const int32_t alignmentOffset = sizeCandidates.front().offset + 4;
+            const std::array<std::pair<uintptr_t, int32_t>, 3> alignmentSamples = {
+                std::pair{*guid, 16}, std::pair{*color, 4},
+                std::pair{*vector, sizeCandidates.front().vectorSize}};
+            for (const int32_t width : {2, 4})
+            {
+                std::string evidence = "UStruct alignment candidate: offset=" + std::to_string(alignmentOffset) +
+                                       " width=" + std::to_string(width) +
+                                       " selected=0 sample_encoding=address/struct_size/raw/read_error/transferred samples=";
+                bool allPlausible = true;
+                for (size_t index = 0; index < alignmentSamples.size(); ++index)
+                {
+                    const auto &[object, size] = alignmentSamples[index];
+                    const auto address = Add(object, alignmentOffset);
+                    int32_t raw = 0;
+                    int16_t shortRaw = 0;
+                    std::array<uint8_t, 4> bytes{};
+                    const auto read = address && memory_.IsReadable(*address, static_cast<size_t>(width))
+                                          ? memory_.ReadBytes(*address, bytes.data(), static_cast<size_t>(width))
+                                          : ::anduefker::memory::ReadResult{
+                                                ::anduefker::memory::ReadError::UnreadableRange,
+                                                address.value_or(0), static_cast<size_t>(width), 0};
+                    const bool readable = read.Ok();
+                    if (width == 2)
+                    {
+                        std::memcpy(&shortRaw, bytes.data(), sizeof(shortRaw));
+                        raw = shortRaw;
+                    }
+                    else
+                        std::memcpy(&raw, bytes.data(), sizeof(raw));
+                    const bool plausible = readable && raw > 0 && raw <= size &&
+                                           (raw & (raw - 1)) == 0 && size % raw == 0;
+                    allPlausible = allPlausible && plausible;
+                    if (index != 0)
+                        evidence += ",";
+                    evidence += std::to_string(object) + "/" + std::to_string(size) + "/" +
+                                (readable ? std::to_string(raw) : "unreadable") + "/" +
+                                std::to_string(static_cast<int>(read.error)) + "/" + std::to_string(read.transferred);
+                }
+                report.evidence.push_back(evidence + " all_plausible=" + std::to_string(allPlausible) +
+                                          " basis=after-validated-properties-size; no-independent-width-proof");
+            }
+        }
+
         const auto structObject = FindObjectByName(schema, names_.structClass);
         const auto fieldObject = FindObjectByName(schema, names_.fieldClass);
         if (structObject && fieldObject &&
@@ -90,8 +139,8 @@ namespace anduefker::ue::schema_probe
             return false;
         }
 
-        // 不对单个指针形状的字段进行推断来确定 Children/ChildProperties 和 MinAlignment
-        // 它们的链表语义（linked-list semantics）将在下一个属性族（property-family）阶段中进行解析
+        // Children/ChildProperties 在下一阶段通过链式语义解析
+        // 对齐候选仅作为证据保留，绝不作为选定的目标 ABI
         schema.ustruct.children = -1;
         schema.ustruct.childProperties = -1;
         schema.ustruct.minAlignment = -1;

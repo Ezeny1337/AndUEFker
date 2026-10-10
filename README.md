@@ -173,7 +173,7 @@ The output directory also receives the session log:
 
 The generated headers use the `AndUE` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
 
-JSON schema versions are `7` for `reflection.json`, `6` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`. Field generation types are shared by ID in `reflection.json`; `diagnostics.json` references its delegate and container evidence.
+JSON schema versions are `8` for `reflection.json`, `7` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`. Generation metadata separates semantic declarations from storage descriptions and identifies delegate forms; diagnostics reference shared reflection evidence. Native C++ ABI compatibility is not asserted.
 
 ## Common object addresses
 
