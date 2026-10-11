@@ -1,4 +1,5 @@
 #include "anduefker/generation/JsonExport.hpp"
+#include "anduefker/ue/ContainerLayout.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -77,6 +78,24 @@ namespace anduefker::generation
             stream << ']';
         }
 
+        void ContainerStorage(std::ostream &stream, const ir::ContainerStorageIR &storage)
+        {
+            stream << "{\"allocator\":\"" << ir::ContainerAllocatorKindName(storage.allocator)
+                   << "\",\"allocator_status\":\"" << EscapeJson(storage.allocatorStatus)
+                   << "\",\"header_status\":\"" << EscapeJson(storage.headerStatus)
+                   << "\",\"element_layout_status\":\"" << EscapeJson(storage.layoutStatus)
+                   << "\",\"layout_id\":\"" << EscapeJson(storage.layoutId)
+                   << "\",\"instance_traversal_validated\":false";
+            if (storage.elementStride >= 0)
+                stream << ",\"value_offset\":" << storage.valueOffset
+                       << ",\"hash_next_offset\":" << storage.hashNextOffset
+                       << ",\"hash_index_offset\":" << storage.hashIndexOffset
+                       << ",\"set_element_size\":" << storage.setElementSize
+                       << ",\"element_alignment\":" << storage.elementAlignment
+                       << ",\"element_stride\":" << storage.elementStride;
+            stream << '}';
+        }
+
         void TypeReference(std::ostream &stream, const ir::TypeReferenceIR &reference, size_t depth, size_t &remaining)
         {
             if (depth >= 32 || remaining == 0)
@@ -94,6 +113,11 @@ namespace anduefker::generation
                    << "\",\"secondary_object\":\"" << Hex(reference.secondaryObject) << "\",\"details_resolved\":"
                    << (reference.detailsResolved ? "true" : "false")
                    << ",\"node_details_resolved\":" << (reference.nodeDetailsResolved ? "true" : "false");
+            if (reference.containerStorage)
+            {
+                stream << ",\"container_storage\":";
+                ContainerStorage(stream, *reference.containerStorage);
+            }
             if (reference.delegateStorage != ir::DelegateStorageKind::None)
                 stream << ",\"delegate_storage\":{\"kind\":\"" << ir::DelegateStorageKindName(reference.delegateStorage)
                        << "\",\"bindings_expanded\":false,\"binding_location\":\""
@@ -519,7 +543,42 @@ namespace anduefker::generation
 
     void WriteContainerStorageJson(std::ostream &stream, const ir::ReflectionIR &reflection)
     {
-        stream << "{\"abi_selected\":false,\"max_observations\":512,\"max_normal_owners_per_shape\":2,\"exceptional_fields\":\"individual-within-global-budget\",\"max_candidates\":8192,\"priority\":\"representation-gaps-first\",\"sparse_check\":\"conditional-formula-with-recorded-alignment-and-pair-extent\",\"compact_check\":\"necessary-only\",\"candidates_by_class\":{";
+        stream << "{\"metadata_coverage\":\"all-visited-nodes\",\"metadata_location\":\"property.type.container_storage (including nested nodes)\",\"instance_traversal_validated\":false,\"max_raw_observations\":512,\"max_normal_owners_per_shape\":2,\"exceptional_fields\":\"individual-within-global-budget\",\"max_raw_candidates\":8192,\"priority\":\"final-representation-gaps-first\",\"sparse_check\":\"conditional-formula-with-recorded-alignment-and-pair-extent\",\"source_layouts\":[";
+        bool firstLayout = true;
+        for (auto kind : {ir::PropertyKind::Array, ir::PropertyKind::Set})
+            if (const auto layout = ::anduefker::ue::DescribeHeapContainer(kind, reflection.containerPointerWidth))
+            {
+                if (!firstLayout)
+                    stream << ',';
+                firstLayout = false;
+                stream << "{\"id\":\"" << layout->id << "\",\"size\":" << layout->size
+                       << ",\"alignment\":" << layout->alignment << ",\"offsets\":{";
+                for (size_t index = 0; index < layout->offsets.size(); ++index)
+                {
+                    if (index != 0)
+                        stream << ',';
+                    stream << '"' << layout->offsets[index].first << "\":" << layout->offsets[index].second;
+                }
+                stream << "}}";
+            }
+        const auto counts = [&](const char *name, const auto &values)
+        {
+            stream << ",\"" << name << "\":{";
+            bool firstValue = true;
+            for (const auto &[key, value] : values)
+            {
+                if (!firstValue)
+                    stream << ',';
+                firstValue = false;
+                stream << '"' << EscapeJson(key) << "\":" << value;
+            }
+            stream << '}';
+        };
+        stream << ']';
+        counts("allocator_counts", reflection.containerAllocatorCounts);
+        counts("header_status_counts", reflection.containerHeaderCounts);
+        counts("element_layout_status_counts", reflection.containerElementLayoutCounts);
+        stream << ",\"candidates_by_class\":{";
         bool first = true;
         for (const auto &[kind, count] : reflection.containerStorageCandidates)
         {
@@ -572,13 +631,13 @@ namespace anduefker::generation
                 const auto &flag = observation.flagCandidates[candidate];
                 stream << "{\"offset\":" << flag.offset << ",\"width\":" << static_cast<unsigned int>(flag.width)
                        << ",\"raw\":" << flag.raw << ",\"known_value\":" << (flag.knownValue ? "true" : "false")
-                       << ",\"basis\":\"" << EscapeJson(flag.basis) << "\",\"selected\":false}";
+                       << ",\"basis\":\"" << EscapeJson(flag.basis) << "\",\"width_selected\":false}";
             }
             stream << ']';
             if (observation.sparseFormulaMatches)
                 stream << ",\"sparse_formula_matches\":" << (*observation.sparseFormulaMatches ? "true" : "false");
-            if (observation.compactNecessaryConditions)
-                stream << ",\"compact_necessary_conditions\":" << (*observation.compactNecessaryConditions ? "true" : "false");
+            stream << ",\"storage\":";
+            ContainerStorage(stream, observation.storage);
             stream << '}';
         }
         stream << "]}";
@@ -587,7 +646,7 @@ namespace anduefker::generation
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity,
                              const FieldDescriptions *fields, const CppSymbols *symbols)
     {
-        stream << "{\n\"schema_version\":8,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":9,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"}";
@@ -633,6 +692,11 @@ namespace anduefker::generation
                    << "\",\"name\":\"" << EscapeJson(type.name) << "\",\"full_name\":\"" << EscapeJson(type.fullName)
                    << "\",\"size\":" << type.size << ",\"super\":\"" << Hex(type.superAddress) << "\",\"status\":\""
                    << ir::ParseStatusName(type.status) << '"';
+            stream << ",\"min_alignment\":{\"value\":" << type.minAlignment
+                   << ",\"status\":\"" << EscapeJson(type.minAlignmentStatus) << "\",\"width_selected\":false";
+            if (type.minAlignmentRaw)
+                stream << ",\"raw_4_bytes\":" << *type.minAlignmentRaw;
+            stream << '}';
             if (symbols)
             {
                 const auto &declaration = symbols->types.at(type.address);

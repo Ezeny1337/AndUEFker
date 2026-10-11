@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <unordered_map>
+#include <vector>
 
 #include "anduefker/ir/ReflectionIR.hpp"
 
@@ -31,7 +33,24 @@ namespace anduefker::ir
         return static_cast<uint64_t>(property.boolean.fieldMask) << (property.boolean.byteOffset * 8u);
     }
 
-    // Runs after all reflected types have been collected so inherited ranges are
-    // based on the complete type graph, never on the last reflected field.
+    // 在所有反射类型收集完成后运行，因此继承范围基于完整类型图，而绝非基于最后反射的字段
     void AnalyzeReflectionLayouts(ReflectionIR &reflection);
+
+    struct TypeDeclarationIR
+    {
+        LayoutRepresentation representation = LayoutRepresentation::SequentialMembers;
+        bool dependencyBlocked = false;
+        bool inheritsBase = false;
+        int32_t size = 0;
+    };
+
+    struct TypeDeclarationPlan
+    {
+        std::unordered_map<uintptr_t, TypeDeclarationIR> types;
+        std::vector<size_t> order;
+    };
+
+    [[nodiscard]] TypeDeclarationPlan PlanTypeDeclarations(const ReflectionIR &reflection);
+    [[nodiscard]] bool HasStorageRepresentationGap(const TypeReferenceIR &reference,
+                                                   const TypeDeclarationPlan &plan, size_t depth = 0);
 } // namespace anduefker::ir

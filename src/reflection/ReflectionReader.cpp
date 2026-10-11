@@ -1,8 +1,10 @@
 #include "anduefker/reflection/ReflectionReader.hpp"
 #include "anduefker/ir/ReflectionLayout.hpp"
 #include "anduefker/ue/BoolLayout.hpp"
+#include "anduefker/ue/ContainerLayout.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <limits>
@@ -146,7 +148,7 @@ namespace anduefker::reflection
         diagnostic.secondaryClass = "not-observed";
         diagnostic.objectPropertyClassNull = metadata.objectPropertyClassNull;
         diagnostic.objectPropertyClassPointerAddress = metadata.objectPropertyClassPointerAddress;
-        // 仅在已完成读取与基本指针检查后补充类型身份；不尝试解码未知对象句柄。
+        // 仅在已完成读取与基本指针检查后补充类型身份，不尝试解码未知对象句柄
         const auto referenceClass = [&](uintptr_t address, bool secondary) -> std::string
         {
             if (address == 0 || metadata.detailsStatus != PropertyMetadata::DetailsStatus::Complete)
@@ -193,6 +195,31 @@ namespace anduefker::reflection
         result.elementSize = metadata.elementSize;
         result.referencedObject = metadata.referencedAddress;
         result.secondaryObject = metadata.secondaryAddress;
+        const auto containerStorage = [&]
+        {
+            if (result.kind != PropertyKind::Array && result.kind != PropertyKind::Map && result.kind != PropertyKind::Set)
+                return;
+            if (const auto found = containerStorage_.find(metadata.address); found != containerStorage_.end())
+            {
+                result.containerStorage = found->second;
+                return;
+            }
+            ++containerCandidates_[metadata.normalizedClassName];
+            ContainerCandidate candidate{metadata, result};
+            auto evidence = ReadContainerStorage(candidate);
+            auto storage = std::make_shared<::anduefker::ir::ContainerStorageIR>(evidence.storage);
+            result.containerStorage = storage;
+            containerStorage_.emplace(metadata.address, std::move(storage));
+            // 原始证据 budget 限制的是诊断信息，绝不限制元数据读取
+            if (pendingContainers_.size() < 8192)
+            {
+                candidate.reference = result;
+                pendingContainers_.push_back(std::move(candidate));
+                containerEvidence_.emplace(metadata.address, std::move(evidence));
+            }
+            else
+                ++containerNotObserved_[metadata.normalizedClassName + ":raw-evidence-queue-budget"];
+        };
         if (depth >= 32 || remaining == 0 || !path.insert(metadata.address).second)
         {
             property.diagnostics.push_back("nested property cycle or traversal limit: address=" + std::to_string(metadata.address));
@@ -205,7 +232,7 @@ namespace anduefker::reflection
                                  result.kind != PropertyKind::Unknown && metadata.elementSize > 0;
         if (metadata.detailsStatus != PropertyMetadata::DetailsStatus::Complete)
         {
-            // 成员读取失败或必需引用为空时，仅记录证据，不能再以其结果做对象/子属性解引用。
+            // 成员读取失败或必需引用为空时，仅记录证据，不能再以其结果做对象/子属性解引用
             property.diagnostics.push_back("property details status=" + std::to_string(static_cast<int>(metadata.detailsStatus)) +
                                            " address=" + std::to_string(metadata.address));
             if (metadata.detailsStatus != PropertyMetadata::DetailsStatus::UnsupportedLayout)
@@ -216,6 +243,7 @@ namespace anduefker::reflection
                                                  ? "object-property-class-metadata-null"
                                                  : ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus);
             RecordPropertyDetail(metadata, property, detailReason);
+            containerStorage();
             path.erase(metadata.address);
             return result;
         }
@@ -351,21 +379,7 @@ namespace anduefker::reflection
                 reason = "object-property-class-metadata-null";
             RecordPropertyDetail(metadata, property, reason);
         }
-        // 经过验证的子项标头/Owner 足以构成一个原始的候选窗口
-        // 不受支持的子项语义绝不能掩盖外围容器的证据
-        if (metadata.elementSize > 0 &&
-            (((result.kind == PropertyKind::Array || result.kind == PropertyKind::Set) && result.inner) ||
-             (result.kind == PropertyKind::Map && result.key && result.value)))
-        {
-            if (observedContainers_.insert(metadata.address).second)
-            {
-                ++containerCandidates_[metadata.normalizedClassName];
-                if (pendingContainers_.size() < 8192)
-                    pendingContainers_.push_back({metadata, result});
-                else
-                    ++containerNotObserved_[metadata.normalizedClassName + ":candidate-queue-budget"];
-            }
-        }
+        containerStorage();
         path.erase(metadata.address);
         return result;
     }
@@ -685,73 +699,114 @@ namespace anduefker::reflection
         }
     }
 
-    void ReflectionReader::CollectContainerStorage() const
+    void ReflectionReader::CollectContainerStorage(ReflectionIR &reflection) const
     {
-        const auto limitedRepresentation = [](const auto &self, const TypeReferenceIR &reference, size_t depth) -> bool
+        std::unordered_map<uintptr_t, const TypeIR *> types;
+        for (const auto &type : reflection.types)
+            types.emplace(type.address, &type);
+        const auto extent = [](const std::shared_ptr<TypeReferenceIR> &node)
         {
-            if (depth >= 32 || !reference.detailsResolved)
-                return true;
-            switch (reference.kind)
+            const int64_t size = node ? static_cast<int64_t>(node->elementSize) * node->arrayDim : 0;
+            return node && node->elementSize > 0 && node->arrayDim > 0 && size <= INT32_MAX ? static_cast<int32_t>(size) : 0;
+        };
+        const auto validate = [&](const auto &self, const TypeReferenceIR &reference, size_t depth, size_t &remaining) -> void
+        {
+            if (depth >= 32 || remaining == 0)
+                return;
+            --remaining;
+            for (const auto &child : {reference.inner, reference.key, reference.value})
+                if (child)
+                    self(self, *child, depth + 1, remaining);
+            const auto found = containerStorage_.find(reference.metadataAddress);
+            if (found == containerStorage_.end() ||
+                (reference.kind != PropertyKind::Map && reference.kind != PropertyKind::Set))
+                return;
+            const auto &key = reference.kind == PropertyKind::Map ? reference.key : reference.inner;
+            const auto keyAlignment = key ? ::anduefker::ue::PropertyStorageAlignment(
+                                                *key, types, static_cast<int32_t>(sizeof(uintptr_t)), schema_.fname.size)
+                                          : std::nullopt;
+            const auto valueAlignment = reference.value ? ::anduefker::ue::PropertyStorageAlignment(
+                                                              *reference.value, types, static_cast<int32_t>(sizeof(uintptr_t)), schema_.fname.size)
+                                                        : std::nullopt;
+            ::anduefker::ue::ValidateSparseLayout(*found->second, reference.kind, extent(key), extent(reference.value),
+                                                  keyAlignment.value_or(0), valueAlignment.value_or(0));
+        };
+        const auto validateProperties = [&](const auto &properties)
+        {
+            for (const auto &property : properties)
             {
-            case PropertyKind::Text:
-            case PropertyKind::WeakObject:
-            case PropertyKind::LazyObject:
-            case PropertyKind::SoftObject:
-            case PropertyKind::SoftClass:
-            case PropertyKind::Delegate:
-            case PropertyKind::MulticastDelegate:
-            case PropertyKind::FieldPath:
-            case PropertyKind::Optional:
-                return true;
-            default:
-                return (reference.inner && self(self, *reference.inner, depth + 1)) ||
-                       (reference.key && self(self, *reference.key, depth + 1)) ||
-                       (reference.value && self(self, *reference.value, depth + 1));
+                size_t remaining = 256;
+                validate(validate, property.type, 0, remaining);
             }
         };
-        const auto priority = [&](const ContainerCandidate &candidate)
+        for (const auto &type : reflection.types)
+            validateProperties(type.properties);
+        for (const auto &[address, function] : reflection.functions)
         {
-            return !candidate.reference.detailsResolved ? 0 : limitedRepresentation(limitedRepresentation, candidate.reference, 0) ? 1
-                                                                                                                                   : 2;
-        };
+            (void)address;
+            validateProperties(function.parameters);
+            validateProperties(function.locals);
+        }
+        for (const auto &[address, storage] : containerStorage_)
+        {
+            (void)address;
+            ++reflection.containerAllocatorCounts[::anduefker::ir::ContainerAllocatorKindName(storage->allocator)];
+            ++reflection.containerHeaderCounts[storage->headerStatus];
+            ++reflection.containerElementLayoutCounts[storage->layoutStatus];
+        }
+        const auto declarations = ::anduefker::ir::PlanTypeDeclarations(reflection);
         for (auto &candidate : pendingContainers_)
-            candidate.priority = priority(candidate);
-        // 结构表征缺口优先享有 budget，常规容器依然需要分配器证据
+        {
+            const auto &storage = *candidate.reference.containerStorage;
+            candidate.priority = !candidate.reference.detailsResolved ||
+                                         storage.allocator == ::anduefker::ir::ContainerAllocatorKind::Unknown ||
+                                         storage.headerStatus != "source-model-and-size-match"
+                                     ? 0
+                                 : ::anduefker::ir::HasStorageRepresentationGap(candidate.reference, declarations) ? 1
+                                                                                                                   : 2;
+        }
         std::stable_sort(pendingContainers_.begin(), pendingContainers_.end(), [](const auto &left, const auto &right)
                          { return left.priority < right.priority; });
+        std::map<std::string, std::unordered_set<uintptr_t>> sampleOwners;
         for (const auto &candidate : pendingContainers_)
-            ObserveContainerStorage(candidate);
+        {
+            const auto &metadata = candidate.metadata;
+            auto &observation = containerEvidence_.at(metadata.address);
+            observation.storage = *candidate.reference.containerStorage;
+            if (containerObservations_.size() >= 512)
+            {
+                ++containerNotObserved_[metadata.normalizedClassName + ":raw-observation-budget"];
+                continue;
+            }
+            if (candidate.priority == 2)
+            {
+                const std::string shape = metadata.normalizedClassName + ":" + std::to_string(metadata.elementSize) +
+                                          ":" + observation.innerClass + ":" + std::to_string(observation.innerSize) +
+                                          ":" + observation.valueClass + ":" + std::to_string(observation.valueSize) +
+                                          ":" + observation.storage.layoutId;
+                auto &owners = sampleOwners[shape];
+                if (owners.size() >= 2 || owners.contains(metadata.ownerAddress))
+                {
+                    ++containerNotObserved_[metadata.normalizedClassName + ":normal-shape-budget-or-repeated-owner"];
+                    continue;
+                }
+                owners.insert(metadata.ownerAddress);
+            }
+            observation.sampleReason = candidate.priority == 0   ? "unresolved-or-unsupported-storage"
+                                       : candidate.priority == 1 ? "representation-gap"
+                                                                 : "normal-shape-representative";
+            containerObservations_.push_back(std::move(observation));
+        }
         pendingContainers_.clear();
+        containerEvidence_.clear();
     }
 
-    void ReflectionReader::ObserveContainerStorage(const ContainerCandidate &candidate) const
+    ::anduefker::ir::ContainerStorageObservation ReflectionReader::ReadContainerStorage(const ContainerCandidate &candidate) const
     {
         const auto &metadata = candidate.metadata;
         const auto &reference = candidate.reference;
-        if (containerObservations_.size() >= 512)
-        {
-            ++containerNotObserved_[metadata.normalizedClassName + ":global-observation-budget"];
-            return;
-        }
         const auto *element = reference.kind == PropertyKind::Map ? reference.key.get() : reference.inner.get();
         const auto *value = reference.value.get();
-        const std::string shape = metadata.normalizedClassName + ":" + std::to_string(metadata.elementSize) +
-                                  ":" + (element ? element->reflectedClass : "none") +
-                                  ":" + std::to_string(element ? element->elementSize : 0) + ":" + std::to_string(element ? element->arrayDim : 0) +
-                                  ":" + (value ? value->reflectedClass : "none") +
-                                  ":" + std::to_string(value ? value->elementSize : 0) + ":" + std::to_string(value ? value->arrayDim : 0) +
-                                  ":" + std::to_string(reference.detailsResolved);
-        // 将异常字段单独控制在全局 budget 内，类/大小形态去重不得掩盖不同的未解析嵌套路径
-        if (candidate.priority == 2)
-        {
-            auto &owners = containerSampleOwners_[shape];
-            if (owners.size() >= 2 || owners.contains(metadata.ownerAddress))
-            {
-                ++containerNotObserved_[metadata.normalizedClassName + ":normal-shape-budget-or-repeated-owner"];
-                return;
-            }
-            owners.insert(metadata.ownerAddress);
-        }
         ::anduefker::ir::ContainerStorageObservation observation;
         observation.propertyAddress = metadata.address;
         observation.ownerAddress = metadata.ownerAddress;
@@ -761,12 +816,10 @@ namespace anduefker::reflection
         observation.innerClass = element ? element->reflectedClass : "";
         observation.valueClass = value ? value->reflectedClass : "";
         observation.storageSize = metadata.elementSize;
-        observation.sampleReason = candidate.priority == 0   ? "unresolved-semantics"
-                                   : candidate.priority == 1 ? "representation-gap"
-                                                             : "normal-shape-representative";
         observation.propertyDataEnd = schema_.property.subtypeStart;
-        observation.referenceOffset = reference.kind == PropertyKind::Array ? schema_.propertySubtypes.arrayInner : reference.kind == PropertyKind::Map ? schema_.propertySubtypes.mapBase
-                                                                                                                                                        : schema_.propertySubtypes.setElement;
+        observation.referenceOffset = reference.kind == PropertyKind::Array ? schema_.propertySubtypes.arrayInner
+                                      : reference.kind == PropertyKind::Map ? schema_.propertySubtypes.mapBase
+                                                                            : schema_.propertySubtypes.setElement;
         const auto childExtent = [](const TypeReferenceIR *child)
         {
             const int64_t size = child ? static_cast<int64_t>(child->elementSize) * child->arrayDim : 0;
@@ -774,58 +827,53 @@ namespace anduefker::reflection
         };
         observation.innerSize = childExtent(element);
         observation.valueSize = childExtent(value);
-        int32_t referenceOffset = -1;
-        size_t referenceCount = 1;
+        auto &storage = observation.storage;
+        const int32_t pointer = static_cast<int32_t>(sizeof(uintptr_t));
+        const auto alignPointer = [pointer](int64_t offset)
+        { return (offset + pointer - 1) / pointer * pointer; };
+        int32_t offset = observation.referenceOffset;
         size_t windowSize = 0;
         if (reference.kind == PropertyKind::Array)
         {
-            referenceOffset = schema_.propertySubtypes.arrayInner;
-            observation.member = "ArrayFlags-candidates";
-            // 4.25-5.2 ：先 Inner，后 int flags；5.3+ ：先字节 flags，后 Inner
-            // 通过 Inner+4 读取经过验证的属性数据末尾，而不是盲目地使用 Inner-8
-            // 派生成员可能会复用基类的尾部填充，此处不选择任何候选方案
-            const int64_t end = static_cast<int64_t>(referenceOffset) + static_cast<int64_t>(sizeof(uintptr_t)) + 4;
-            if (schema_.property.subtypeStart >= 0 && schema_.property.subtypeStart <= referenceOffset &&
+            observation.member = "ArrayFlags";
+            observation.basis = "validated-inner-and-property-data-end; source-family-candidates";
+            const int64_t dataEnd = schema_.property.subtypeStart;
+            const bool afterInner = dataEnd >= 0 && alignPointer(dataEnd) == offset;
+            const bool beforeInner = dataEnd >= 0 && dataEnd < offset && alignPointer(dataEnd + 1) == offset;
+            const int64_t end = static_cast<int64_t>(offset) + pointer + (afterInner ? 4 : 0);
+            if ((afterInner || beforeInner) && schema_.property.subtypeStart <= offset &&
                 end - schema_.property.subtypeStart <= 32)
             {
-                referenceOffset = schema_.property.subtypeStart;
-                referenceCount = 0;
-                windowSize = static_cast<size_t>(end - referenceOffset);
-                observation.basis = "validated-property-data-end-through-inner+4; flags-before-inner:uint8 or after-inner:int32; candidate-only";
+                offset = schema_.property.subtypeStart;
+                windowSize = static_cast<size_t>(end - offset);
             }
             else
-            {
-                windowSize = 4;
-                observation.basis = "after-inner:int32-candidate-only; before-inner-candidate-unavailable:unresolved-property-data-end";
-            }
+                observation.status = "unresolved-property-data-end";
             if (!schema_.features.useFProperty)
-                observation.status = "not-applicable-to-uproperty";
-        }
-        else if (reference.kind == PropertyKind::Map)
-        {
-            referenceOffset = schema_.propertySubtypes.mapBase;
-            referenceCount = 2;
-            observation.member = "MapLayout-and-possible-MapFlags";
-            observation.basis = "after-validated-key-value; sparse=24 compact=12; flag-width=1-or-4; candidate-only";
-            windowSize = schema_.features.useFProperty ? 28 : 24;
+                observation.status = "flags-not-applicable-to-uproperty";
         }
         else
         {
-            referenceOffset = schema_.propertySubtypes.setElement;
-            observation.member = "SetLayout";
-            observation.basis = "after-validated-element; sparse=20 compact=8; candidate-only";
-            windowSize = 20;
+            const int64_t end = static_cast<int64_t>(offset) + (reference.kind == PropertyKind::Map ? 2 : 1) * pointer;
+            observation.member = reference.kind == PropertyKind::Map ? "MapLayout-and-MapFlags" : "SetLayout";
+            observation.basis = reference.kind == PropertyKind::Map ? "after-validated-key-value; script-map-layout=24; flags-width=1-or-4"
+                                                                    : "after-validated-element; script-set-layout=20; heap-only";
+            windowSize = reference.kind == PropertyKind::Map ? (schema_.features.useFProperty ? 28 : 24) : 20;
+            if (offset < 0 || end > INT32_MAX)
+                observation.status = "candidate-offset-unrepresentable";
+            else
+                offset = static_cast<int32_t>(end);
         }
-        const size_t delta = referenceCount * sizeof(uintptr_t);
+        if (metadata.detailsStatus != PropertyMetadata::DetailsStatus::Complete)
+            observation.status = "unvalidated-property-references";
+        observation.offset = offset;
         observation.requested = windowSize;
-        if (observation.status.empty() && referenceOffset >= 0 &&
-            static_cast<size_t>(referenceOffset) <= static_cast<size_t>(INT32_MAX) - delta)
+        if (observation.status.empty())
         {
-            observation.offset = referenceOffset + static_cast<int32_t>(delta);
-            const auto address = Add(metadata.address, observation.offset);
+            const auto address = Add(metadata.address, offset);
             observation.address = address.value_or(0);
             if (!address || memory_.LimitExceeded() || !memory_.IsReadable(*address, windowSize))
-                observation.status = "candidate-window-unreadable-or-budget-exhausted";
+                observation.status = "metadata-window-unreadable-or-budget-exhausted";
             else
             {
                 observation.bytes.resize(windowSize);
@@ -833,88 +881,82 @@ namespace anduefker::reflection
                 observation.readError = static_cast<int32_t>(read.error);
                 observation.transferred = read.transferred;
                 observation.readable = read.Ok();
-                observation.status = read.Ok() ? "observed-not-selected" : "candidate-read-failed";
+                observation.status = read.Ok() ? "metadata-observed" : "metadata-read-failed";
                 if (!read.Ok())
                     observation.bytes.clear();
             }
         }
-        else if (observation.status.empty())
-            observation.status = "candidate-offset-unrepresentable";
         if (observation.readable && schema_.features.useFProperty)
         {
-            const auto flagCandidate = [&](int32_t offset, uint8_t width, const char *basis)
+            const auto flagCandidate = [&](int32_t flagOffset, uint8_t width, const char *basis)
             {
-                if (offset < observation.offset)
+                if (flagOffset < observation.offset)
                     return;
-                const size_t index = static_cast<size_t>(offset - observation.offset);
+                const size_t index = static_cast<size_t>(flagOffset - observation.offset);
                 if (index > observation.bytes.size() || width > observation.bytes.size() - index)
                     return;
                 uint32_t raw = 0;
                 std::memcpy(&raw, observation.bytes.data() + index, width);
-                observation.flagCandidates.push_back({basis, offset, width, raw, raw <= 1});
+                observation.flagCandidates.push_back({basis, flagOffset, width, raw, raw <= 1});
             };
             if (reference.kind == PropertyKind::Array)
             {
-                if (schema_.property.subtypeStart >= observation.offset &&
-                    schema_.property.subtypeStart < observation.referenceOffset)
-                    flagCandidate(schema_.property.subtypeStart, 1, "UE5.3+-flags-before-inner-property-data-end");
-                if (observation.referenceOffset <= INT32_MAX - static_cast<int32_t>(sizeof(uintptr_t)))
-                    flagCandidate(observation.referenceOffset + static_cast<int32_t>(sizeof(uintptr_t)), 4,
-                                  "UE4.25-5.2-flags-after-inner");
+                const int64_t dataEnd = observation.propertyDataEnd;
+                // Member 顺序必须符合独立验证过的 Inner 偏移
+                if (dataEnd >= 0 && alignPointer(dataEnd) == observation.referenceOffset &&
+                    observation.referenceOffset <= INT32_MAX - pointer)
+                    flagCandidate(observation.referenceOffset + pointer, 4, "UE4.25-5.2-flags-after-inner");
+                if (dataEnd >= 0 && dataEnd < observation.referenceOffset &&
+                    alignPointer(dataEnd + 1) == observation.referenceOffset)
+                    flagCandidate(observation.propertyDataEnd, 1, "UE5.3+-flags-before-inner");
             }
-            else if (reference.kind == PropertyKind::Map)
+            else if (reference.kind == PropertyKind::Map && observation.offset <= INT32_MAX - 24)
             {
-                // UE 中同时存在这两种布局族；不能仅凭大小来选择其中任何一个
-                for (const auto &[size, basis] : {std::pair{12, "compact-map-layout-tail"}, std::pair{24, "sparse-map-layout-tail"}})
-                    if (observation.offset <= INT32_MAX - size)
-                    {
-                        flagCandidate(observation.offset + size, 1, basis);
-                        flagCandidate(observation.offset + size, 4, basis);
-                    }
+                flagCandidate(observation.offset + 24, 1, "UE5.3+-script-map-layout-tail");
+                flagCandidate(observation.offset + 24, 4, "UE4.25-5.2-script-map-layout-tail");
             }
         }
-        if (observation.readable && reference.kind != PropertyKind::Array)
+        if (metadata.detailsStatus != PropertyMetadata::DetailsStatus::Complete)
+            storage.allocatorStatus = "unvalidated-property-references";
+        else if (!schema_.features.useFProperty || reference.kind == PropertyKind::Set)
         {
-            const auto word = [&](size_t index)
-            {
-                int32_t result = 0;
-                std::memcpy(&result, observation.bytes.data() + index * sizeof(result), sizeof(result));
-                return static_cast<int64_t>(result);
-            };
-            const size_t start = reference.kind == PropertyKind::Map ? 1 : 0;
-            const int64_t valueOffset = start == 1 ? word(0) : 0;
-            const int64_t payloadEnd = start == 1 ? valueOffset + observation.valueSize : observation.innerSize;
-            const bool pairFits = start == 0 || valueOffset >= observation.innerSize;
-            const auto alignmentValid = [](int64_t alignment)
-            {
-                return alignment > 0 && (alignment & (alignment - 1)) == 0;
-            };
-            const int64_t recordedAlignment = word(start + 3);
-            // FStructBuilder -> FScriptSparseSet -> FScriptSparseArray
-            // 映射键值对的大小/对齐取决于已记录的元数据，而非独立确立的键/值 ABI
-            const auto align = [](int64_t size, int64_t alignment)
-            {
-                return (size + alignment - 1) / alignment * alignment;
-            };
-            bool sparseMatches = false;
-            if (observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
-                alignmentValid(recordedAlignment) && recordedAlignment >= 4)
-            {
-                const int64_t hashNext = align(payloadEnd, start == 0 ? 4 : recordedAlignment);
-                const int64_t hashIndex = hashNext + 4;
-                const int64_t setSize = align(hashIndex + 4, recordedAlignment);
-                const int64_t sparseSize = std::max<int64_t>(setSize, 8);
-                sparseMatches = sparseSize <= INT32_MAX && word(start) == hashNext &&
-                                word(start + 1) == hashIndex && word(start + 2) == setSize &&
-                                word(start + 4) == sparseSize;
-            }
-            observation.sparseFormulaMatches = sparseMatches;
-            observation.compactNecessaryConditions =
-                observation.innerSize > 0 && (start == 0 || observation.valueSize > 0) && pairFits &&
-                (start == 0 ? word(start) == payloadEnd : word(start) >= payloadEnd) &&
-                alignmentValid(word(start + 1)) && word(start + 1) >= 4;
+            storage.allocator = ::anduefker::ir::ContainerAllocatorKind::Heap;
+            storage.allocatorStatus = "source-defined-heap-only";
         }
-        containerObservations_.push_back(std::move(observation));
+        else if (!observation.readable)
+            storage.allocatorStatus = observation.status;
+        else if (observation.flagCandidates.empty())
+            storage.allocatorStatus = "no-source-compatible-flag-offset";
+        else
+        {
+            const uint32_t raw = observation.flagCandidates.front().raw;
+            const bool consensus = std::all_of(observation.flagCandidates.begin(), observation.flagCandidates.end(),
+                                               [raw](const auto &flag)
+                                               { return flag.knownValue && flag.raw == raw; });
+            storage.allocatorStatus = consensus ? "source-candidate-value-consensus" : "unknown-flags-or-candidate-disagreement";
+            if (consensus)
+                storage.allocator = raw == 0 ? ::anduefker::ir::ContainerAllocatorKind::Heap
+                                             : ::anduefker::ir::ContainerAllocatorKind::MemoryImage;
+        }
+        if (reference.kind != PropertyKind::Array)
+            ::anduefker::ue::DecodeSparseLayout(observation, reference.kind);
+        else
+            storage.layoutStatus = "no-element-layout-record";
+        const auto header = ::anduefker::ue::DescribeHeapContainer(reference.kind, pointer);
+        if (storage.allocator == ::anduefker::ir::ContainerAllocatorKind::Unknown)
+            storage.headerStatus = "allocator-unresolved";
+        else if (storage.allocator == ::anduefker::ir::ContainerAllocatorKind::MemoryImage)
+            storage.headerStatus = "memory-image-implementation-unavailable";
+        else if (!header || header->size != metadata.elementSize)
+            storage.headerStatus = "storage-size-mismatch";
+        else if (reference.kind != PropertyKind::Array && !observation.sparseFormulaMatches.value_or(false))
+            storage.headerStatus = "element-layout-unvalidated";
+        else
+        {
+            storage.layoutId = header->id;
+            storage.headerStatus = "source-model-and-size-match";
+        }
+        return observation;
     }
 
     std::optional<TypeIR> ReflectionReader::ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const
@@ -955,6 +997,34 @@ namespace anduefker::reflection
             type.layoutConflicts.push_back("type full name could not be resolved");
         }
         type.size = *size;
+        if (schema_.ustruct.propertiesSizeOffset >= 0 && schema_.ustruct.propertiesSizeOffset <= INT32_MAX - 4)
+        {
+            const auto address = Add(object, schema_.ustruct.propertiesSizeOffset + 4);
+            std::array<uint8_t, 4> bytes{};
+            if (address && memory_.IsReadable(*address, bytes.size()) &&
+                memory_.ReadBytes(*address, bytes.data(), bytes.size()).Ok())
+            {
+                int16_t shortValue = 0;
+                int32_t longValue = 0;
+                uint32_t raw = 0;
+                std::memcpy(&shortValue, bytes.data(), sizeof(shortValue));
+                std::memcpy(&longValue, bytes.data(), sizeof(longValue));
+                std::memcpy(&raw, bytes.data(), sizeof(raw));
+                type.minAlignmentRaw = raw;
+                // PropertiesSize 可能排除最终对齐填充
+                const auto plausible = [](int32_t value)
+                { return value > 0 && (value & (value - 1)) == 0; };
+                if (plausible(shortValue) && plausible(longValue) && shortValue == longValue)
+                {
+                    type.minAlignment = shortValue;
+                    type.minAlignmentStatus = "value-consensus-width-unresolved";
+                }
+                else
+                    type.minAlignmentStatus = "value-consensus-unavailable";
+            }
+            else
+                type.minAlignmentStatus = "unreadable";
+        }
         const auto properties = objects_.StructProperties(object);
         if (properties)
             ReadProperties(*properties, type, ir.stats);
@@ -1289,50 +1359,74 @@ namespace anduefker::reflection
             for (const auto &property : type.properties)
                 propertyEvidence(property, type.fullName, type.address, "type-field");
         }
+        std::map<std::string, size_t> normalEntrySamples;
+        std::map<std::string, size_t> normalEntryOmitted;
+        diagnostic_("function_entry_log_policy normal_samples_per_kind=8 mandatory=all-anomalies-and-signatures full_records=reflection.json/functions");
         for (const auto &[address, function] : reflection.functions)
         {
-            const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
-            std::ostringstream line;
-            line << "function_entry address=0x" << std::hex << address << " owner=0x" << function.outerAddress
-                 << " flags=0x" << function.flags << std::dec;
-            if (const auto id = entryIds.find(key); id != entryIds.end())
-                line << " entry_id=" << id->second;
-            else
+            const bool normal = !function.referencedAsSignature && function.reflectedClass == "Function" &&
+                                function.headerReadable && function.parameterSemanticsConsistent && function.parameterSemanticsValid &&
+                                function.status == ParseStatus::Complete && function.layoutConflicts.empty() &&
+                                function.entryReadable && function.entryExecutable && function.entryInModule &&
+                                function.nativeFlag == ((function.flags & ::anduefker::ue::kFUNCNative) != 0) &&
+                                function.nativeExecRva.has_value() == function.nativeFlag;
+            bool emitEntry = true;
+            if (normal)
             {
-                line << " entry=0x" << std::hex << function.execEntry << std::dec;
-                if (!function.entryReadable)
-                    line << " readable=0";
-                if (!function.entryExecutable)
-                    line << " executable=0";
-                if (!function.entryInModule)
-                    line << " in_module=0";
-                if (function.execEntryRva)
-                    line << " rva=0x" << std::hex << *function.execEntryRva << std::dec;
+                auto &samples = normalEntrySamples[function.EntryKind()];
+                if (samples < 8)
+                    ++samples;
+                else
+                {
+                    ++normalEntryOmitted[function.EntryKind()];
+                    emitEntry = false;
+                }
             }
-            line << " name=" << std::quoted(function.name)
-                 << " params=" << static_cast<unsigned int>(function.headerNumParams) << '/' << function.headerParamSize;
-            if (function.reflectedClass != "Function")
-                line << " class=" << function.reflectedClass;
-            if (!function.headerReadable)
-                line << " header_readable=0";
-            if (!function.parameterSemanticsConsistent)
-                line << " consistent=0";
-            if (!function.parameterSemanticsValid)
-                line << " semantics_valid=0";
-            if (function.nativeFlag != ((function.flags & ::anduefker::ue::kFUNCNative) != 0))
-                line << " native=" << function.nativeFlag;
-            if (function.nativeExecRva.has_value() !=
-                (function.nativeFlag && function.entryInModule && function.entryExecutable))
-                line << " native_exec_available=" << function.nativeExecRva.has_value();
-            if (function.status != ParseStatus::Complete)
-                line << " status=" << ParseStatusName(function.status);
-            if (function.returnValueOffset != 0xFFFFu)
-                line << " return=" << function.returnValueOffset;
-            if (function.defaultInitializerCount != 0)
-                line << " default_initializers=" << function.defaultInitializerCount;
-            if (!function.parameterSemanticsConsistent)
-                line << " derived_params=" << function.derivedNumParams << '/' << function.derivedParamSize;
-            diagnostic_(line.str());
+            if (emitEntry)
+            {
+                const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
+                std::ostringstream line;
+                line << "function_entry address=0x" << std::hex << address << " owner=0x" << function.outerAddress
+                     << " flags=0x" << function.flags << std::dec;
+                if (const auto id = entryIds.find(key); id != entryIds.end())
+                    line << " entry_id=" << id->second;
+                else
+                {
+                    line << " entry=0x" << std::hex << function.execEntry << std::dec;
+                    if (!function.entryReadable)
+                        line << " readable=0";
+                    if (!function.entryExecutable)
+                        line << " executable=0";
+                    if (!function.entryInModule)
+                        line << " in_module=0";
+                    if (function.execEntryRva)
+                        line << " rva=0x" << std::hex << *function.execEntryRva << std::dec;
+                }
+                line << " name=" << std::quoted(function.name)
+                     << " params=" << static_cast<unsigned int>(function.headerNumParams) << '/' << function.headerParamSize;
+                if (function.reflectedClass != "Function")
+                    line << " class=" << function.reflectedClass;
+                if (!function.headerReadable)
+                    line << " header_readable=0";
+                if (!function.parameterSemanticsConsistent)
+                    line << " consistent=0";
+                if (!function.parameterSemanticsValid)
+                    line << " semantics_valid=0";
+                if (function.nativeFlag != ((function.flags & ::anduefker::ue::kFUNCNative) != 0))
+                    line << " native=" << function.nativeFlag;
+                if (function.nativeExecRva.has_value() !=
+                    (function.nativeFlag && function.entryInModule && function.entryExecutable))
+                    line << " native_exec_available=" << function.nativeExecRva.has_value();
+                if (function.status != ParseStatus::Complete)
+                    line << " status=" << ParseStatusName(function.status);
+                if (function.returnValueOffset != 0xFFFFu)
+                    line << " return=" << function.returnValueOffset;
+                if (function.defaultInitializerCount != 0)
+                    line << " default_initializers=" << function.defaultInitializerCount;
+                if (!function.parameterSemanticsConsistent)
+                    line << " derived_params=" << function.derivedNumParams << '/' << function.derivedParamSize;
+                diagnostic_(line.str());
+            }
             for (const auto &message : function.layoutConflicts)
                 diagnostic_("function_conflict address=" + std::to_string(address) + " message=" + message);
             for (const auto &property : function.parameters)
@@ -1340,7 +1434,16 @@ namespace anduefker::reflection
             for (const auto &property : function.locals)
                 propertyEvidence(property, function.fullName, address, "function-local");
         }
-        diagnostic_("container_storage_probe abi_selected=0 max_observations=512 max_normal_owners_per_shape=2 exceptional_fields=individual-within-global-budget max_candidates=8192 priority=representation-gaps-first sparse_check=conditional-formula-with-recorded-alignment compact_check=necessary-only");
+        for (const auto &[kind, count] : normalEntryOmitted)
+            diagnostic_("function_entry_log_omitted kind=" + kind + " normal_records=" + std::to_string(count) +
+                        " samples=" + std::to_string(normalEntrySamples.at(kind)) + " full_records=reflection.json/functions");
+        diagnostic_("container_storage_probe metadata=all-visited-nodes instance_traversal_validated=0 max_raw_observations=512 max_normal_owners_per_shape=2 exceptional_fields=individual-within-global-budget max_raw_candidates=8192 priority=final-representation-gaps-first sparse_check=conditional-formula-with-recorded-alignment");
+        for (const auto &[allocator, count] : reflection.containerAllocatorCounts)
+            diagnostic_("container_allocator_summary allocator=" + allocator + " nodes=" + std::to_string(count));
+        for (const auto &[status, count] : reflection.containerHeaderCounts)
+            diagnostic_("container_header_summary status=" + status + " nodes=" + std::to_string(count));
+        for (const auto &[status, count] : reflection.containerElementLayoutCounts)
+            diagnostic_("container_element_layout_summary status=" + status + " nodes=" + std::to_string(count));
         for (const auto &[kind, count] : reflection.containerStorageCandidates)
             diagnostic_("container_storage_candidates class=" + kind + " count=" + std::to_string(count));
         for (const auto &[reason, count] : reflection.containerStorageNotObserved)
@@ -1359,12 +1462,15 @@ namespace anduefker::reflection
                  << " value_class=" << observation.valueClass << " readable=" << observation.readable
                  << " read_error=" << observation.readError << " requested=" << observation.requested
                  << " transferred=" << observation.transferred
-                 << " status=" << observation.status << " basis=" << std::quoted(observation.basis);
+                 << " status=" << observation.status << " basis=" << std::quoted(observation.basis)
+                 << " allocator=" << ::anduefker::ir::ContainerAllocatorKindName(observation.storage.allocator)
+                 << " allocator_status=" << observation.storage.allocatorStatus
+                 << " header_status=" << observation.storage.headerStatus
+                 << " element_layout_status=" << observation.storage.layoutStatus
+                 << " layout_id=" << observation.storage.layoutId;
             line << " sample_reason=" << observation.sampleReason;
             if (observation.sparseFormulaMatches)
                 line << " sparse_formula_matches=" << *observation.sparseFormulaMatches;
-            if (observation.compactNecessaryConditions)
-                line << " compact_necessary_conditions=" << *observation.compactNecessaryConditions;
             line << " bytes=" << std::hex << std::setfill('0');
             for (uint8_t byte : observation.bytes)
                 line << std::setw(2) << static_cast<unsigned int>(byte);
@@ -1373,7 +1479,7 @@ namespace anduefker::reflection
                 diagnostic_("container_flag_candidate property=" + std::to_string(observation.propertyAddress) +
                             " offset=" + std::to_string(flag.offset) + " width=" + std::to_string(flag.width) +
                             " raw=" + std::to_string(flag.raw) + " known_value=" + std::to_string(flag.knownValue) +
-                            " basis=" + flag.basis + " selected=0");
+                            " basis=" + flag.basis + " width_selected=0");
         }
         for (const auto &enumeration : reflection.enums)
             for (const auto &message : enumeration.diagnostics)
@@ -1384,13 +1490,14 @@ namespace anduefker::reflection
                                                ::anduefker::ir::CaptureInfo::Attempt &details)
     {
         ReflectionIR result;
+        result.containerPointerWidth = static_cast<int32_t>(sizeof(uintptr_t));
         delegateSignatures_.clear();
         pendingSignatures_.clear();
         nextSignature_ = 0;
         functionChains_.clear();
-        observedContainers_.clear();
+        containerStorage_.clear();
         pendingContainers_.clear();
-        containerSampleOwners_.clear();
+        containerEvidence_.clear();
         containerCandidates_.clear();
         containerNotObserved_.clear();
         containerObservations_.clear();
@@ -1457,7 +1564,6 @@ namespace anduefker::reflection
                 if (progress_)
                     progress_("capture: validating observed bytes; enumerated=" + std::to_string(index));
                 CloseDelegateSignatures(result);
-                CollectContainerStorage();
                 validation = memory_.Validate();
                 const auto boundary = objects_.RefreshObjectCount();
                 details.countAddress = boundary.countAddress;
@@ -1773,6 +1879,7 @@ namespace anduefker::reflection
                                          " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
 
         ::anduefker::ir::AnalyzeReflectionLayouts(result);
+        CollectContainerStorage(result);
         if (result.stats.parsedTypes == 0)
             result.status = ParseStatus::Failed;
         else if (result.stats.failures != 0 || result.stats.unknownProperties != 0 ||

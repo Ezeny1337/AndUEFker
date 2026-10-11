@@ -160,6 +160,42 @@ namespace anduefker::ir
         return "none";
     }
 
+    enum class ContainerAllocatorKind
+    {
+        Unknown,
+        Heap,
+        MemoryImage,
+    };
+
+    [[nodiscard]] inline const char *ContainerAllocatorKindName(ContainerAllocatorKind kind)
+    {
+        switch (kind)
+        {
+        case ContainerAllocatorKind::Heap:
+            return "heap";
+        case ContainerAllocatorKind::MemoryImage:
+            return "memory-image";
+        case ContainerAllocatorKind::Unknown:
+            return "unknown";
+        }
+        return "unknown";
+    }
+
+    struct ContainerStorageIR
+    {
+        ContainerAllocatorKind allocator = ContainerAllocatorKind::Unknown;
+        std::string allocatorStatus = "not-read";
+        std::string layoutStatus = "not-read";
+        std::string headerStatus = "not-read";
+        std::string layoutId;
+        int32_t valueOffset = -1;
+        int32_t hashNextOffset = -1;
+        int32_t hashIndexOffset = -1;
+        int32_t setElementSize = -1;
+        int32_t elementAlignment = -1;
+        int32_t elementStride = -1;
+    };
+
     struct TypeReferenceIR
     {
         uintptr_t metadataAddress = 0;
@@ -175,6 +211,7 @@ namespace anduefker::ir
         bool detailsResolved = false;
         // 即使子项的语义尚未解析，其外围的元数据/标识依然可以是有效的
         bool nodeDetailsResolved = false;
+        std::shared_ptr<const ContainerStorageIR> containerStorage;
         std::shared_ptr<TypeReferenceIR> inner;
         std::shared_ptr<TypeReferenceIR> key;
         std::shared_ptr<TypeReferenceIR> value;
@@ -307,6 +344,9 @@ namespace anduefker::ir
         std::string name;
         std::string fullName;
         int32_t size = 0;
+        int32_t minAlignment = -1;
+        std::optional<uint32_t> minAlignmentRaw;
+        std::string minAlignmentStatus = "not-read";
         std::vector<PropertyIR> properties;
         std::vector<uintptr_t> functionAddresses;
         std::vector<std::string> layoutConflicts;
@@ -358,7 +398,7 @@ namespace anduefker::ir
         int32_t unknownProperties = 0;
         int32_t unresolvedTypeDetails = 0;
         int32_t layoutConflicts = 0;
-        // 包含空槽、槽位读取失败、类默认对象和未完成加载的反射定义。
+        // 包含空槽、槽位读取失败、类默认对象和未完成加载的反射定义
         int32_t skippedObjects = 0;
         int32_t emptyObjectSlots = 0;
         int32_t objectReadFailures = 0;
@@ -470,7 +510,7 @@ namespace anduefker::ir
         size_t requested = 0;
         size_t transferred = 0;
         std::optional<bool> sparseFormulaMatches;
-        std::optional<bool> compactNecessaryConditions;
+        ContainerStorageIR storage;
         std::string sampleReason;
         struct FlagCandidate
         {
@@ -497,6 +537,10 @@ namespace anduefker::ir
         std::map<uintptr_t, FunctionIR> functions;
         std::vector<DelegateSignatureObservation> delegateSignatures;
         std::vector<ContainerStorageObservation> containerStorageObservations;
+        int32_t containerPointerWidth = 0;
+        std::map<std::string, size_t> containerAllocatorCounts;
+        std::map<std::string, size_t> containerHeaderCounts;
+        std::map<std::string, size_t> containerElementLayoutCounts;
         std::map<std::string, size_t> containerStorageCandidates;
         std::map<std::string, size_t> containerStorageNotObserved;
     };

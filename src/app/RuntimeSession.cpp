@@ -201,11 +201,6 @@ namespace anduefker::app
         provenance_.producerCommit = kProducerCommit;
         provenance_.producerVersion = kProducerVersion;
         provenance_.producerWorktree = kProducerWorktreeAtConfigure;
-        provenance_.producerIdentityStatus = kProducerIdentityStatus;
-        provenance_.producerIdentityQueryResult = kProducerIdentityQueryResult;
-        provenance_.producerWorktreeStatus = kProducerWorktreeStatus;
-        provenance_.producerIdentityFailureReason = kProducerIdentityFailureReason;
-        provenance_.producerWorktreeFailureReason = kProducerWorktreeFailureReason;
         provenance_.runId = std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                                                std::chrono::system_clock::now().time_since_epoch())
                                                .count()) +
@@ -247,13 +242,8 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Debug, "run_provenance producer_commit=" + provenance_.producerCommit +
                                          " producer_version=" + provenance_.producerVersion +
                                          " producer_worktree_at_configure=" + provenance_.producerWorktree +
-                                         " identity_status=" + provenance_.producerIdentityStatus +
-                                         " identity_query_result=" + provenance_.producerIdentityQueryResult +
-                                         " worktree_status=" + provenance_.producerWorktreeStatus +
-                                         " identity_failure_reason=" + provenance_.producerIdentityFailureReason +
-                                         " worktree_failure_reason=" + provenance_.producerWorktreeFailureReason +
                                          " identity_source=cmake-configure run_id=" + provenance_.runId);
-        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=4 owner_contexts=address-keyed exec_entries=shared-context-or-inline-with-explicit-defaults opaque_fields=generation-type-keyed array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1");
+        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=5 owner_contexts=address-keyed exec_entries=bounded-normal-samples-and-all-anomalies opaque_fields=bounded-normal-samples-and-all-gaps opaque_normal_samples_per_class=8 generation_types=shared-context full_records=reflection.json-and-diagnostics.json array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1 container_metadata=all-visited-nodes raw_container_evidence=bounded-samples");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);

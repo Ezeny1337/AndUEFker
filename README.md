@@ -212,7 +212,9 @@ The generated `manifest.json` reports one of the following artifact states:
 
 The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
 
-`manifest.json` records `reflection_status` and `sdk_status` separately. Typed opaque storage (including arrays with unverified allocators) preserves known field semantics and sizes without asserting internal layouts; it does not by itself make the SDK description partial. Omitted fields and description layout warnings do.
+`manifest.json` records `reflection_status` and `sdk_status` separately. Typed opaque storage preserves known field semantics and sizes; selected ordinary-container layout tags describe target offsets, not validated live traversal. Opaque storage does not by itself make the SDK description partial. Omitted fields and description layout warnings do.
+
+JSON artifacts retain complete field metadata. Logs retain diagnostic summaries, bounded normal samples, and anomalies, with omitted sample counts and artifact references.
 
 ## Issues
 

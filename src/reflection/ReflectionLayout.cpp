@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -228,6 +230,105 @@ namespace anduefker::ir
                     changed = true;
                 }
             }
+        }
+    }
+
+    TypeDeclarationPlan PlanTypeDeclarations(const ReflectionIR &reflection)
+    {
+        TypeDeclarationPlan result;
+        const size_t count = reflection.types.size();
+        std::unordered_map<uintptr_t, size_t> byAddress;
+        for (size_t index = 0; index < count; ++index)
+        {
+            const auto &type = reflection.types[index];
+            byAddress.emplace(type.address, index);
+            result.types.emplace(type.address, TypeDeclarationIR{type.layout.representation, false, false, type.size});
+        }
+        std::vector<size_t> pending(count);
+        std::vector<std::vector<size_t>> dependents(count);
+        std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> ready;
+        for (size_t index = 0; index < count; ++index)
+        {
+            const auto &type = reflection.types[index];
+            auto &info = result.types.at(type.address);
+            const auto base = byAddress.find(type.superAddress);
+            info.inheritsBase = info.representation == LayoutRepresentation::SequentialMembers &&
+                                base != byAddress.end() &&
+                                result.types.at(base->first).representation == LayoutRepresentation::SequentialMembers &&
+                                reflection.types[base->second].size >= 0 && reflection.types[base->second].size <= type.size;
+            std::unordered_set<size_t> dependencies;
+            if (info.inheritsBase)
+                dependencies.insert(base->second);
+            if (info.representation == LayoutRepresentation::SequentialMembers)
+                for (const auto &property : type.properties)
+                {
+                    const auto target = byAddress.find(property.type.referencedObject);
+                    if (property.type.kind == PropertyKind::Struct && target != byAddress.end() &&
+                        result.types.at(target->first).representation == LayoutRepresentation::SequentialMembers)
+                        dependencies.insert(target->second);
+                }
+            pending[index] = dependencies.size();
+            for (size_t dependency : dependencies)
+                dependents[dependency].push_back(index);
+            if (dependencies.empty())
+                ready.push(index);
+        }
+        while (!ready.empty())
+        {
+            const size_t index = ready.top();
+            ready.pop();
+            result.order.push_back(index);
+            for (size_t dependent : dependents[index])
+                if (--pending[dependent] == 0)
+                    ready.push(dependent);
+        }
+        for (size_t index = 0; index < count; ++index)
+            if (pending[index] != 0)
+            {
+                auto &info = result.types.at(reflection.types[index].address);
+                info.representation = LayoutRepresentation::OffsetDescription;
+                info.dependencyBlocked = true;
+                info.inheritsBase = false;
+                result.order.push_back(index);
+            }
+        return result;
+    }
+
+    bool HasStorageRepresentationGap(const TypeReferenceIR &reference, const TypeDeclarationPlan &plan, size_t depth)
+    {
+        if (depth >= 32 || !reference.detailsResolved || reference.arrayDim != 1)
+            return true;
+        switch (reference.kind)
+        {
+        case PropertyKind::Struct:
+        {
+            const auto type = plan.types.find(reference.referencedObject);
+            return type == plan.types.end() || type->second.size != reference.elementSize ||
+                   type->second.representation == LayoutRepresentation::OffsetDescription;
+        }
+        case PropertyKind::Text:
+        case PropertyKind::LazyObject:
+        case PropertyKind::SoftObject:
+        case PropertyKind::SoftClass:
+        case PropertyKind::Delegate:
+        case PropertyKind::FieldPath:
+        case PropertyKind::Optional:
+        case PropertyKind::Unknown:
+            return true;
+        case PropertyKind::WeakObject:
+            return reference.elementSize != 8 || !plan.types.contains(reference.referencedObject);
+        case PropertyKind::MulticastDelegate:
+            return reference.delegateStorage != DelegateStorageKind::SparseMulticast || reference.elementSize != 1;
+        case PropertyKind::Array:
+        case PropertyKind::Map:
+        case PropertyKind::Set:
+            if (depth != 0)
+                return true;
+            [[fallthrough]];
+        default:
+            return (reference.inner && HasStorageRepresentationGap(*reference.inner, plan, depth + 1)) ||
+                   (reference.key && HasStorageRepresentationGap(*reference.key, plan, depth + 1)) ||
+                   (reference.value && HasStorageRepresentationGap(*reference.value, plan, depth + 1));
         }
     }
 } // namespace anduefker::ir

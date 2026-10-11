@@ -16,82 +16,34 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(ANDUEFKER_PRODUCER_COMMIT "unknown")
 set(ANDUEFKER_PRODUCER_WORKTREE "unknown")
-set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "git-not-found")
-set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "not-run")
-set(ANDUEFKER_PRODUCER_WORKTREE_STATUS "not-queried")
-set(ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON "git-not-found")
-set(ANDUEFKER_PRODUCER_WORKTREE_FAILURE_REASON "not-queried")
-# Persist only known categories, never Git stderr (which can contain local paths).
-function(anduefker_git_failure_reason result error output)
-    if("${result}" STREQUAL "0")
-        set(reason "none")
-    elseif(NOT "${result}" MATCHES "^-?[0-9]+$")
-        set(reason "launch-failed")
-    elseif("${error}" MATCHES "detected dubious ownership|unsafe repository")
-        set(reason "unsafe-repository-ownership")
-    elseif("${error}" MATCHES "not a git repository")
-        set(reason "not-a-git-repository")
-    elseif("${error}" MATCHES "Permission denied|Access is denied")
-        set(reason "permission-denied")
-    elseif("${error}" MATCHES "unknown revision|Needed a single revision|ambiguous argument")
-        set(reason "revision-unavailable")
-    else()
-        set(reason "unclassified-git-error")
-    endif()
-    set(${output} "${reason}" PARENT_SCOPE)
-endfunction()
 find_package(Git QUIET)
 if(Git_FOUND)
-    set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "worktree-query-failed")
-    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --is-inside-work-tree
+    execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --verify HEAD
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        RESULT_VARIABLE ANDUEFKER_GIT_WORKTREE_RESULT
-        OUTPUT_VARIABLE ANDUEFKER_GIT_INSIDE_WORKTREE OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_VARIABLE ANDUEFKER_GIT_ERROR)
-    anduefker_git_failure_reason("${ANDUEFKER_GIT_WORKTREE_RESULT}" "${ANDUEFKER_GIT_ERROR}"
-        ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON)
-    set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "${ANDUEFKER_GIT_WORKTREE_RESULT}")
-    if(ANDUEFKER_GIT_WORKTREE_RESULT STREQUAL "0" AND ANDUEFKER_GIT_INSIDE_WORKTREE STREQUAL "true")
-        set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "revision-query-failed")
-        execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+        RESULT_VARIABLE ANDUEFKER_GIT_RESULT
+        OUTPUT_VARIABLE ANDUEFKER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(ANDUEFKER_GIT_RESULT STREQUAL "0" AND ANDUEFKER_GIT_COMMIT MATCHES "^[0-9a-fA-F]+$")
+        set(ANDUEFKER_PRODUCER_COMMIT "${ANDUEFKER_GIT_COMMIT}")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            RESULT_VARIABLE ANDUEFKER_GIT_RESULT
-            OUTPUT_VARIABLE ANDUEFKER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_VARIABLE ANDUEFKER_GIT_ERROR)
-        anduefker_git_failure_reason("${ANDUEFKER_GIT_RESULT}" "${ANDUEFKER_GIT_ERROR}"
-            ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON)
-        set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "${ANDUEFKER_GIT_RESULT}")
-        if(ANDUEFKER_GIT_RESULT STREQUAL "0" AND ANDUEFKER_GIT_COMMIT MATCHES "^[0-9a-fA-F]+$")
-            set(ANDUEFKER_PRODUCER_COMMIT "${ANDUEFKER_GIT_COMMIT}")
-            set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "ok")
-            set(ANDUEFKER_PRODUCER_WORKTREE_STATUS "status-query-failed")
-            execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
-                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-                RESULT_VARIABLE ANDUEFKER_GIT_STATUS_RESULT
-                OUTPUT_VARIABLE ANDUEFKER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_VARIABLE ANDUEFKER_GIT_ERROR)
-            anduefker_git_failure_reason("${ANDUEFKER_GIT_STATUS_RESULT}" "${ANDUEFKER_GIT_ERROR}"
-                ANDUEFKER_PRODUCER_WORKTREE_FAILURE_REASON)
-            if(ANDUEFKER_GIT_STATUS_RESULT STREQUAL "0")
-                set(ANDUEFKER_PRODUCER_WORKTREE_STATUS "ok")
-                if(ANDUEFKER_GIT_STATUS STREQUAL "")
-                    set(ANDUEFKER_PRODUCER_WORKTREE "clean")
-                else()
-                    set(ANDUEFKER_PRODUCER_WORKTREE "dirty")
-                endif()
+            RESULT_VARIABLE ANDUEFKER_GIT_STATUS_RESULT
+            OUTPUT_VARIABLE ANDUEFKER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        if(ANDUEFKER_GIT_STATUS_RESULT STREQUAL "0")
+            if(ANDUEFKER_GIT_STATUS STREQUAL "")
+                set(ANDUEFKER_PRODUCER_WORKTREE "clean")
+            else()
+                set(ANDUEFKER_PRODUCER_WORKTREE "dirty")
             endif()
-        elseif(ANDUEFKER_GIT_RESULT STREQUAL "0")
-            set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "invalid-revision-output")
-            set(ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON "invalid-revision-output")
+        else()
+            message(WARNING "Git worktree status is unavailable; producer worktree remains unknown")
         endif()
-    elseif(ANDUEFKER_GIT_WORKTREE_RESULT STREQUAL "0")
-        set(ANDUEFKER_PRODUCER_IDENTITY_STATUS "not-a-worktree")
-        set(ANDUEFKER_PRODUCER_IDENTITY_FAILURE_REASON "not-a-worktree")
+    else()
+        message(WARNING "Git revision is unavailable; producer identity remains unknown")
     endif()
-endif()
-if(NOT ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT MATCHES "^-?[0-9]+$"
-   AND NOT ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT STREQUAL "not-run")
-    set(ANDUEFKER_PRODUCER_IDENTITY_QUERY_RESULT "launch-failed")
+else()
+    message(WARNING "Git is unavailable; producer identity remains unknown")
 endif()
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/anduefker")
 configure_file(cmake/BuildInfo.hpp.in generated/anduefker/BuildInfo.hpp @ONLY)
@@ -148,6 +100,7 @@ add_library(anduefker_core STATIC
     src/module/ElfSymbolQuery.cpp
     src/reflection/ReflectionReader.cpp
     src/reflection/ReflectionLayout.cpp
+    src/ue/ContainerLayout.cpp
     src/ue/EngineSchema.cpp
     src/ue/EngineVersion.cpp
     src/ue/FunctionSemantics.cpp

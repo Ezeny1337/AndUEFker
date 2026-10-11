@@ -79,8 +79,8 @@ namespace anduefker::reflection
             TypeReferenceIR reference;
             int priority = 2;
         };
-        void ObserveContainerStorage(const ContainerCandidate &candidate) const;
-        void CollectContainerStorage() const;
+        [[nodiscard]] ::anduefker::ir::ContainerStorageObservation ReadContainerStorage(const ContainerCandidate &candidate) const;
+        void CollectContainerStorage(ReflectionIR &reflection) const;
         [[nodiscard]] std::optional<TypeIR> ReadType(uintptr_t object, TypeKind kind, ReflectionIR &ir) const;
         [[nodiscard]] ReflectionIR ReadAttempt(::anduefker::memory::CaptureValidation &validation,
                                                ::anduefker::ir::CaptureInfo::Attempt &details);
@@ -98,9 +98,9 @@ namespace anduefker::reflection
         mutable std::vector<uintptr_t> pendingSignatures_;
         mutable size_t nextSignature_ = 0;
         mutable std::map<uintptr_t, std::pair<uintptr_t, ::anduefker::ue::FieldChainStatus>> functionChains_;
-        mutable std::unordered_set<uintptr_t> observedContainers_;
+        mutable std::map<uintptr_t, std::shared_ptr<::anduefker::ir::ContainerStorageIR>> containerStorage_;
         mutable std::vector<ContainerCandidate> pendingContainers_;
-        mutable std::map<std::string, std::unordered_set<uintptr_t>> containerSampleOwners_;
+        mutable std::map<uintptr_t, ::anduefker::ir::ContainerStorageObservation> containerEvidence_;
         mutable std::map<std::string, size_t> containerCandidates_;
         mutable std::map<std::string, size_t> containerNotObserved_;
         mutable std::vector<::anduefker::ir::ContainerStorageObservation> containerObservations_;

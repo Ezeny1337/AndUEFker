@@ -1,5 +1,6 @@
 #include "anduefker/generation/ArtifactWriter.hpp"
 #include "anduefker/generation/JsonExport.hpp"
+#include "anduefker/ue/ContainerLayout.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -84,7 +85,12 @@ namespace anduefker::generation
     void ArtifactWriter::GenerationReport::RegisterOwner(GenerationOwner owner)
     {
         const uintptr_t address = owner.address;
-        if (!owners.try_emplace(address, std::move(owner)).second || !diagnostic)
+        owners.try_emplace(address, std::move(owner));
+    }
+
+    void ArtifactWriter::GenerationReport::LogOwner(uintptr_t address) const
+    {
+        if (!diagnostic || !loggedOwners.insert(address).second)
             return;
         const auto &context = owners.at(address);
         std::ostringstream line;
@@ -99,6 +105,7 @@ namespace anduefker::generation
     {
         if (!diagnostic)
             return;
+        LogOwner(event.ownerAddress);
         std::ostringstream line;
         line << "sdk_layout_event owner=" << Hex(event.ownerAddress) << " severity=" << event.severity
              << " category=" << event.category << " strategy=" << event.strategy
@@ -145,8 +152,26 @@ namespace anduefker::generation
         if (!path.empty())
             node = nullptr;
         field.failureNode = node;
-        if (diagnostic)
+        bool emit = static_cast<bool>(diagnostic);
+        if (emit && field.reason == "internals-not-expanded" && description.validBounds &&
+            description.type.storage == PropertyStorageKind::TypedOpaque &&
+            (!field.property->type.containerStorage ||
+             field.property->type.containerStorage->headerStatus == "source-model-and-size-match") &&
+            (description.type.failureReason == "internals-not-expanded" ||
+             description.type.failureReason == "container-internals-not-expanded"))
         {
+            auto &samples = opaqueLogSamples[field.property->reflectedClass];
+            if (samples < 8)
+                ++samples;
+            else
+            {
+                ++opaqueLogOmitted[field.property->reflectedClass];
+                emit = false;
+            }
+        }
+        if (emit)
+        {
+            LogOwner(field.ownerAddress);
             const auto &property = *field.property;
             if (loggedTypeIds.insert(description.typeId).second)
             {
@@ -214,14 +239,30 @@ namespace anduefker::generation
         stream << "template <typename SemanticType> struct TTargetPointer { using Pointee = SemanticType; TargetAddress Bits; };\n";
         stream << "struct FString { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
         stream << "// Allocator internals are not selected from a matching total size.\n";
+        stream << "// Layout tags describe target offsets, not native C++ instances or verified live values.\n";
+        stream << "struct FUnknownContainerLayout {};\n";
+        for (const auto &[kind, name] : {std::pair{PropertyKind::Array, "FHeapArrayLayout"},
+                                         std::pair{PropertyKind::Set, "FHeapSparseSetLayout"}})
+            if (const auto layout = ::anduefker::ue::DescribeHeapContainer(kind, context_.Module().pointerWidth))
+            {
+                stream << "struct " << name << " // " << layout->id << "\n{\n";
+                stream << "    static constexpr std::size_t size = " << layout->size << ";\n";
+                stream << "    static constexpr std::size_t alignment = " << layout->alignment << ";\n";
+                for (const auto &[member, offset] : layout->offsets)
+                    stream << "    static constexpr std::size_t " << member << " = " << offset << ";\n";
+                stream << "};\n";
+            }
         stream << "template <std::size_t StorageSize> struct TOpaqueStorage { std::uint8_t Data[StorageSize]; };\n";
-        stream << "template <typename ElementType, std::size_t StorageSize> struct TArray : TOpaqueStorage<StorageSize> { using Element = ElementType; };\n";
+        stream << "template <typename ElementType, std::size_t StorageSize, typename Layout = FUnknownContainerLayout> struct TArray : TOpaqueStorage<StorageSize> { using Element = ElementType; using StorageLayout = Layout; };\n";
         stream << "template <typename ElementType, std::size_t ElementSize, std::size_t Count> struct TStaticArrayStorage { using Element = ElementType; std::uint8_t Data[ElementSize][Count]; };\n";
         stream << "template <std::size_t StorageSize> struct FTextStorage : TOpaqueStorage<StorageSize> {};\n";
         for (const char *wrapper : {"TStructStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"})
             stream << "template <typename Type, std::size_t StorageSize> struct " << wrapper << " : TOpaqueStorage<StorageSize> { using SemanticType = Type; };\n";
+        stream << "// The ordinary weak pair is descriptive only; object resolution must also validate the serial.\n";
+        stream << "template <typename Type> struct TWeakObjectStorage<Type, 8> { using SemanticType = Type; std::int32_t ObjectIndex; std::int32_t ObjectSerialNumber; };\n";
         stream << "// Delegate wrappers preserve signature and storage form, not callable bindings.\n";
         stream << "// Sparse multicast bindings are external; field bytes do not contain an invocation list.\n";
+        stream << "template <typename Signature> struct TSparseMulticastDelegateStorage<Signature, 1> { using SemanticType = Signature; std::uint8_t Bound; };\n";
         stream << "template <std::size_t StorageSize> struct TFieldPathStorage : TOpaqueStorage<StorageSize> {};\n";
         for (const auto &[address, function] : reflection_.functions)
             if (function.headerReadable && function.referencedAsSignature)
@@ -229,8 +270,8 @@ namespace anduefker::generation
                        << " metadata=" << Hex(address) << "\n";
         stream << "struct FScriptInterface { TargetAddress ObjectPointer; TargetAddress InterfacePointer; };\n";
         stream << "// Opaque container storage; StorageSize comes from the reflected field.\n";
-        stream << "template <typename ElementType, std::size_t StorageSize> struct TSet : TOpaqueStorage<StorageSize> { using Element = ElementType; };\n";
-        stream << "template <typename KeyType, typename ValueType, std::size_t StorageSize> struct TMap : TOpaqueStorage<StorageSize> { using Key = KeyType; using Value = ValueType; };\n";
+        stream << "template <typename ElementType, std::size_t StorageSize, typename Layout = FUnknownContainerLayout> struct TSet : TOpaqueStorage<StorageSize> { using Element = ElementType; using StorageLayout = Layout; };\n";
+        stream << "template <typename KeyType, typename ValueType, std::size_t StorageSize, typename Layout = FUnknownContainerLayout> struct TMap : TOpaqueStorage<StorageSize> { using Key = KeyType; using Value = ValueType; using StorageLayout = Layout; };\n";
         stream << "// Field storage and the enum definition may have different widths. Conversions check representability.\n";
         stream << "template <typename EnumType, typename StorageType> struct TEnumStorage\n{\n";
         stream << "    static_assert(std::is_enum_v<EnumType> && std::is_integral_v<StorageType>);\n";
@@ -251,7 +292,7 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 7,\n";
+        stream << "  \"schema_version\": 8,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
@@ -270,11 +311,6 @@ namespace anduefker::generation
                << "\",\"producer_version\":\"" << EscapeJson(provenance_.producerVersion)
                << "\",\"producer_worktree_at_configure\":\"" << EscapeJson(provenance_.producerWorktree) << '"'
                << ",\"producer_identity_source\":\"cmake-configure\""
-               << ",\"producer_identity_status\":\"" << EscapeJson(provenance_.producerIdentityStatus)
-               << "\",\"producer_identity_query_result\":\"" << EscapeJson(provenance_.producerIdentityQueryResult)
-               << "\",\"producer_worktree_status\":\"" << EscapeJson(provenance_.producerWorktreeStatus) << '"'
-               << ",\"producer_identity_failure_reason\":\"" << EscapeJson(provenance_.producerIdentityFailureReason)
-               << "\",\"producer_worktree_failure_reason\":\"" << EscapeJson(provenance_.producerWorktreeFailureReason) << '"'
                << ",\"run_id\":\"" << EscapeJson(provenance_.runId) << "\",\"target_pid\":" << provenance_.targetPid
                << ",\"address_space_generation\":" << provenance_.addressSpaceGeneration
                << ",\"architecture\":\"" << ArchitectureName(context_.Module().architecture)
@@ -316,7 +352,7 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 7,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 8,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
@@ -1188,6 +1224,11 @@ namespace anduefker::generation
         result.opaqueFields = report.opaqueFields;
         result.omittedFields = report.omittedFields;
         result.layoutWarnings = report.layoutWarnings;
+        if (diagnostic_)
+            for (const auto &[kind, count] : report.opaqueLogOmitted)
+                diagnostic_("sdk_opaque_log_omitted class=" + kind + " normal_records=" + std::to_string(count) +
+                            " samples=" + std::to_string(report.opaqueLogSamples.at(kind)) +
+                            " full_records=reflection.json/property.generation-and-diagnostics.json/opaque_fields");
         for (const auto &[kind, count] : report.storageKinds)
             result.generationDiagnostics.push_back("SDK storage summary: representation=" + std::string(PropertyStorageKindName(kind)) +
                                                    " total=" + std::to_string(count));

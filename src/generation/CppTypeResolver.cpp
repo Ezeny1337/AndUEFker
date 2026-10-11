@@ -3,8 +3,6 @@
 
 #include <algorithm>
 #include <array>
-#include <functional>
-#include <queue>
 #include <tuple>
 #include <unordered_set>
 
@@ -113,7 +111,7 @@ namespace anduefker::generation
     CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection)
     {
         CppSymbols result;
-        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TTargetPointer", "TArray", "TSet", "TMap", "TEnumStorage", "TOpaqueStorage", "TStructStorage", "TStaticArrayStorage", "FTextStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TFieldPathStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"};
+        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TTargetPointer", "FUnknownContainerLayout", "FHeapArrayLayout", "FHeapSparseSetLayout", "TArray", "TSet", "TMap", "TEnumStorage", "TOpaqueStorage", "TStructStorage", "TStaticArrayStorage", "FTextStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TFieldPathStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"};
         // 所有声明和引用共用同一个符号表；重名后缀不依赖进程地址
         for (const auto &type : reflection.types)
             result.types.emplace(type.address, CppTypeInfo{UniqueName(used, SanitizeIdentifier(type.name, "Type_")),
@@ -160,57 +158,15 @@ namespace anduefker::generation
                 used.insert(name + ending);
             result.functions.emplace(function.address, std::move(name));
         }
-        // 仅含偏移量的声明提供的是语义标识，而非按值存储或继承的成员常量
-        const size_t count = reflection.types.size();
-        std::unordered_map<uintptr_t, size_t> byAddress;
-        for (size_t index = 0; index < count; ++index)
-            byAddress.emplace(reflection.types[index].address, index);
-        std::vector<size_t> pending(count);
-        std::vector<std::vector<size_t>> dependents(count);
-        std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> ready;
-        for (size_t index = 0; index < count; ++index)
+        const auto declarations = ir::PlanTypeDeclarations(reflection);
+        result.typeOrder = declarations.order;
+        for (const auto &[address, declaration] : declarations.types)
         {
-            const auto &type = reflection.types[index];
-            auto &info = result.types.at(type.address);
-            const auto base = result.types.find(type.superAddress);
-            info.inheritsBase = info.layout == ir::LayoutRepresentation::SequentialMembers &&
-                                base != result.types.end() && base->second.layout == ir::LayoutRepresentation::SequentialMembers &&
-                                base->second.size >= 0 && base->second.size <= type.size;
-            std::unordered_set<size_t> dependencies;
-            if (info.inheritsBase)
-                dependencies.insert(byAddress.at(type.superAddress));
-            if (info.layout == ir::LayoutRepresentation::SequentialMembers)
-                for (const auto &property : type.properties)
-                {
-                    const auto target = result.types.find(property.type.referencedObject);
-                    if (property.type.kind == PropertyKind::Struct && target != result.types.end() &&
-                        target->second.layout == ir::LayoutRepresentation::SequentialMembers)
-                        dependencies.insert(byAddress.at(target->first));
-                }
-            pending[index] = dependencies.size();
-            for (size_t dependency : dependencies)
-                dependents[dependency].push_back(index);
-            if (dependencies.empty())
-                ready.push(index);
+            auto &info = result.types.at(address);
+            info.layout = declaration.representation;
+            info.declarationDependencyBlocked = declaration.dependencyBlocked;
+            info.inheritsBase = declaration.inheritsBase;
         }
-        while (!ready.empty())
-        {
-            const size_t index = ready.top();
-            ready.pop();
-            result.typeOrder.push_back(index);
-            for (size_t dependent : dependents[index])
-                if (--pending[dependent] == 0)
-                    ready.push(dependent);
-        }
-        for (size_t index = 0; index < count; ++index)
-            if (pending[index] != 0)
-            {
-                auto &info = result.types.at(reflection.types[index].address);
-                info.layout = ir::LayoutRepresentation::OffsetDescription;
-                info.declarationDependencyBlocked = true;
-                info.inheritsBase = false;
-                result.typeOrder.push_back(index);
-            }
         return result;
     }
 
@@ -412,12 +368,26 @@ namespace anduefker::generation
         const std::string size = std::to_string(reference.elementSize);
         const auto object = symbols.types.find(reference.referencedObject);
         const std::string target = object == symbols.types.end() ? "void" : object->second.name;
-        const auto opaque = [&](const std::string &wrapper, const std::string &semantic, const std::string &argument = "")
+        const auto opaque = [&](const std::string &wrapper, const std::string &semantic, const std::string &argument = "",
+                                const std::string &layout = "")
         {
-            result.name = wrapper + "<" + argument + size + ">";
+            result.name = wrapper + "<" + argument + size + layout + ">";
             result.semanticName = semantic;
             result.storage = PropertyStorageKind::TypedOpaque;
             result.failureReason = "internals-not-expanded";
+        };
+        const auto containerLayout = [&]() -> std::string
+        {
+            const auto &storage = reference.containerStorage;
+            if (!storage || storage->headerStatus != "source-model-and-size-match" ||
+                storage->allocator != ir::ContainerAllocatorKind::Heap)
+                return {};
+            if (reference.kind == PropertyKind::Array && storage->layoutId == "heap-array-p" + std::to_string(pointerWidth))
+                return ", FHeapArrayLayout";
+            if ((reference.kind == PropertyKind::Map || reference.kind == PropertyKind::Set) &&
+                storage->layoutId == "heap-sparse-set-p" + std::to_string(pointerWidth))
+                return ", FHeapSparseSetLayout";
+            return {};
         };
         const auto child = [&](const std::shared_ptr<ir::TypeReferenceIR> &node)
         {
@@ -457,6 +427,11 @@ namespace anduefker::generation
                 break;
             }
             opaque("TWeakObjectStorage", "TWeakObjectPtr<" + target + ">", target + ", ");
+            if (reference.elementSize == 8)
+            {
+                result.storage = PropertyStorageKind::SizedDescription;
+                result.failureReason.clear();
+            }
             break;
         case PropertyKind::LazyObject:
             if (object == symbols.types.end())
@@ -512,6 +487,11 @@ namespace anduefker::generation
             }
             opaque(wrapper,
                    reference.reflectedClass + "<" + tag + ">", tag + ", ");
+            if (reference.delegateStorage == ir::DelegateStorageKind::SparseMulticast && reference.elementSize == 1)
+            {
+                result.storage = PropertyStorageKind::SizedDescription;
+                result.failureReason.clear();
+            }
             break;
         }
         case PropertyKind::Array:
@@ -527,7 +507,7 @@ namespace anduefker::generation
             }
             const std::string wrapper = reference.kind == PropertyKind::Array ? "TArray" : reference.kind == PropertyKind::Set ? "TSet"
                                                                                                                                : "TOptionalStorage";
-            opaque(wrapper, wrapper + "<" + inner.semanticName + ">", inner.name + ", ");
+            opaque(wrapper, wrapper + "<" + inner.semanticName + ">", inner.name + ", ", containerLayout());
             result.storage = inner.IsOpaque() ? PropertyStorageKind::PartialContainer : PropertyStorageKind::TypedOpaque;
             result.failureReason = inner.IsOpaque() ? "inner:" + inner.failureReason : "container-internals-not-expanded";
             if (inner.IsOpaque())
@@ -544,7 +524,7 @@ namespace anduefker::generation
                 result.failurePath = key.name.empty() ? ChildFailurePath("key", key) : ChildFailurePath("value", value);
                 break;
             }
-            opaque("TMap", "TMap<" + key.semanticName + ", " + value.semanticName + ">", key.name + ", " + value.name + ", ");
+            opaque("TMap", "TMap<" + key.semanticName + ", " + value.semanticName + ">", key.name + ", " + value.name + ", ", containerLayout());
             result.storage = key.IsOpaque() || value.IsOpaque() ? PropertyStorageKind::PartialContainer : PropertyStorageKind::TypedOpaque;
             result.failureReason = key.IsOpaque() ? "key:" + key.failureReason : value.IsOpaque() ? "value:" + value.failureReason
                                                                                                   : "container-internals-not-expanded";

@@ -36,11 +36,6 @@ namespace anduefker::generation
         std::string producerVersion = "unknown";
         std::string runId;
         std::string producerWorktree = "unknown";
-        std::string producerIdentityStatus = "not-reported";
-        std::string producerIdentityQueryResult = "not-reported";
-        std::string producerWorktreeStatus = "not-reported";
-        std::string producerIdentityFailureReason = "not-reported";
-        std::string producerWorktreeFailureReason = "not-reported";
         int32_t targetPid = -1;
         uint64_t addressSpaceGeneration = 0;
     };
@@ -122,12 +117,16 @@ namespace anduefker::generation
             FieldDescriptions fields;
             std::map<std::string, size_t> typeIds;
             std::set<size_t> loggedTypeIds;
+            mutable std::set<uintptr_t> loggedOwners;
+            std::map<std::string, size_t> opaqueLogSamples;
+            std::map<std::string, size_t> opaqueLogOmitted;
             [[nodiscard]] ParseStatus Status() const
             {
                 // 有意设计的 Opaque storage 并不是缺失的字段
                 return omittedFields == 0 && layoutWarnings == 0 ? ParseStatus::Complete : ParseStatus::Partial;
             }
             void RegisterOwner(GenerationOwner owner);
+            void LogOwner(uintptr_t address) const;
             void RecordOpaque(OpaqueField field);
             void Warn(LayoutEvent event)
             {
