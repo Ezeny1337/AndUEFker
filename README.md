@@ -216,6 +216,8 @@ The command-line process exits with `0` for a complete artifact, `3` for partial
 
 JSON artifacts retain complete field metadata. Logs retain diagnostic summaries, bounded normal samples, and anomalies, with omitted sample counts and artifact references.
 
+Value-storage descriptions use source-backed layout candidates across UE4.23–5.6, not version-only guesses. Optional read-only instance evidence is bounded and independently checked; unavailable values do not reduce SDK completeness or imply native ABI compatibility.
+
 ## Issues
 
 Please open an [issue](https://github.com/Ezeny1337/AndUEFker/issues) when you encounter a reproducible detection, binding, schema, reflection, or artifact-generation problem. Include:

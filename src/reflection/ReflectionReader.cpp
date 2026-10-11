@@ -2,6 +2,7 @@
 #include "anduefker/ir/ReflectionLayout.hpp"
 #include "anduefker/ue/BoolLayout.hpp"
 #include "anduefker/ue/ContainerLayout.hpp"
+#include "anduefker/ue/StorageLayout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -378,6 +379,13 @@ namespace anduefker::reflection
             else if (metadata.objectPropertyClassNull)
                 reason = "object-property-class-metadata-null";
             RecordPropertyDetail(metadata, property, reason);
+        }
+        if (result.nodeDetailsResolved)
+        {
+            for (const auto &layout : ::anduefker::ue::ValueStorageCandidates(result, sizeof(uintptr_t), schema_.fname.size))
+                result.valueStorageCandidates.push_back(layout.id);
+            if (const auto layout = ::anduefker::ue::CommonValueStorage(result, sizeof(uintptr_t), schema_.fname.size))
+                result.valueStorage = std::make_shared<const ::anduefker::ir::StorageLayoutIR>(*layout);
         }
         containerStorage();
         path.erase(metadata.address);
@@ -760,7 +768,8 @@ namespace anduefker::reflection
             const auto &storage = *candidate.reference.containerStorage;
             candidate.priority = !candidate.reference.detailsResolved ||
                                          storage.allocator == ::anduefker::ir::ContainerAllocatorKind::Unknown ||
-                                         storage.headerStatus != "source-model-and-size-match"
+                                         (storage.headerStatus != "source-model-and-size-match" &&
+                                          storage.headerStatus != "source-model-fits-reflected-extent")
                                      ? 0
                                  : ::anduefker::ir::HasStorageRepresentationGap(candidate.reference, declarations) ? 1
                                                                                                                    : 2;
@@ -796,6 +805,54 @@ namespace anduefker::reflection
                                        : candidate.priority == 1 ? "representation-gap"
                                                                  : "normal-shape-representative";
             containerObservations_.push_back(std::move(observation));
+        }
+        for (const auto &candidate : containerCandidates_)
+        {
+            const auto &kind = candidate.first;
+            const auto expected = candidate.second;
+            size_t accounted = std::count_if(containerObservations_.begin(), containerObservations_.end(),
+                                             [&](const auto &observation)
+                                             { return observation.propertyClass == kind; });
+            for (const auto &[reason, count] : containerNotObserved_)
+                if (reason.starts_with(kind + ":"))
+                    accounted += count;
+            if (accounted != expected)
+            {
+                reflection.containerEvidenceAccountingValid = false;
+                reflection.diagnostics.push_back("container evidence accounting mismatch: class=" + kind +
+                                                 " candidates=" + std::to_string(expected) +
+                                                 " accounted=" + std::to_string(accounted));
+            }
+        }
+        const auto collectLayouts = [&](const auto &self, const TypeReferenceIR &reference, size_t depth, size_t &remaining) -> void
+        {
+            if (depth >= 32 || !remaining)
+                return;
+            --remaining;
+            if (reference.nodeDetailsResolved)
+                for (const auto &layout : ::anduefker::ue::ValueStorageCandidates(reference, sizeof(uintptr_t), schema_.fname.size))
+                    reflection.valueStorageLayouts.try_emplace(layout.id, layout);
+            if (reference.valueStorage)
+                reflection.valueStorageLayouts.try_emplace(reference.valueStorage->id, *reference.valueStorage);
+            for (const auto &child : {reference.inner, reference.key, reference.value})
+                if (child)
+                    self(self, *child, depth + 1, remaining);
+        };
+        const auto collectProperties = [&](const auto &properties)
+        {
+            for (const auto &property : properties)
+            {
+                size_t remaining = 256;
+                collectLayouts(collectLayouts, property.type, 0, remaining);
+            }
+        };
+        for (const auto &type : reflection.types)
+            collectProperties(type.properties);
+        for (const auto &[address, function] : reflection.functions)
+        {
+            (void)address;
+            collectProperties(function.parameters);
+            collectProperties(function.locals);
         }
         pendingContainers_.clear();
         containerEvidence_.clear();
@@ -942,19 +999,25 @@ namespace anduefker::reflection
             ::anduefker::ue::DecodeSparseLayout(observation, reference.kind);
         else
             storage.layoutStatus = "no-element-layout-record";
-        const auto header = ::anduefker::ue::DescribeHeapContainer(reference.kind, pointer);
+        const bool memoryImage = storage.allocator == ::anduefker::ir::ContainerAllocatorKind::MemoryImage;
+        const auto header = memoryImage ? ::anduefker::ue::DescribeMemoryImageContainer(reference.kind, pointer)
+                                        : ::anduefker::ue::DescribeHeapContainer(reference.kind, pointer);
         if (storage.allocator == ::anduefker::ir::ContainerAllocatorKind::Unknown)
             storage.headerStatus = "allocator-unresolved";
-        else if (storage.allocator == ::anduefker::ir::ContainerAllocatorKind::MemoryImage)
-            storage.headerStatus = "memory-image-implementation-unavailable";
-        else if (!header || header->size != metadata.elementSize)
+        else if (memoryImage && pointer == 4)
+            storage.headerStatus = "android32-memory-image-reflection-unsupported";
+        else if (!header || (memoryImage && reference.kind == PropertyKind::Map
+                                 ? header->size > metadata.elementSize
+                                 : header->size != metadata.elementSize))
             storage.headerStatus = "storage-size-mismatch";
         else if (reference.kind != PropertyKind::Array && !observation.sparseFormulaMatches.value_or(false))
             storage.headerStatus = "element-layout-unvalidated";
         else
         {
             storage.layoutId = header->id;
-            storage.headerStatus = "source-model-and-size-match";
+            storage.headerStatus = memoryImage && reference.kind == PropertyKind::Map && header->size != metadata.elementSize
+                                       ? "source-model-fits-reflected-extent"
+                                       : "source-model-and-size-match";
         }
         return observation;
     }
@@ -1231,7 +1294,6 @@ namespace anduefker::reflection
         for (const auto &[address, function] : reflection.functions)
         {
             (void)address;
-            logOwner(function.outerAddress, function.outerFullName);
             ++entryKinds[function.EntryKind()];
             const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
             ++entryCounts[key];
@@ -1244,13 +1306,20 @@ namespace anduefker::reflection
             diagnostic_("function_entry_kind kind=" + kind + " count=" + std::to_string(count));
         for (const auto &[key, count] : entryCounts)
         {
-            const auto &[entry, readable, executable, inModule] = key;
             if (count == 1)
                 continue;
             const size_t id = entryIds.size();
             entryIds.emplace(key, id);
+        }
+        std::unordered_set<size_t> loggedEntries;
+        const auto logEntry = [&](const EntryKey &key, size_t id)
+        {
+            if (!loggedEntries.insert(id).second)
+                return;
+            const auto &[entry, readable, executable, inModule] = key;
             std::ostringstream line;
-            line << "exec_entry_context id=" << id << " entry=0x" << std::hex << entry << std::dec << " functions=" << count;
+            line << "exec_entry_context id=" << id << " entry=0x" << std::hex << entry << std::dec
+                 << " functions=" << entryCounts.at(key);
             if (!readable)
                 line << " readable=0";
             if (!executable)
@@ -1260,7 +1329,7 @@ namespace anduefker::reflection
             if (inModule)
                 line << " rva=0x" << std::hex << (entry - moduleBase_);
             diagnostic_(line.str());
-        }
+        };
         diagnostic_("delegate_signature_summary total=" + std::to_string(reflection.delegateSignatures.size()) +
                     " exported=" + std::to_string(std::count_if(reflection.delegateSignatures.begin(), reflection.delegateSignatures.end(), [](const auto &item)
                                                                 { return item.exported; })));
@@ -1384,12 +1453,16 @@ namespace anduefker::reflection
             }
             if (emitEntry)
             {
+                logOwner(function.outerAddress, function.outerFullName);
                 const EntryKey key{function.execEntry, function.entryReadable, function.entryExecutable, function.entryInModule};
                 std::ostringstream line;
                 line << "function_entry address=0x" << std::hex << address << " owner=0x" << function.outerAddress
                      << " flags=0x" << function.flags << std::dec;
                 if (const auto id = entryIds.find(key); id != entryIds.end())
+                {
+                    logEntry(key, id->second);
                     line << " entry_id=" << id->second;
+                }
                 else
                 {
                     line << " entry=0x" << std::hex << function.execEntry << std::dec;
@@ -1437,7 +1510,8 @@ namespace anduefker::reflection
         for (const auto &[kind, count] : normalEntryOmitted)
             diagnostic_("function_entry_log_omitted kind=" + kind + " normal_records=" + std::to_string(count) +
                         " samples=" + std::to_string(normalEntrySamples.at(kind)) + " full_records=reflection.json/functions");
-        diagnostic_("container_storage_probe metadata=all-visited-nodes instance_traversal_validated=0 max_raw_observations=512 max_normal_owners_per_shape=2 exceptional_fields=individual-within-global-budget max_raw_candidates=8192 priority=final-representation-gaps-first sparse_check=conditional-formula-with-recorded-alignment");
+        diagnostic_("container_storage_probe metadata=all-visited-nodes instance_traversal_validated=0 max_raw_observations=512 max_normal_owners_per_shape=2 exceptional_fields=individual-within-global-budget max_raw_candidates=8192 priority=final-representation-gaps-first sparse_check=conditional-formula-with-recorded-alignment raw_accounting_valid=" +
+                    std::to_string(reflection.containerEvidenceAccountingValid));
         for (const auto &[allocator, count] : reflection.containerAllocatorCounts)
             diagnostic_("container_allocator_summary allocator=" + allocator + " nodes=" + std::to_string(count));
         for (const auto &[status, count] : reflection.containerHeaderCounts)
@@ -1448,8 +1522,16 @@ namespace anduefker::reflection
             diagnostic_("container_storage_candidates class=" + kind + " count=" + std::to_string(count));
         for (const auto &[reason, count] : reflection.containerStorageNotObserved)
             diagnostic_("container_storage_not_observed reason=" + reason + " count=" + std::to_string(count));
+        std::map<std::string, size_t> rawLogSamples;
+        std::map<std::string, size_t> rawLogOmitted;
         for (const auto &observation : reflection.containerStorageObservations)
         {
+            if (observation.sampleReason == "normal-shape-representative" &&
+                ++rawLogSamples[observation.propertyClass] > 8)
+            {
+                ++rawLogOmitted[observation.propertyClass];
+                continue;
+            }
             std::ostringstream line;
             line << "container_storage_candidate property=0x" << std::hex << observation.propertyAddress
                  << " owner=0x" << observation.ownerAddress << " address=0x" << observation.address << std::dec
@@ -1481,6 +1563,9 @@ namespace anduefker::reflection
                             " raw=" + std::to_string(flag.raw) + " known_value=" + std::to_string(flag.knownValue) +
                             " basis=" + flag.basis + " width_selected=0");
         }
+        for (const auto &[kind, count] : rawLogOmitted)
+            diagnostic_("container_storage_log_omitted class=" + kind + " normal_records=" + std::to_string(count) +
+                        " samples=8 full_records=reflection.json/container_storage_evidence/observations");
         for (const auto &enumeration : reflection.enums)
             for (const auto &message : enumeration.diagnostics)
                 diagnostic_("enum_diagnostic owner=" + enumeration.fullName + " address=" + std::to_string(enumeration.address) + " message=" + message);
@@ -1756,9 +1841,6 @@ namespace anduefker::reflection
             if (index >= details.initialCount)
                 ++details.additionalTypes;
         }
-        for (const auto &candidate : pendingContainers_)
-            ++containerNotObserved_[candidate.metadata.normalizedClassName + ":capture-ended-before-probe"];
-        pendingContainers_.clear();
         if (!details.coverageComplete && details.reason.empty())
             details.reason = "enumeration-coverage-incomplete";
         result.diagnostics.push_back("object enumeration: initial_count=" + std::to_string(details.initialCount) +

@@ -70,6 +70,7 @@ namespace anduefker::generation
     using FieldDescriptions = std::map<uintptr_t, FieldDescription>;
 
     [[nodiscard]] std::string SanitizeIdentifier(std::string value, const char *fallback);
+    [[nodiscard]] std::string ValueLayoutCppName(const std::string &id);
     [[nodiscard]] CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection);
     [[nodiscard]] const char *EnumUnderlyingName(ir::EnumUnderlyingType type);
     [[nodiscard]] CppPropertyType ResolvePropertyType(const ir::TypeReferenceIR &reference, const CppSymbols &symbols,

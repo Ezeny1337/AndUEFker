@@ -99,8 +99,11 @@ add_library(anduefker_core STATIC
     src/module/ElfSymbols.cpp
     src/module/ElfSymbolQuery.cpp
     src/reflection/ReflectionReader.cpp
+    src/reflection/RuntimeInspector.cpp
     src/reflection/ReflectionLayout.cpp
     src/ue/ContainerLayout.cpp
+    src/ue/ContainerReader.cpp
+    src/ue/StorageLayout.cpp
     src/ue/EngineSchema.cpp
     src/ue/EngineVersion.cpp
     src/ue/FunctionSemantics.cpp

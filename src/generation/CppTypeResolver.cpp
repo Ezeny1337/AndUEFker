@@ -108,10 +108,21 @@ namespace anduefker::generation
         return value;
     }
 
+    std::string ValueLayoutCppName(const std::string &id)
+    {
+        return "FValueLayout_" + SanitizeIdentifier(id, "Unknown");
+    }
+
     CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection)
     {
         CppSymbols result;
         std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TTargetPointer", "FUnknownContainerLayout", "FHeapArrayLayout", "FHeapSparseSetLayout", "TArray", "TSet", "TMap", "TEnumStorage", "TOpaqueStorage", "TStructStorage", "TStaticArrayStorage", "FTextStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TFieldPathStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"};
+        used.insert({"FUnknownValueLayout", "FMemoryImageArrayLayout", "FMemoryImageSparseSetLayout"});
+        for (const auto &[id, layout] : reflection.valueStorageLayouts)
+        {
+            (void)layout;
+            used.insert(ValueLayoutCppName(id));
+        }
         // 所有声明和引用共用同一个符号表；重名后缀不依赖进程地址
         for (const auto &type : reflection.types)
             result.types.emplace(type.address, CppTypeInfo{UniqueName(used, SanitizeIdentifier(type.name, "Type_")),
@@ -371,7 +382,8 @@ namespace anduefker::generation
         const auto opaque = [&](const std::string &wrapper, const std::string &semantic, const std::string &argument = "",
                                 const std::string &layout = "")
         {
-            result.name = wrapper + "<" + argument + size + layout + ">";
+            const std::string valueLayout = reference.valueStorage ? ", " + ValueLayoutCppName(reference.valueStorage->id) : "";
+            result.name = wrapper + "<" + argument + size + (layout.empty() ? valueLayout : layout) + ">";
             result.semanticName = semantic;
             result.storage = PropertyStorageKind::TypedOpaque;
             result.failureReason = "internals-not-expanded";
@@ -379,14 +391,19 @@ namespace anduefker::generation
         const auto containerLayout = [&]() -> std::string
         {
             const auto &storage = reference.containerStorage;
-            if (!storage || storage->headerStatus != "source-model-and-size-match" ||
-                storage->allocator != ir::ContainerAllocatorKind::Heap)
+            if (!storage || (storage->headerStatus != "source-model-and-size-match" &&
+                             storage->headerStatus != "source-model-fits-reflected-extent"))
                 return {};
             if (reference.kind == PropertyKind::Array && storage->layoutId == "heap-array-p" + std::to_string(pointerWidth))
                 return ", FHeapArrayLayout";
             if ((reference.kind == PropertyKind::Map || reference.kind == PropertyKind::Set) &&
                 storage->layoutId == "heap-sparse-set-p" + std::to_string(pointerWidth))
                 return ", FHeapSparseSetLayout";
+            if (reference.kind == PropertyKind::Array && storage->layoutId == "memory-image-array-p" + std::to_string(pointerWidth))
+                return ", FMemoryImageArrayLayout";
+            if ((reference.kind == PropertyKind::Map || reference.kind == PropertyKind::Set) &&
+                storage->layoutId == "memory-image-sparse-set-p" + std::to_string(pointerWidth))
+                return ", FMemoryImageSparseSetLayout";
             return {};
         };
         const auto child = [&](const std::shared_ptr<ir::TypeReferenceIR> &node)

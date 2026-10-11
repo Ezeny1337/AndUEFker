@@ -1,4 +1,5 @@
 #include "anduefker/ue/ContainerLayout.hpp"
+#include "anduefker/ue/StorageLayout.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -23,7 +24,7 @@ namespace anduefker::ue
         }
         if (kind != ir::PropertyKind::Map && kind != ir::PropertyKind::Set)
             return std::nullopt;
-        // TInlineAllocator<4> for allocation bits and <1> for hash buckets.
+        // allocation bits 使用 TInlineAllocator<4>，hash buckets 使用 TInlineAllocator<1>
         const int32_t bits = arraySize;
         const int32_t bitsSecondary = bits + 16;
         const int32_t bitsNum = bitsSecondary + pointerWidth;
@@ -36,6 +37,30 @@ namespace anduefker::ue
         result.id = "heap-sparse-set-p" + std::to_string(pointerWidth);
         result.size = align(hashSize + 4);
         result.offsets = {{"data", 0}, {"data_num", pointerWidth}, {"data_max", pointerWidth + 4}, {"allocation_bits_inline", bits}, {"allocation_bits_secondary", bitsSecondary}, {"allocation_bits_num", bitsNum}, {"allocation_bits_max", bitsMax}, {"first_free_index", firstFree}, {"num_free_indices", freeCount}, {"hash_inline", hash}, {"hash_secondary", hashSecondary}, {"hash_size", hashSize}};
+        return result;
+    }
+
+    std::optional<ContainerLayoutDescription> DescribeMemoryImageContainer(ir::PropertyKind kind, int32_t pointerWidth)
+    {
+        if (pointerWidth != 4 && pointerWidth != 8)
+            return std::nullopt;
+        // Android 上 MemoryImage pointer 固定占 8 字节，不复用 heap 的 inline allocator
+        ContainerLayoutDescription result;
+        result.alignment = 8;
+        if (kind == ir::PropertyKind::Array)
+        {
+            result.id = "memory-image-array-p" + std::to_string(pointerWidth);
+            result.size = 16;
+            result.offsets = {{"data", 0}, {"num", 8}, {"max", 12}};
+        }
+        else if (kind == ir::PropertyKind::Map || kind == ir::PropertyKind::Set)
+        {
+            result.id = "memory-image-sparse-set-p" + std::to_string(pointerWidth);
+            result.size = 56;
+            result.offsets = {{"data", 0}, {"data_num", 8}, {"data_max", 12}, {"allocation_bits_secondary", 16}, {"allocation_bits_num", 24}, {"allocation_bits_max", 28}, {"first_free_index", 32}, {"num_free_indices", 36}, {"hash_secondary", 40}, {"hash_size", 48}};
+        }
+        else
+            return std::nullopt;
         return result;
     }
 
@@ -89,6 +114,8 @@ namespace anduefker::ue
             return std::nullopt;
         const auto scalar = [&](int32_t size) -> std::optional<int32_t>
         { return reference.elementSize == size ? std::optional<int32_t>(size) : std::nullopt; };
+        if (const auto layout = CommonValueStorage(reference, pointerWidth, nameSize))
+            return layout->alignment;
         switch (reference.kind)
         {
         case ir::PropertyKind::Bool:
@@ -144,21 +171,21 @@ namespace anduefker::ue
         case ir::PropertyKind::Map:
         case ir::PropertyKind::Set:
             if (reference.containerStorage && !reference.containerStorage->layoutId.empty())
-                return pointerWidth;
+                return reference.containerStorage->allocator == ir::ContainerAllocatorKind::MemoryImage ? 8 : pointerWidth;
             return std::nullopt;
         default:
             return std::nullopt;
         }
     }
 
-    void ValidateSparseLayout(ir::ContainerStorageIR &storage, ir::PropertyKind kind,
-                              int32_t keySize, int32_t valueSize, int32_t keyAlignment, int32_t valueAlignment)
+    std::optional<ir::ContainerStorageIR> DescribeSparseElement(ir::PropertyKind kind,
+                                                                int32_t keySize, int32_t valueSize, int32_t keyAlignment, int32_t valueAlignment)
     {
-        if ((kind != ir::PropertyKind::Map && kind != ir::PropertyKind::Set) || storage.elementStride < 0 ||
+        if ((kind != ir::PropertyKind::Map && kind != ir::PropertyKind::Set) ||
             keySize <= 0 || keyAlignment <= 0 || (keyAlignment & (keyAlignment - 1)) != 0 ||
             (kind == ir::PropertyKind::Map &&
              (valueSize <= 0 || valueAlignment <= 0 || (valueAlignment & (valueAlignment - 1)) != 0)))
-            return;
+            return std::nullopt;
         const auto align = [](int64_t size, int64_t alignment)
         { return (size + alignment - 1) / alignment * alignment; };
         const bool map = kind == ir::PropertyKind::Map;
@@ -170,10 +197,30 @@ namespace anduefker::ue
         const int64_t hashIndex = hashNext + 4;
         const int64_t setSize = align(hashIndex + 4, alignment);
         const int64_t stride = std::max<int64_t>(setSize, 8);
-        const bool matches = stride <= INT32_MAX && storage.valueOffset == valueOffset &&
-                             storage.hashNextOffset == hashNext && storage.hashIndexOffset == hashIndex &&
-                             storage.setElementSize == setSize && storage.elementAlignment == alignment &&
-                             storage.elementStride == stride;
+        if (stride > INT32_MAX)
+            return std::nullopt;
+        ir::ContainerStorageIR result;
+        result.valueOffset = static_cast<int32_t>(valueOffset);
+        result.hashNextOffset = static_cast<int32_t>(hashNext);
+        result.hashIndexOffset = static_cast<int32_t>(hashIndex);
+        result.setElementSize = static_cast<int32_t>(setSize);
+        result.elementAlignment = static_cast<int32_t>(alignment);
+        result.elementStride = static_cast<int32_t>(stride);
+        return result;
+    }
+
+    void ValidateSparseLayout(ir::ContainerStorageIR &storage, ir::PropertyKind kind,
+                              int32_t keySize, int32_t valueSize, int32_t keyAlignment, int32_t valueAlignment)
+    {
+        const auto expected = DescribeSparseElement(kind, keySize, valueSize, keyAlignment, valueAlignment);
+        if (!expected || storage.elementStride < 0)
+            return;
+        const bool matches = storage.valueOffset == expected->valueOffset &&
+                             storage.hashNextOffset == expected->hashNextOffset &&
+                             storage.hashIndexOffset == expected->hashIndexOffset &&
+                             storage.setElementSize == expected->setElementSize &&
+                             storage.elementAlignment == expected->elementAlignment &&
+                             storage.elementStride == expected->elementStride;
         storage.layoutStatus = matches ? "independent-formula-match" : "independent-formula-mismatch";
         if (!matches)
         {

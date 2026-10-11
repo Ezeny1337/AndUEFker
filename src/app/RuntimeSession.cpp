@@ -13,6 +13,8 @@
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
 #include "anduefker/memory/ReadDiagnostics.hpp"
+#include "anduefker/module/ElfSymbols.hpp"
+#include "anduefker/reflection/RuntimeInspector.hpp"
 #include "anduefker/ue/SchemaCatalog.hpp"
 
 namespace anduefker::app
@@ -243,7 +245,7 @@ namespace anduefker::app
                                          " producer_version=" + provenance_.producerVersion +
                                          " producer_worktree_at_configure=" + provenance_.producerWorktree +
                                          " identity_source=cmake-configure run_id=" + provenance_.runId);
-        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=5 owner_contexts=address-keyed exec_entries=bounded-normal-samples-and-all-anomalies opaque_fields=bounded-normal-samples-and-all-gaps opaque_normal_samples_per_class=8 generation_types=shared-context full_records=reflection.json-and-diagnostics.json array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1 container_metadata=all-visited-nodes raw_container_evidence=bounded-samples");
+        Note(RuntimeLogLevel::Debug, "diagnostic_encoding=6 owner_contexts=referenced-only exec_entries=bounded-normal-samples-and-all-anomalies opaque_fields=bounded-normal-samples-and-all-gaps opaque_normal_samples_per_class=8 generation_types=shared-context full_records=reflection.json-and-diagnostics.json array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1 container_metadata=all-visited-nodes raw_container_evidence=bounded-samples container_normal_log_samples_per_class=8 optional_runtime_values=independent-bounded-capture layout_info_samples_per_category=8");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);
@@ -591,6 +593,65 @@ namespace anduefker::app
         }
         if (reflection_.status == ParseStatus::Partial)
             Note(RuntimeLogLevel::Warning, "Reflection is partial; output will be written to a .partial artifact");
+
+        const ReadStats beforeValues = memory_->Stats();
+        try
+        {
+            ir::SparseRootEvidence sparseRoot;
+            const auto elf = memory_->Manager().elfScanner.findElf(context_.Module().name);
+            if (elf.isValid())
+            {
+                const auto symbols = module::QueryElfSymbols(*memory_, context_.Module(), elf, {sparseRoot.symbol});
+                sparseRoot.diagnostics = symbols.diagnostics;
+                const auto status = symbols.status.find(sparseRoot.symbol);
+                sparseRoot.status = status == symbols.status.end() ? "symbol-query-incomplete" : module::SymbolStatusName(status->second);
+                if (const auto at = symbols.exported.find(sparseRoot.symbol); at != symbols.exported.end())
+                {
+                    sparseRoot.address = at->second;
+                    sparseRoot.source = "exported-symbol";
+                }
+                else if (const auto at = symbols.debug.find(sparseRoot.symbol); at != symbols.debug.end())
+                {
+                    sparseRoot.address = at->second;
+                    sparseRoot.source = "debug-symbol";
+                }
+                // SparseDelegates 是静态 TMap 本体，不是指针槽，没有符号时不猜测偏移
+                if (sparseRoot.address && !context_.Module().IsWritable(sparseRoot.address))
+                {
+                    sparseRoot.address = 0;
+                    sparseRoot.status = "symbol-not-in-writable-segment";
+                }
+            }
+            else
+                sparseRoot.status = "elf-image-unavailable-not-queried";
+            reflection_.runtimeEvidence = reflection::InspectRuntimeValues(*memory_, context_.Binding(), context_.Schema(),
+                                                                           context_.Module(), reflection_, std::move(sparseRoot));
+        }
+        catch (const std::exception &error)
+        {
+            // 可选实例采集失败不能丢弃已经完成的反射定义，错误仍写入日志和产物
+            reflection_.runtimeEvidence.status = "optional-inspection-failed";
+            reflection_.runtimeEvidence.sparse.status = "inspection-aborted";
+            Note(RuntimeLogLevel::Warning, "runtime_value_evidence failed: " + std::string(error.what()));
+        }
+        finishStage("runtime-value-evidence");
+        const auto &runtime = reflection_.runtimeEvidence;
+        Note(RuntimeLogLevel::Info, "runtime_value_evidence status=" + runtime.status +
+                                        " object_slots=" + std::to_string(runtime.objectSlots) + " scanned_slots=" + std::to_string(runtime.scannedSlots) +
+                                        " samples=" + std::to_string(runtime.values.size()) + " scan_complete=" + std::to_string(runtime.scanComplete) +
+                                        " affects_sdk_completeness=0 atomic_snapshot=0 full_records=reflection.json/runtime_value_evidence");
+        for (const auto &[status, count] : runtime.statuses)
+            Note(RuntimeLogLevel::Debug, "runtime_value_status status=" + status + " count=" + std::to_string(count));
+        for (const auto &[reason, count] : runtime.skipped)
+            Note(RuntimeLogLevel::Debug, "runtime_value_skipped reason=" + reason + " count=" + std::to_string(count));
+        Note(RuntimeLogLevel::Debug, "sparse_binding_evidence status=" + runtime.sparse.status +
+                                         " root=" + HexAddress(runtime.sparse.address) + " source=" + runtime.sparse.source +
+                                         " records=" + std::to_string(runtime.sparse.delegates.size()) +
+                                         " enumeration_complete=" + std::to_string(runtime.sparse.enumerationComplete) +
+                                         " observations_stable=" + std::to_string(runtime.sparse.capture.observationsStable) +
+                                         " full_records=reflection.json/runtime_value_evidence/sparse");
+        Note(RuntimeLogLevel::Debug, "memory stats stage=runtime-value-evidence" +
+                                         ::anduefker::memory::DescribeReadStats(memory_->Stats(), beforeValues));
         if (!config_.outputRoot.empty())
         {
             provenance_.addressSpaceGeneration = memory_->AddressSpaceGeneration();

@@ -105,6 +105,13 @@ namespace anduefker::generation
     {
         if (!diagnostic)
             return;
+        if (event.severity == "info" &&
+            (event.category == "offset-description" || event.category == "inherited-extent-intersection") &&
+            ++layoutLogSamples[event.category] > 8)
+        {
+            ++layoutLogOmitted[event.category];
+            return;
+        }
         LogOwner(event.ownerAddress);
         std::ostringstream line;
         line << "sdk_layout_event owner=" << Hex(event.ownerAddress) << " severity=" << event.severity
@@ -156,7 +163,8 @@ namespace anduefker::generation
         if (emit && field.reason == "internals-not-expanded" && description.validBounds &&
             description.type.storage == PropertyStorageKind::TypedOpaque &&
             (!field.property->type.containerStorage ||
-             field.property->type.containerStorage->headerStatus == "source-model-and-size-match") &&
+             field.property->type.containerStorage->headerStatus == "source-model-and-size-match" ||
+             field.property->type.containerStorage->headerStatus == "source-model-fits-reflected-extent") &&
             (description.type.failureReason == "internals-not-expanded" ||
              description.type.failureReason == "container-internals-not-expanded"))
         {
@@ -241,6 +249,16 @@ namespace anduefker::generation
         stream << "// Allocator internals are not selected from a matching total size.\n";
         stream << "// Layout tags describe target offsets, not native C++ instances or verified live values.\n";
         stream << "struct FUnknownContainerLayout {};\n";
+        stream << "struct FUnknownValueLayout {};\n";
+        for (const auto &[id, layout] : reflection_.valueStorageLayouts)
+        {
+            stream << "struct " << ValueLayoutCppName(id) << " // " << layout.sourceRange << "\n{\n";
+            stream << "    static constexpr std::size_t size = " << layout.size
+                   << ";\n    static constexpr std::size_t alignment = " << layout.alignment << ";\n";
+            for (const auto &[member, offset] : layout.offsets)
+                stream << "    static constexpr std::size_t " << member << " = " << offset << ";\n";
+            stream << "};\n";
+        }
         for (const auto &[kind, name] : {std::pair{PropertyKind::Array, "FHeapArrayLayout"},
                                          std::pair{PropertyKind::Set, "FHeapSparseSetLayout"}})
             if (const auto layout = ::anduefker::ue::DescribeHeapContainer(kind, context_.Module().pointerWidth))
@@ -252,17 +270,28 @@ namespace anduefker::generation
                     stream << "    static constexpr std::size_t " << member << " = " << offset << ";\n";
                 stream << "};\n";
             }
+        for (const auto &[kind, name] : {std::pair{PropertyKind::Array, "FMemoryImageArrayLayout"},
+                                         std::pair{PropertyKind::Set, "FMemoryImageSparseSetLayout"}})
+            if (const auto layout = ::anduefker::ue::DescribeMemoryImageContainer(kind, context_.Module().pointerWidth))
+            {
+                stream << "struct " << name << " // candidate encodings: UE4 shift-1 or UE5 packed-offset-40\n{\n";
+                stream << "    static constexpr std::size_t size = " << layout->size
+                       << ";\n    static constexpr std::size_t alignment = " << layout->alignment << ";\n";
+                for (const auto &[member, offset] : layout->offsets)
+                    stream << "    static constexpr std::size_t " << member << " = " << offset << ";\n";
+                stream << "};\n";
+            }
         stream << "template <std::size_t StorageSize> struct TOpaqueStorage { std::uint8_t Data[StorageSize]; };\n";
         stream << "template <typename ElementType, std::size_t StorageSize, typename Layout = FUnknownContainerLayout> struct TArray : TOpaqueStorage<StorageSize> { using Element = ElementType; using StorageLayout = Layout; };\n";
         stream << "template <typename ElementType, std::size_t ElementSize, std::size_t Count> struct TStaticArrayStorage { using Element = ElementType; std::uint8_t Data[ElementSize][Count]; };\n";
-        stream << "template <std::size_t StorageSize> struct FTextStorage : TOpaqueStorage<StorageSize> {};\n";
+        stream << "template <std::size_t StorageSize, typename Layout = FUnknownValueLayout> struct FTextStorage : TOpaqueStorage<StorageSize> { using StorageLayout = Layout; };\n";
         for (const char *wrapper : {"TStructStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"})
-            stream << "template <typename Type, std::size_t StorageSize> struct " << wrapper << " : TOpaqueStorage<StorageSize> { using SemanticType = Type; };\n";
+            stream << "template <typename Type, std::size_t StorageSize, typename Layout = FUnknownValueLayout> struct " << wrapper << " : TOpaqueStorage<StorageSize> { using SemanticType = Type; using StorageLayout = Layout; };\n";
         stream << "// The ordinary weak pair is descriptive only; object resolution must also validate the serial.\n";
-        stream << "template <typename Type> struct TWeakObjectStorage<Type, 8> { using SemanticType = Type; std::int32_t ObjectIndex; std::int32_t ObjectSerialNumber; };\n";
+        stream << "template <typename Type, typename Layout> struct TWeakObjectStorage<Type, 8, Layout> { using SemanticType = Type; using StorageLayout = Layout; std::int32_t ObjectIndex; std::int32_t ObjectSerialNumber; };\n";
         stream << "// Delegate wrappers preserve signature and storage form, not callable bindings.\n";
         stream << "// Sparse multicast bindings are external; field bytes do not contain an invocation list.\n";
-        stream << "template <typename Signature> struct TSparseMulticastDelegateStorage<Signature, 1> { using SemanticType = Signature; std::uint8_t Bound; };\n";
+        stream << "template <typename Signature, typename Layout> struct TSparseMulticastDelegateStorage<Signature, 1, Layout> { using SemanticType = Signature; using StorageLayout = Layout; std::uint8_t Bound; };\n";
         stream << "template <std::size_t StorageSize> struct TFieldPathStorage : TOpaqueStorage<StorageSize> {};\n";
         for (const auto &[address, function] : reflection_.functions)
             if (function.headerReadable && function.referencedAsSignature)
@@ -292,7 +321,7 @@ namespace anduefker::generation
         const ReflectionStats &stats = reflection_.stats;
         std::ostringstream stream;
         stream << "{\n";
-        stream << "  \"schema_version\": 8,\n";
+        stream << "  \"schema_version\": 9,\n";
         stream << "  \"package\": \"" << EscapeJson(packageName_) << "\",\n";
         stream << "  \"engine\": \"" << EscapeJson(context_.Schema().identity.canonicalVersionRange.empty() ? context_.Schema().validation.familyEvidence : context_.Schema().identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\""
@@ -344,6 +373,8 @@ namespace anduefker::generation
         stream << "    \"sdk_layout_events\": " << report.layoutEvents << "\n";
         stream << "  },\n  \"capture\":";
         WriteCaptureJson(stream, reflection_.capture);
+        stream << ",\n  \"runtime_value_evidence\":";
+        WriteRuntimeEvidenceJson(stream, reflection_.runtimeEvidence, false);
         stream << '\n';
         stream << "}\n";
         return stream.str();
@@ -352,7 +383,7 @@ namespace anduefker::generation
     std::string ArtifactWriter::DiagnosticsJson(const GenerationReport &report, ParseStatus status) const
     {
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 8,\n  \"status\": \""
+        stream << "{\n  \"schema_version\": 9,\n  \"status\": \""
                << ParseStatusName(status) << "\",\n";
         stream << "  \"reflection_status\":\"" << ParseStatusName(reflection_.status) << "\",\n";
         stream << "  \"sdk_status\":\"" << ParseStatusName(report.Status()) << "\",\n";
@@ -490,7 +521,9 @@ namespace anduefker::generation
             }
             stream << '}';
         }
-        stream << "],\n  \"reflection_evidence\":{\"artifact\":\"reflection.json\",\"owner_join_key\":\"types/functions.address\",\"property_join_key\":\"address\",\"generation_types\":\"property.generation.type_id -> generation_types.id\",\"layout_issues\":\"owner.layout_analysis.issues[layout_issue_index]\",\"delegate_signatures\":\"delegate_signatures\",\"container_storage\":\"container_storage_evidence\"}";
+        stream << "],\n  \"reflection_evidence\":{\"artifact\":\"reflection.json\",\"owner_join_key\":\"types/functions.address\",\"property_join_key\":\"address\",\"generation_types\":\"property.generation.type_id -> generation_types.id\",\"layout_issues\":\"owner.layout_analysis.issues[layout_issue_index]\",\"delegate_signatures\":\"delegate_signatures\",\"container_storage\":\"container_storage_evidence\",\"runtime_values\":\"runtime_value_evidence\"}";
+        stream << ",\n  \"runtime_value_evidence\":";
+        WriteRuntimeEvidenceJson(stream, reflection_.runtimeEvidence, false);
         stream << ",\n";
         stream << "  \"diagnostics\": [";
         for (size_t index = 0; index < reflection_.diagnostics.size(); ++index)
@@ -1224,6 +1257,10 @@ namespace anduefker::generation
         result.opaqueFields = report.opaqueFields;
         result.omittedFields = report.omittedFields;
         result.layoutWarnings = report.layoutWarnings;
+        if (diagnostic_)
+            for (const auto &[category, count] : report.layoutLogOmitted)
+                diagnostic_("sdk_layout_log_omitted category=" + category + " normal_records=" + std::to_string(count) +
+                            " samples=8 full_records=diagnostics.json/generation_report-and-reflection.json/layout_analysis");
         if (diagnostic_)
             for (const auto &[kind, count] : report.opaqueLogOmitted)
                 diagnostic_("sdk_opaque_log_omitted class=" + kind + " normal_records=" + std::to_string(count) +

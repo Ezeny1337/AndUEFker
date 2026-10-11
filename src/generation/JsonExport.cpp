@@ -118,6 +118,14 @@ namespace anduefker::generation
                 stream << ",\"container_storage\":";
                 ContainerStorage(stream, *reference.containerStorage);
             }
+            if (!reference.valueStorageCandidates.empty())
+            {
+                stream << ",\"value_storage\":{\"offsets_consensus\":" << (reference.valueStorage ? "true" : "false")
+                       << ",\"layout_id\":\"" << (reference.valueStorage ? EscapeJson(reference.valueStorage->id) : "")
+                       << "\",\"targets_expanded\":false,\"candidates\":";
+                Strings(stream, reference.valueStorageCandidates);
+                stream << '}';
+            }
             if (reference.delegateStorage != ir::DelegateStorageKind::None)
                 stream << ",\"delegate_storage\":{\"kind\":\"" << ir::DelegateStorageKindName(reference.delegateStorage)
                        << "\",\"bindings_expanded\":false,\"binding_location\":\""
@@ -136,6 +144,145 @@ namespace anduefker::generation
             child("inner", reference.inner);
             child("key", reference.key);
             child("value", reference.value);
+            stream << '}';
+        }
+
+        void Bytes(std::ostream &stream, const std::vector<uint8_t> &bytes)
+        {
+            constexpr char hex[] = "0123456789abcdef";
+            stream << '"';
+            for (uint8_t byte : bytes)
+                stream << hex[byte >> 4] << hex[byte & 15];
+            stream << '"';
+        }
+
+        void ValueCapture(std::ostream &stream, const ir::ValueCapture &capture)
+        {
+            stream << "{\"observations_stable\":" << (capture.observationsStable ? "true" : "false")
+                   << ",\"atomic_snapshot\":false,\"observed_ranges\":" << capture.observedRanges
+                   << ",\"observed_bytes\":" << capture.observedBytes << ",\"changed_ranges\":" << capture.changedRanges
+                   << ",\"unreadable_ranges\":" << capture.unreadableRanges << ",\"read_failures\":" << capture.readFailures
+                   << ",\"limit_exceeded\":" << (capture.limitExceeded ? "true" : "false")
+                   << ",\"generation_changed\":" << (capture.generationChanged ? "true" : "false");
+            if (!capture.failures.empty())
+            {
+                stream << ",\"read_failure_samples\":[";
+                for (size_t index = 0; index < capture.failures.size(); ++index)
+                {
+                    if (index)
+                        stream << ',';
+                    const auto &failure = capture.failures[index];
+                    stream << "{\"address\":\"" << Hex(failure.address) << "\",\"error\":" << failure.error
+                           << ",\"requested\":" << failure.requested << ",\"transferred\":" << failure.transferred << '}';
+                }
+                stream << ']';
+            }
+            if (!capture.changes.empty())
+            {
+                stream << ",\"changes\":[";
+                for (size_t index = 0; index < capture.changes.size(); ++index)
+                {
+                    if (index)
+                        stream << ',';
+                    const auto &change = capture.changes[index];
+                    stream << "{\"address\":\"" << Hex(change.address) << "\",\"size\":" << change.size
+                           << ",\"error\":" << change.error << ",\"transferred\":" << change.transferred << ",\"before\":";
+                    Bytes(stream, change.before);
+                    stream << ",\"after\":";
+                    Bytes(stream, change.after);
+                    stream << '}';
+                }
+                stream << ']';
+            }
+            stream << '}';
+        }
+
+        void ContainerValue(std::ostream &stream, const ir::ContainerValue &value)
+        {
+            stream << "{\"status\":\"" << EscapeJson(value.status) << "\",\"layout_id\":\"" << EscapeJson(value.layoutId)
+                   << "\",\"pointer_encoding\":\"" << EscapeJson(value.pointerEncoding)
+                   << "\",\"address\":\"" << Hex(value.address) << "\",\"data\":\"" << Hex(value.data)
+                   << "\",\"slots\":" << value.slots << ",\"count\":" << value.count << ",\"capacity\":" << value.capacity
+                   << ",\"indices_complete\":" << (value.indicesComplete ? "true" : "false")
+                   << ",\"element_bytes_complete\":" << (value.elementsComplete ? "true" : "false")
+                   << ",\"data_frozen\":" << (value.dataFrozen ? "true" : "false") << ",\"header_bytes\":";
+            Bytes(stream, value.header);
+            stream << ",\"elements\":[";
+            for (size_t index = 0; index < value.elements.size(); ++index)
+            {
+                if (index)
+                    stream << ',';
+                const auto &element = value.elements[index];
+                stream << "{\"index\":" << element.index << ",\"address\":\"" << Hex(element.address) << "\",\"bytes\":";
+                Bytes(stream, element.bytes);
+                stream << '}';
+            }
+            stream << "]}";
+        }
+
+        void ValueObservation(std::ostream &stream, const ir::ValueObservation &value, bool includeCapture = true)
+        {
+            stream << "{\"object\":\"" << Hex(value.objectAddress) << "\",\"class\":\"" << Hex(value.classAddress)
+                   << "\",\"owner\":\"" << Hex(value.ownerAddress) << "\",\"property\":\"" << Hex(value.propertyAddress)
+                   << "\",\"address\":\"" << Hex(value.address) << "\",\"path\":\"" << EscapeJson(value.path)
+                   << "\",\"kind\":\"" << EscapeJson(value.kind) << "\",\"layout_id\":\"" << EscapeJson(value.layoutId)
+                   << "\",\"class_default_object\":" << (value.classDefaultObject ? "true" : "false")
+                   << ",\"status\":\"" << EscapeJson(value.status) << "\",\"layout_candidates\":";
+            Strings(stream, value.layoutCandidates);
+            stream << ",\"candidate_statuses\":{";
+            bool first = true;
+            for (const auto &[id, status] : value.candidateStatuses)
+            {
+                if (!first)
+                    stream << ',';
+                first = false;
+                stream << '"' << EscapeJson(id) << "\":\"" << EscapeJson(status) << '"';
+            }
+            stream << "},\"bytes\":";
+            Bytes(stream, value.bytes);
+            stream << ",\"numbers\":{";
+            first = true;
+            for (const auto &[key, number] : value.numbers)
+            {
+                if (!first)
+                    stream << ',';
+                first = false;
+                stream << '"' << EscapeJson(key) << "\":" << number;
+            }
+            stream << "},\"addresses\":{";
+            first = true;
+            for (const auto &[key, address] : value.addresses)
+            {
+                if (!first)
+                    stream << ',';
+                first = false;
+                stream << '"' << EscapeJson(key) << "\":\"" << Hex(address) << '"';
+            }
+            stream << '}';
+            if (value.container)
+            {
+                stream << ",\"container\":";
+                ContainerValue(stream, *value.container);
+            }
+            stream << ",\"bindings_complete\":" << (value.bindingsComplete ? "true" : "false") << ",\"bindings\":[";
+            for (size_t index = 0; index < value.bindings.size(); ++index)
+            {
+                if (index)
+                    stream << ',';
+                const auto &binding = value.bindings[index];
+                stream << "{\"address\":\"" << Hex(binding.address) << "\",\"object_index\":" << binding.objectIndex
+                       << ",\"object_serial\":" << binding.objectSerial << ",\"target\":\"" << Hex(binding.target)
+                       << "\",\"target_status\":\"" << EscapeJson(binding.targetStatus)
+                       << "\",\"function_name\":\"" << EscapeJson(binding.functionName) << "\"}";
+            }
+            stream << ']';
+            if (includeCapture)
+            {
+                stream << ",\"capture\":";
+                ValueCapture(stream, value.capture);
+            }
+            else
+                stream << ",\"capture_ref\":\"sparse.capture\"";
             stream << '}';
         }
 
@@ -543,24 +690,26 @@ namespace anduefker::generation
 
     void WriteContainerStorageJson(std::ostream &stream, const ir::ReflectionIR &reflection)
     {
-        stream << "{\"metadata_coverage\":\"all-visited-nodes\",\"metadata_location\":\"property.type.container_storage (including nested nodes)\",\"instance_traversal_validated\":false,\"max_raw_observations\":512,\"max_normal_owners_per_shape\":2,\"exceptional_fields\":\"individual-within-global-budget\",\"max_raw_candidates\":8192,\"priority\":\"final-representation-gaps-first\",\"sparse_check\":\"conditional-formula-with-recorded-alignment-and-pair-extent\",\"source_layouts\":[";
+        stream << "{\"metadata_coverage\":\"all-visited-nodes\",\"metadata_location\":\"property.type.container_storage (including nested nodes)\",\"instance_traversal_validated\":false,\"instance_evidence_ref\":\"runtime_value_evidence\",\"max_raw_observations\":512,\"max_normal_owners_per_shape\":2,\"max_normal_log_samples_per_class\":8,\"exceptional_fields\":\"individual-within-global-budget\",\"max_raw_candidates\":8192,\"priority\":\"final-representation-gaps-first\",\"sparse_check\":\"conditional-formula-with-recorded-alignment-and-pair-extent\",\"source_layouts\":[";
         bool firstLayout = true;
-        for (auto kind : {ir::PropertyKind::Array, ir::PropertyKind::Set})
-            if (const auto layout = ::anduefker::ue::DescribeHeapContainer(kind, reflection.containerPointerWidth))
-            {
-                if (!firstLayout)
-                    stream << ',';
-                firstLayout = false;
-                stream << "{\"id\":\"" << layout->id << "\",\"size\":" << layout->size
-                       << ",\"alignment\":" << layout->alignment << ",\"offsets\":{";
-                for (size_t index = 0; index < layout->offsets.size(); ++index)
+        for (bool memoryImage : {false, true})
+            for (auto kind : {ir::PropertyKind::Array, ir::PropertyKind::Set})
+                if (const auto layout = memoryImage ? ::anduefker::ue::DescribeMemoryImageContainer(kind, reflection.containerPointerWidth)
+                                                    : ::anduefker::ue::DescribeHeapContainer(kind, reflection.containerPointerWidth))
                 {
-                    if (index != 0)
+                    if (!firstLayout)
                         stream << ',';
-                    stream << '"' << layout->offsets[index].first << "\":" << layout->offsets[index].second;
+                    firstLayout = false;
+                    stream << "{\"id\":\"" << layout->id << "\",\"size\":" << layout->size
+                           << ",\"alignment\":" << layout->alignment << ",\"offsets\":{";
+                    for (size_t index = 0; index < layout->offsets.size(); ++index)
+                    {
+                        if (index != 0)
+                            stream << ',';
+                        stream << '"' << layout->offsets[index].first << "\":" << layout->offsets[index].second;
+                    }
+                    stream << "}}";
                 }
-                stream << "}}";
-            }
         const auto counts = [&](const char *name, const auto &values)
         {
             stream << ",\"" << name << "\":{";
@@ -575,6 +724,7 @@ namespace anduefker::generation
             stream << '}';
         };
         stream << ']';
+        stream << ",\"raw_accounting_valid\":" << (reflection.containerEvidenceAccountingValid ? "true" : "false");
         counts("allocator_counts", reflection.containerAllocatorCounts);
         counts("header_status_counts", reflection.containerHeaderCounts);
         counts("element_layout_status_counts", reflection.containerElementLayoutCounts);
@@ -643,10 +793,78 @@ namespace anduefker::generation
         stream << "]}";
     }
 
+    void WriteRuntimeEvidenceJson(std::ostream &stream, const ir::RuntimeEvidence &evidence, bool fullRecords)
+    {
+        stream << "{\"status\":\"" << EscapeJson(evidence.status) << "\",\"affects_sdk_completeness\":false"
+               << ",\"atomic_snapshot\":false,\"coverage\":\"bounded-instance-samples-not-all-values\""
+               << ",\"text_contract\":\"outer-header-and-vtable-only; not FText::ToString or current display text\""
+               << ",\"weak_contract\":\"slot identity and serial observations; not GC liveness\""
+               << ",\"max_object_slots\":262144,\"max_values\":256,\"max_container_slots\":65536"
+               << ",\"max_field_nodes\":8192,\"max_field_nodes_per_class\":256"
+               << ",\"max_elements_per_container\":8,\"element_preview_bytes\":64"
+               << ",\"object_slots\":" << evidence.objectSlots << ",\"scanned_slots\":" << evidence.scannedSlots
+               << ",\"scan_complete\":" << (evidence.scanComplete ? "true" : "false")
+               << ",\"value_records\":" << evidence.values.size();
+        const auto counts = [&](const char *name, const auto &values)
+        {
+            stream << ",\"" << name << "\":{";
+            bool first = true;
+            for (const auto &[key, value] : values)
+            {
+                if (!first)
+                    stream << ',';
+                first = false;
+                stream << '"' << EscapeJson(key) << "\":" << value;
+            }
+            stream << '}';
+        };
+        counts("status_counts", evidence.statuses);
+        counts("skipped_counts", evidence.skipped);
+        if (fullRecords)
+        {
+            stream << ",\"values\":[";
+            for (size_t index = 0; index < evidence.values.size(); ++index)
+            {
+                if (index)
+                    stream << ',';
+                ValueObservation(stream, evidence.values[index]);
+            }
+            stream << ']';
+        }
+        else
+            stream << ",\"records_ref\":\"reflection.json/runtime_value_evidence\"";
+        const auto &sparse = evidence.sparse;
+        stream << ",\"sparse\":{\"symbol\":\"" << EscapeJson(sparse.symbol) << "\",\"address\":\"" << Hex(sparse.address)
+               << "\",\"address_meaning\":\"direct-map-storage\",\"source\":\"" << EscapeJson(sparse.source)
+               << "\",\"status\":\"" << EscapeJson(sparse.status) << "\",\"enumeration_complete\":"
+               << (sparse.enumerationComplete ? "true" : "false") << ",\"records\":" << sparse.delegates.size()
+               << ",\"capture\":";
+        ValueCapture(stream, sparse.capture);
+        stream << ",\"diagnostics\":";
+        Strings(stream, sparse.diagnostics);
+        if (fullRecords)
+        {
+            if (sparse.owners)
+            {
+                stream << ",\"owners\":";
+                ContainerValue(stream, *sparse.owners);
+            }
+            stream << ",\"delegates\":[";
+            for (size_t index = 0; index < sparse.delegates.size(); ++index)
+            {
+                if (index)
+                    stream << ',';
+                ValueObservation(stream, sparse.delegates[index], false);
+            }
+            stream << ']';
+        }
+        stream << "}}";
+    }
+
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity,
                              const FieldDescriptions *fields, const CppSymbols *symbols)
     {
-        stream << "{\n\"schema_version\":9,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
+        stream << "{\n\"schema_version\":10,\n\"status\":\"" << ir::ParseStatusName(reflection.status)
                << "\",\n\"engine\":\"" << EscapeJson(identity.engine) << "\",\n\"profile\":{\"id\":\"" << EscapeJson(identity.profileId)
                << "\",\"label\":\"" << EscapeJson(identity.profileLabel) << "\",\"version_range\":\"" << EscapeJson(identity.versionRange)
                << "\"}";
@@ -681,6 +899,23 @@ namespace anduefker::generation
                    << "\",\"storage\":\"" << PropertyStorageKindName(type->storage) << "\",\"reason\":\"" << EscapeJson(type->failureReason)
                    << "\",\"reason_path\":\"" << EscapeJson(type->failurePath)
                    << "\",\"semantics_resolved\":" << (type->semanticsResolved ? "true" : "false") << '}';
+        }
+        stream << "],\n\"value_storage_layouts\":[";
+        bool firstValueLayout = true;
+        for (const auto &[id, layout] : reflection.valueStorageLayouts)
+        {
+            if (!firstValueLayout)
+                stream << ',';
+            firstValueLayout = false;
+            stream << "{\"id\":\"" << EscapeJson(id) << "\",\"source_range\":\"" << EscapeJson(layout.sourceRange)
+                   << "\",\"size\":" << layout.size << ",\"alignment\":" << layout.alignment << ",\"offsets\":{";
+            for (size_t index = 0; index < layout.offsets.size(); ++index)
+            {
+                if (index)
+                    stream << ',';
+                stream << '"' << EscapeJson(layout.offsets[index].first) << "\":" << layout.offsets[index].second;
+            }
+            stream << "}}";
         }
         stream << "],\n\"types\":[\n";
         for (size_t index = 0; index < reflection.types.size(); ++index)
@@ -761,6 +996,8 @@ namespace anduefker::generation
         WriteDelegateDiagnosticsJson(stream, reflection);
         stream << ",\n\"container_storage_evidence\":";
         WriteContainerStorageJson(stream, reflection);
+        stream << ",\n\"runtime_value_evidence\":";
+        WriteRuntimeEvidenceJson(stream, reflection.runtimeEvidence, true);
         stream << "\n}\n";
     }
 } // namespace anduefker::generation

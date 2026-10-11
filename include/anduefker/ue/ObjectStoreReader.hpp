@@ -63,6 +63,7 @@ namespace anduefker::ue
         [[nodiscard]] ObjectReadResult ReadObject(int32_t index, bool fresh = false) const;
         [[nodiscard]] ObjectStoreBoundary RefreshCount();
         [[nodiscard]] std::optional<uint32_t> ReadInternalFlags(const ObjectReadResult &object) const;
+        [[nodiscard]] std::optional<int32_t> ReadSerialNumber(const ObjectReadResult &object) const;
 
     private:
         const IMemorySource &memory_;

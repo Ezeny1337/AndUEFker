@@ -214,8 +214,8 @@ namespace anduefker::ir
                 AnalyzeFunction(function, reflection.stats);
         }
 
-        // A base represented only by offset descriptors cannot provide a native C++
-        // extent for a sequential derived declaration. Propagate that representation.
+        // 仅提供 offset description 的基类不能为顺序派生声明提供 native C++ extent
+        // 因此向派生类传播相同的表示方式
         bool changed = true;
         while (changed)
         {

@@ -7,7 +7,10 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
+
+#include "anduefker/ir/RuntimeEvidence.hpp"
 
 namespace anduefker::ir
 {
@@ -196,6 +199,15 @@ namespace anduefker::ir
         int32_t elementStride = -1;
     };
 
+    struct StorageLayoutIR
+    {
+        std::string id;
+        std::string sourceRange;
+        int32_t size = 0;
+        int32_t alignment = 0;
+        std::vector<std::pair<std::string, int32_t>> offsets;
+    };
+
     struct TypeReferenceIR
     {
         uintptr_t metadataAddress = 0;
@@ -212,6 +224,9 @@ namespace anduefker::ir
         // 即使子项的语义尚未解析，其外围的元数据/标识依然可以是有效的
         bool nodeDetailsResolved = false;
         std::shared_ptr<const ContainerStorageIR> containerStorage;
+        // 共识字段描述不代表指针目标或外部绑定已经解析。
+        std::shared_ptr<const StorageLayoutIR> valueStorage;
+        std::vector<std::string> valueStorageCandidates;
         std::shared_ptr<TypeReferenceIR> inner;
         std::shared_ptr<TypeReferenceIR> key;
         std::shared_ptr<TypeReferenceIR> value;
@@ -543,5 +558,8 @@ namespace anduefker::ir
         std::map<std::string, size_t> containerElementLayoutCounts;
         std::map<std::string, size_t> containerStorageCandidates;
         std::map<std::string, size_t> containerStorageNotObserved;
+        bool containerEvidenceAccountingValid = true;
+        std::map<std::string, StorageLayoutIR> valueStorageLayouts;
+        RuntimeEvidence runtimeEvidence;
     };
 } // namespace anduefker::ir

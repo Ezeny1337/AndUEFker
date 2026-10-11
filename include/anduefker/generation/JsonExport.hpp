@@ -26,6 +26,7 @@ namespace anduefker::generation
     void WritePropertyDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection);
     void WriteDelegateDiagnosticsJson(std::ostream &stream, const ir::ReflectionIR &reflection);
     void WriteContainerStorageJson(std::ostream &stream, const ir::ReflectionIR &reflection);
+    void WriteRuntimeEvidenceJson(std::ostream &stream, const ir::RuntimeEvidence &evidence, bool fullRecords);
     void WriteReflectionJson(std::ostream &stream, const ir::ReflectionIR &reflection, const ReflectionIdentity &identity,
                              const FieldDescriptions *fields = nullptr, const CppSymbols *symbols = nullptr);
 } // namespace anduefker::generation

@@ -120,6 +120,8 @@ namespace anduefker::generation
             mutable std::set<uintptr_t> loggedOwners;
             std::map<std::string, size_t> opaqueLogSamples;
             std::map<std::string, size_t> opaqueLogOmitted;
+            mutable std::map<std::string, size_t> layoutLogSamples;
+            mutable std::map<std::string, size_t> layoutLogOmitted;
             [[nodiscard]] ParseStatus Status() const
             {
                 // 有意设计的 Opaque storage 并不是缺失的字段
