@@ -828,8 +828,8 @@ namespace anduefker::reflection
         observation.innerSize = childExtent(element);
         observation.valueSize = childExtent(value);
         auto &storage = observation.storage;
-        const int32_t pointer = static_cast<int32_t>(sizeof(uintptr_t));
-        const auto alignPointer = [pointer](int64_t offset)
+        constexpr int32_t pointer = static_cast<int32_t>(sizeof(uintptr_t));
+        const auto alignPointer = [](int64_t offset)
         { return (offset + pointer - 1) / pointer * pointer; };
         int32_t offset = observation.referenceOffset;
         size_t windowSize = 0;
