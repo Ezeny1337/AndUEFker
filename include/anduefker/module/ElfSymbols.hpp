@@ -4,7 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "anduefker/app/RuntimeContext.hpp"
+#include "anduefker/module/ModuleImage.hpp"
+#include "anduefker/memory/MemorySource.hpp"
 
 class ElfScanner;
 
@@ -52,10 +53,10 @@ namespace anduefker::module
     };
 
     [[nodiscard]] SymbolQueryResult QueryDynamicElfSymbols(const memory::IMemorySource &memory,
-                                                           const app::ModuleImage &module, const DynamicSymbolTables &tables, const std::vector<std::string> &names);
+                                                           const module::ModuleImage &module, const DynamicSymbolTables &tables, const std::vector<std::string> &names);
 
     // 仅读取被请求的动态符号，缺失的名称可选择性地使用已映射的调试符号表
     // 解析结果中每个被请求的名称最多包含一个条目；不会生成或保留完整的符号映射表
-    [[nodiscard]] SymbolQueryResult QueryElfSymbols(const memory::IMemorySource &memory, const app::ModuleImage &module,
+    [[nodiscard]] SymbolQueryResult QueryElfSymbols(const memory::IMemorySource &memory, const module::ModuleImage &module,
                                                     const ElfScanner &elf, const std::vector<std::string> &names);
 } // namespace anduefker::module

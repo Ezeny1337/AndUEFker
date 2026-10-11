@@ -1,39 +1,8 @@
 #include "anduefker/module/ModuleCatalog.hpp"
 
-#include <algorithm>
 #include <elf.h>
 
 #include "anduefker/memory/RemoteMemorySource.hpp"
-#include "anduefker/module/ElfSymbols.hpp"
-
-namespace anduefker::app
-{
-    bool ModuleImage::IsExecutable(uintptr_t address, size_t size) const
-    {
-        if (size == 0 || address > UINTPTR_MAX - (size - 1))
-            return false;
-        const uintptr_t last = address + size - 1;
-        for (const Segment &segment : segments)
-        {
-            if (segment.executable && address >= segment.start && last < segment.end)
-                return true;
-        }
-        return false;
-    }
-
-    bool ModuleImage::IsWritable(uintptr_t address, size_t size) const
-    {
-        if (size == 0 || address > UINTPTR_MAX - (size - 1))
-            return false;
-        const uintptr_t last = address + size - 1;
-        for (const Segment &segment : segments)
-        {
-            if (segment.writable && address >= segment.start && last < segment.end)
-                return true;
-        }
-        return false;
-    }
-} // namespace anduefker::app
 
 namespace anduefker::module
 {
@@ -92,23 +61,4 @@ namespace anduefker::module
         return false;
     }
 
-    uintptr_t ModuleCatalog::FindSymbol(IMemorySource &memory,
-                                        const std::string &moduleName,
-                                        const std::string &symbolName)
-    {
-        auto *remote = dynamic_cast<RemoteMemorySource *>(&memory);
-        if (remote == nullptr || symbolName.empty())
-            return 0;
-        auto elf = remote->Manager().elfScanner.findElf(moduleName);
-        if (!elf.isValid())
-            return 0;
-        ModuleImage module;
-        if (!Discover(memory, {moduleName}, module))
-            return 0;
-        const auto result = QueryElfSymbols(memory, module, elf, {symbolName});
-        if (const auto found = result.exported.find(symbolName); found != result.exported.end())
-            return found->second;
-        const auto found = result.debug.find(symbolName);
-        return found == result.debug.end() ? 0 : found->second;
-    }
 } // namespace anduefker::module

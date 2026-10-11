@@ -8,17 +8,16 @@
 #include "Memory/IMemory.h"
 
 #include "anduefker/memory/RemoteMemorySource.hpp"
-#include "anduefker/app/RuntimeContext.hpp"
+#include "anduefker/module/ModuleImage.hpp"
 
 namespace anduefker::analyzer
 {
-    using ::anduefker::app::ModuleImage;
     using ::anduefker::memory::RemoteMemorySource;
 
     class AnalyzerMemoryAdapter final : public IMemory
     {
     public:
-        AnalyzerMemoryAdapter(RemoteMemorySource &memory, const ModuleImage &module);
+        AnalyzerMemoryAdapter(RemoteMemorySource &memory, const module::ModuleImage &module);
 
         bool Initialize() override;
         std::string GetProcessName() const override;
@@ -58,7 +57,7 @@ namespace anduefker::analyzer
         [[nodiscard]] bool RangeEnd(uintptr_t start, size_t range, uintptr_t &end) const;
 
         RemoteMemorySource *memory_ = nullptr;
-        ModuleImage module_;
+        module::ModuleImage module_;
         ModuleInfo unreal_;
         std::vector<MemRegionInfo> regions_;
     };

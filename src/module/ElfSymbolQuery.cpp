@@ -27,7 +27,7 @@ namespace anduefker::module
         class Query
         {
         public:
-            Query(const memory::IMemorySource &memory, const app::ModuleImage &module, const DynamicSymbolTables &tables)
+            Query(const memory::IMemorySource &memory, const module::ModuleImage &module, const DynamicSymbolTables &tables)
                 : memory_(memory), module_(module), tables_(tables) {}
             std::string error;
             uintptr_t Find(const std::string &name)
@@ -237,12 +237,12 @@ namespace anduefker::module
                 return 0;
             }
             const memory::IMemorySource &memory_;
-            const app::ModuleImage &module_;
+            const module::ModuleImage &module_;
             const DynamicSymbolTables &tables_;
         };
     }
 
-    SymbolQueryResult QueryDynamicElfSymbols(const memory::IMemorySource &memory, const app::ModuleImage &module,
+    SymbolQueryResult QueryDynamicElfSymbols(const memory::IMemorySource &memory, const module::ModuleImage &module,
                                              const DynamicSymbolTables &tables, const std::vector<std::string> &names)
     {
         SymbolQueryResult result;

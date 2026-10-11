@@ -9,6 +9,22 @@
 
 namespace anduefker::ir
 {
+    // 采集与序列化共用的预算契约，实际读取仍由 reflection/ue 层执行
+    struct RuntimeEvidenceLimits
+    {
+        static constexpr int32_t kMaxObjectSlots = 262144;
+        static constexpr size_t kMaxValues = 256;
+        static constexpr size_t kMaxUniqueFieldNodes = 8192;
+        static constexpr size_t kMaxFieldsPerClass = 256;
+        static constexpr size_t kMaxCachedFields = 65536;
+        static constexpr size_t kMaxDepth = 16;
+        static constexpr size_t kMaxStaticElements = 2;
+        static constexpr size_t kArrayInstances = 48;
+        static constexpr size_t kArrayDefaults = 16;
+        static constexpr size_t kOtherInstances = 16;
+        static constexpr size_t kOtherDefaults = 8;
+    };
+
     struct ContainerElementSample
     {
         int32_t index = 0;

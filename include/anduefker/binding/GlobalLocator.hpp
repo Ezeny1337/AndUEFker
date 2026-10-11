@@ -1,22 +1,26 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
-#include "anduefker/analyzer/AnalyzerMemoryAdapter.hpp"
+#include "anduefker/module/ModuleImage.hpp"
 #include "anduefker/binding/BindingBuilder.hpp"
 #include "anduefker/binding/RuntimeBinding.hpp"
 
+namespace anduefker::memory
+{
+    class RemoteMemorySource;
+}
+
 namespace anduefker::binding
 {
-    using ::anduefker::app::ModuleArchitecture;
-    using ::anduefker::app::ModuleImage;
     using ::anduefker::memory::RemoteMemorySource;
 
     class GlobalLocator
     {
     public:
-        GlobalLocator(RemoteMemorySource &memory, const ModuleImage &module) : memory_(memory), module_(module) {}
+        GlobalLocator(RemoteMemorySource &memory, const module::ModuleImage &module) : memory_(memory), module_(module) {}
 
         [[nodiscard]] BindingCandidates LocateSymbols(const std::vector<std::string> &objectSymbols,
                                                       const std::vector<std::string> &nameSymbols,
@@ -29,6 +33,6 @@ namespace anduefker::binding
                                                                    const std::string &symbol) const;
 
         RemoteMemorySource &memory_;
-        const ModuleImage &module_;
+        const module::ModuleImage &module_;
     };
 } // namespace anduefker::binding

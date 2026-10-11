@@ -23,9 +23,10 @@ Build the tool with the ABI matching the target process: use the `arm64-v8a` bin
 - **ARM-aware analysis** — supports ARM64 and ARM32 ARM-mode decoding for Unreal Android binaries; Thumb/Thumb-2 analysis remains a separate follow-up.
 - **Reflection extraction** — walks live Unreal objects and emits types, properties, functions, enums, inheritance, and layout metadata.
 - **Common class addresses** — records useful `UClass` objects such as `World`, `Engine`, `GameInstance`, and `PlayerController`.
-- **Reproducible artifacts** — writes generated headers, JSON metadata, diagnostics, and runtime binding details as one artifact directory.
+- **Traceable artifacts** — writes generated headers, JSON metadata, diagnostics, runtime bindings, and producer identity as one artifact directory.
 - **Fail-closed validation** — invalid candidates and inconsistent layouts are rejected rather than silently treated as valid.
 - **Bounded capture** — rechecks consumed bytes and covers object-array growth through limited tail enumeration.
+- **Read-only instance evidence** — samples container contents, weak references, text headers, and delegate bindings with independent stability checks.
 
 ## Pipeline
 
@@ -38,7 +39,8 @@ flowchart TD
     E --> F[SchemaResolver]
     F --> G[CommonObjectCollector]
     G --> H[ReflectionReader]
-    H --> I[ArtifactWriter]
+    H --> K[RuntimeInspector]
+    K --> I[ArtifactWriter + SdkEmitter]
     I --> J[Generated SDK + JSON diagnostics]
 ```
 
@@ -49,9 +51,10 @@ The runtime session follows these stages:
 3. Validate object container and name store layouts.
 4. Probe engine schema profiles and validate the runtime reflection layout.
 5. Collect selected common `UClass` object addresses.
-6. Read and validate reflection data, analyze layouts, and generate the SDK artifact.
+6. Read and validate reflection definitions and analyze their layouts.
+7. Collect bounded, independently checked instance evidence and publish the SDK artifact.
 
-Schema profiles cover UE 4.23–4.27 and 5.0–5.6 layout families. Selection records the validated runtime layout, compatible profiles, and engine-version confidence.
+Schema profiles cover UE 4.23–4.27 and 5.0–5.6 layout families. Selection records the validated runtime layout, compatible profiles, and engine-version confidence; profile coverage does not guarantee every engine branch or build configuration.
 
 ## Build
 
@@ -88,6 +91,8 @@ chmod +x build.sh
 ./build.sh --mode debug --abi armeabi-v7a --jobs 4
 ```
 
+Script builds produce `build/android-<abi>-<mode>/AndUEFker` by default. Use `--build-dir` to override the build directory or `--no-strip` to retain release symbols.
+
 ### Direct CMake configuration
 
 The following is the same toolchain shape used by the GitHub Actions workflow:
@@ -114,6 +119,8 @@ build/android-arm64-release/AndUEFker
 ```text
 AndUEFker -o <output-dir> -p <package-name>
 ```
+
+Run the tool on the Android device while the target process is running. It requires permission to read the target process memory and write the output directory; it does not bypass platform access restrictions.
 
 ### Required options
 
@@ -158,22 +165,26 @@ The output directory also receives the session log:
 <output-dir>/AndUEFker.log
 ```
 
+Existing artifact directories are not overwritten. Use a fresh output directory for repeated captures; the session log is overwritten on each run.
+
 ### Generated files
 
 | File | Purpose |
 | --- | --- |
-| `BasicTypes.hpp` | Generated SDK primitives and container descriptions. |
+| `BasicTypes.hpp` | SDK primitives, typed opaque storage, and source-backed layout tags. |
 | `Types.hpp` | Reflected Unreal classes and structs with identities and target layout information. |
 | `Enums.hpp` | Reflected enum declarations and values. |
 | `Functions.hpp` | Reflected execution-entry RVAs and parameter layouts. |
-| `reflection.json` | Detailed reflection IR, including properties, functions, enums, inheritance, and addresses. |
-| `manifest.json` | Artifact status and parsing statistics. |
-| `diagnostics.json` | Reflection diagnostics, conflicts, and failure counters. |
+| `reflection.json` | Reflection IR, generation metadata, storage models, and bounded runtime evidence. |
+| `manifest.json` | Artifact status, parsing statistics, and producer provenance. |
+| `diagnostics.json` | Reflection and generation diagnostics, counters, and shared evidence references. |
 | `runtime.json` | Runtime module, binding layout, schema offsets, and common object addresses. |
 
 The generated headers use the `AndUE` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
 
-JSON schema versions are `8` for `reflection.json`, `7` for `manifest.json` and `diagnostics.json`, and `4` for `runtime.json`. Generation metadata separates semantic declarations from storage descriptions and identifies delegate forms; diagnostics reference shared reflection evidence. Native C++ ABI compatibility is not asserted.
+The SDK is not a directly callable runtime library. Native C++ ABI compatibility is not asserted; use reflected metadata rather than `sizeof`/`offsetof`. Execution-entry RVAs are not guaranteed to identify original C++ business implementations.
+
+Generation metadata separates semantic declarations from storage descriptions and identifies delegate forms; diagnostics reference shared reflection evidence.
 
 ## Common object addresses
 
@@ -194,7 +205,7 @@ These are class-object addresses discovered in the Unreal object store. They are
 
 ## Validation and status
 
-AndUEFker records evidence during binding and schema resolution, including:
+AndUEFker records evidence during binding, schema resolution, reflection capture, and SDK generation, including:
 
 - object and name candidate counts;
 - selected container layouts and probe scores;
@@ -202,21 +213,23 @@ AndUEFker records evidence during binding and schema resolution, including:
 - object slot and reflection statistics;
 - unknown properties, unresolved type details, layout conflicts, and read failures.
 
-The generated `manifest.json` reports one of the following artifact states:
+Artifact status uses the following states; published artifacts record their status in `manifest.json`:
 
 | State | Meaning |
 | --- | --- |
 | `Complete` | Reflection reading and SDK descriptions are complete; all required files were written and closed. |
 | `Partial` | Reflection reading or SDK descriptions have limitations; the artifact is marked `.partial`. |
-| `Failed` | Binding, schema resolution, reflection, or artifact writing failed. |
+| `Failed` | Binding, schema resolution, reflection, or artifact writing failed; an artifact or manifest may not be available. |
 
-The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, and `1` for other failures or incomplete runtime stages.
+The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, `2` for invalid command-line arguments, and `1` for other failures or incomplete runtime stages.
 
-`manifest.json` records `reflection_status` and `sdk_status` separately. Typed opaque storage preserves known field semantics and sizes; selected ordinary-container layout tags describe target offsets, not validated live traversal. Opaque storage does not by itself make the SDK description partial. Omitted fields and description layout warnings do.
+`manifest.json` records `reflection_status` and `sdk_status` separately. Typed opaque storage preserves known field semantics and sizes; selected heap and MemoryImage container layout tags describe target offsets, not universally validated live traversal. Opaque storage does not by itself make the SDK description partial. Omitted fields and description layout warnings do.
 
 JSON artifacts retain complete field metadata. Logs retain diagnostic summaries, bounded normal samples, and anomalies, with omitted sample counts and artifact references.
 
 Value-storage descriptions use source-backed layout candidates across UE4.23–5.6, not version-only guesses. Optional read-only instance evidence is bounded and independently checked; unavailable values do not reduce SDK completeness or imply native ABI compatibility.
+
+Capture stability is not an atomic snapshot, and `scan_complete` covers object-slot enumeration, not all fields or values. FText evidence describes outer storage, not arbitrary display strings. Sparse binding inspection requires a located storage root and compatible layout candidates; frozen element layouts and remote object resolution may remain unverified.
 
 ## Issues
 

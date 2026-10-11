@@ -91,15 +91,22 @@ add_library(anduefker_core STATIC
     src/binding/LayoutProbes.cpp
     src/binding/RuntimeBinding.cpp
     src/generation/ArtifactWriter.cpp
+    src/generation/ArtifactMetadata.cpp
+    src/generation/GenerationReport.cpp
+    src/generation/SdkEmitter.cpp
     src/generation/CppTypeResolver.cpp
     src/generation/JsonExport.cpp
     src/memory/CaptureMemorySource.cpp
     src/memory/RemoteMemorySource.cpp
     src/module/ModuleCatalog.cpp
+    src/module/ModuleImage.cpp
     src/module/ElfSymbols.cpp
     src/module/ElfSymbolQuery.cpp
     src/reflection/ReflectionReader.cpp
+    src/reflection/ReflectionEvidenceLog.cpp
     src/reflection/RuntimeInspector.cpp
+    src/reflection/RuntimeFieldPlanner.cpp
+    src/reflection/RuntimeValueReader.cpp
     src/reflection/ReflectionLayout.cpp
     src/ue/ContainerLayout.cpp
     src/ue/ContainerReader.cpp

@@ -12,20 +12,38 @@
 #include <vector>
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
+#include "anduefker/binding/BindingBuilder.hpp"
+#include "anduefker/binding/GlobalLocator.hpp"
 #include "anduefker/memory/ReadDiagnostics.hpp"
+#include "anduefker/memory/RemoteMemorySource.hpp"
+#include "anduefker/module/ModuleCatalog.hpp"
 #include "anduefker/module/ElfSymbols.hpp"
+#include "anduefker/reflection/ReflectionReader.hpp"
 #include "anduefker/reflection/RuntimeInspector.hpp"
 #include "anduefker/ue/SchemaCatalog.hpp"
+#include "anduefker/ue/SchemaResolver.hpp"
 
 namespace anduefker::app
 {
     using ::anduefker::binding::AddressMeaning;
+    using ::anduefker::binding::BindingBuilder;
+    using ::anduefker::binding::BindingCandidates;
+    using ::anduefker::binding::GlobalLocator;
     using ::anduefker::binding::LocatedAddress;
+    using ::anduefker::binding::RuntimeBinding;
+    using ::anduefker::generation::ArtifactWriter;
     using ::anduefker::ir::ParseStatus;
     using ::anduefker::memory::ReadStats;
+    using ::anduefker::module::ModuleCatalog;
+    using ::anduefker::reflection::ReflectionReader;
     using ::anduefker::ue::EngineProfile;
+    using ::anduefker::ue::EngineSchema;
+    using ::anduefker::ue::SchemaCandidateSummary;
     using ::anduefker::ue::SchemaCatalog;
     using ::anduefker::ue::SchemaLayoutVariantName;
+    using ::anduefker::ue::SchemaResolutionReport;
+    using ::anduefker::ue::SchemaResolver;
+    using ::anduefker::ue::SchemaSelectionResult;
 
     namespace
     {
@@ -66,19 +84,6 @@ namespace anduefker::app
             return "INFO";
         }
 
-        const char *ModuleArchitectureName(ModuleArchitecture architecture)
-        {
-            switch (architecture)
-            {
-            case ModuleArchitecture::Arm32:
-                return "ARM32";
-            case ModuleArchitecture::Arm64:
-                return "ARM64";
-            case ModuleArchitecture::Unknown:
-                break;
-            }
-            return "unknown";
-        }
     } // namespace
 
     RuntimeSession::RuntimeSession(RuntimeSessionConfig config) : config_(std::move(config))
@@ -265,7 +270,7 @@ namespace anduefker::app
         }
         stageStats = memory_->Stats();
 
-        ModuleImage module;
+        module::ModuleImage module;
         if (!ModuleCatalog::Discover(*memory_, config_.moduleNames, module))
         {
             failures_.push_back("Unreal module was not found");
@@ -274,7 +279,7 @@ namespace anduefker::app
         }
         context_.SetModule(std::move(module));
         Note("Module=" + context_.Module().name + " base=" + std::to_string(context_.Module().base) +
-             " architecture=" + ModuleArchitectureName(context_.Module().architecture) +
+             " architecture=" + module::ModuleArchitectureName(context_.Module().architecture) +
              " pointer_width=" + std::to_string(context_.Module().pointerWidth));
         Note(RuntimeLogLevel::Debug, "module_identity run_id=" + provenance_.runId +
                                          " pid=" + std::to_string(pid) +
@@ -639,7 +644,9 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Info, "runtime_value_evidence status=" + runtime.status +
                                         " object_slots=" + std::to_string(runtime.objectSlots) + " scanned_slots=" + std::to_string(runtime.scannedSlots) +
                                         " samples=" + std::to_string(runtime.values.size()) + " scan_complete=" + std::to_string(runtime.scanComplete) +
-                                        " affects_sdk_completeness=0 atomic_snapshot=0 full_records=reflection.json/runtime_value_evidence");
+                                        " affects_sdk_completeness=0 atomic_snapshot=0 field_coverage=bounded"
+                                        " sampling=storage-category-and-instance-role field_budget=unique-relevant-metadata"
+                                        " full_records=reflection.json/runtime_value_evidence");
         for (const auto &[status, count] : runtime.statuses)
             Note(RuntimeLogLevel::Debug, "runtime_value_status status=" + status + " count=" + std::to_string(count));
         for (const auto &[reason, count] : runtime.skipped)

@@ -85,7 +85,6 @@ namespace anduefker::reflection
         [[nodiscard]] ReflectionIR ReadAttempt(::anduefker::memory::CaptureValidation &validation,
                                                ::anduefker::ir::CaptureInfo::Attempt &details);
         [[nodiscard]] EnumIR ReadEnum(uintptr_t object, ReflectionStats &stats) const;
-        void LogEvidence(const ReflectionIR &reflection) const;
 
         ::anduefker::memory::CaptureMemorySource memory_;
         const EngineSchema &schema_;

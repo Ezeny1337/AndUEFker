@@ -9,7 +9,7 @@
 
 namespace anduefker::analyzer
 {
-    AnalyzerMemoryAdapter::AnalyzerMemoryAdapter(RemoteMemorySource &memory, const ModuleImage &module)
+    AnalyzerMemoryAdapter::AnalyzerMemoryAdapter(RemoteMemorySource &memory, const module::ModuleImage &module)
         : memory_(&memory), module_(module)
     {
         RebuildMaps();

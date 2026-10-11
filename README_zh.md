@@ -23,9 +23,10 @@ AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运�
 - **ARM 架构分析** — 支持 ARM64 和 ARM32 ARM-mode 指令解码，以及面向 Unreal 二进制的候选地址分析策略；Thumb/Thumb-2 暂未支持。
 - **反射提取** — 遍历 Unreal 运行时对象，输出类型、属性、函数、枚举、继承关系和布局元数据。
 - **常用类地址收集** — 记录 `World`、`Engine`、`GameInstance`、`PlayerController` 等常用 `UClass` 对象地址。
-- **完整产物输出** — 将生成头文件、JSON 元数据、诊断信息和运行时绑定信息写入统一产物目录。
+- **可追溯产物输出** — 将生成头文件、JSON 元数据、诊断、运行时绑定及生成器身份写入统一产物目录。
 - **验证失败即拒绝** — 对无效候选和不一致布局进行拒绝，避免静默使用错误结果。
 - **有界采集** — 复核实际消费的字节，通过有限尾部枚举覆盖对象表增长。
+- **只读实例证据** — 对容器内容、Weak 引用、文本 header 和委托绑定进行采样，并独立校验稳定性。
 
 ## 工作流程
 
@@ -38,7 +39,8 @@ flowchart TD
     E --> F[SchemaResolver]
     F --> G[CommonObjectCollector]
     G --> H[ReflectionReader]
-    H --> I[ArtifactWriter]
+    H --> K[RuntimeInspector]
+    K --> I[ArtifactWriter + SdkEmitter]
     I --> J[生成 SDK + JSON 诊断]
 ```
 
@@ -49,9 +51,10 @@ flowchart TD
 3. 验证对象容器和名称存储布局。
 4. 探测引擎 Schema profile，并验证运行时反射布局。
 5. 收集选定的常用 `UClass` 对象地址。
-6. 读取并校验反射数据，分析布局，生成 SDK 产物。
+6. 读取并校验反射定义，分析其布局。
+7. 采集有界、独立校验的实例证据，并发布 SDK 产物。
 
-Schema profile 覆盖 UE 4.23–4.27 和 5.0–5.6 的布局族，选择结果记录已验证的运行时布局、兼容 profile 和引擎版本置信度。
+Schema profile 覆盖 UE 4.23–4.27 和 5.0–5.6 的布局族，选择结果记录已验证的运行时布局、兼容 profile 和引擎版本置信度；profile 覆盖不代表保证适配每个引擎分支或构建配置。
 
 ## 构建
 
@@ -71,7 +74,7 @@ Schema profile 覆盖 UE 4.23–4.27 和 5.0–5.6 的布局族，选择结果�
 | --- | --- | --- |
 | `verify` | Release、ThinLTO、不启用体积专用优化 | 快速验证编译是否通过，默认模式。 |
 | `release` | Release、`-Oz`、ThinLTO、禁用 `NDEBUG`、剥离符号 | 生成较小的可分发产物。 |
-| `debug` | 保留调试信息、ThinLTO、启用 `NDEBUG` | 生成可调试产物。
+| `debug` | 保留调试信息、ThinLTO、启用 `NDEBUG` | 生成可调试产物。 |
 
 运行脚本前设置 `ANDROID_NDK_HOME` 或 `ANDROID_NDK_ROOT`。如果只设置了 `ANDROID_SDK_ROOT`，脚本会自动查找已安装的最新 NDK。
 
@@ -87,6 +90,8 @@ chmod +x build.sh
 # 启用 NDEBUG 并保留调试信息的 debug 产物
 ./build.sh --mode debug --abi armeabi-v7a --jobs 4
 ```
+
+脚本构建默认生成 `build/android-<abi>-<mode>/AndUEFker`。使用 `--build-dir` 指定构建目录，或使用 `--no-strip` 保留 release 符号。
 
 ### 直接使用 CMake 配置与构建
 
@@ -114,6 +119,8 @@ build/android-arm64-release/AndUEFker
 ```text
 AndUEFker -o <输出目录> -p <包名>
 ```
+
+在 Android 设备上运行工具，并保持目标进程运行。工具需要读取目标进程内存和写入输出目录的权限，不会绕过平台访问限制。
 
 ### 必选参数
 
@@ -158,22 +165,26 @@ AndUEFker -o <输出目录> -p <包名>
 <输出目录>/AndUEFker.log
 ```
 
+已有产物目录不会被覆盖。重复采集时请使用新的输出目录；会话日志会在每次运行时覆盖。
+
 ### 文件说明
 
 | 文件 | 用途 |
 | --- | --- |
-| `BasicTypes.hpp` | SDK 基础类型与容器描述。 |
+| `BasicTypes.hpp` | SDK 基础类型、typed opaque 存储及源码驱动的布局标签。 |
 | `Types.hpp` | 生成的 Unreal 类和结构体，包含反射身份与目标布局信息。 |
 | `Enums.hpp` | 生成的枚举声明和值。 |
 | `Functions.hpp` | 反射执行入口 RVA 与参数布局。 |
-| `reflection.json` | 详细反射 IR，包括属性、函数、枚举、继承关系和地址。 |
-| `manifest.json` | 产物状态和解析统计信息。 |
-| `diagnostics.json` | 反射诊断、冲突和失败计数。 |
+| `reflection.json` | 反射 IR、生成元数据、存储模型及有界运行时证据。 |
+| `manifest.json` | 产物状态、解析统计和生成器来源信息。 |
+| `diagnostics.json` | 反射与生成诊断、计数及共用证据引用。 |
 | `runtime.json` | 运行时模块、绑定布局、Schema 偏移和常用对象地址。 |
 
 生成的头文件使用 `AndUE` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
 
-`reflection.json` 的 JSON schema 版本为 `8`，`manifest.json` 和 `diagnostics.json` 为 `7`，`runtime.json` 为 `4`。生成元数据区分语义声明与存储描述，并标明委托形态；诊断引用共用的反射证据，不保证原生 C++ ABI 兼容。
+SDK 不是可直接调用的运行库，不保证 native C++ ABI 兼容；应使用反射元数据，而非 `sizeof`/`offsetof`。执行入口 RVA 不保证对应原始 C++ 业务实现。
+
+生成元数据区分语义声明与存储描述，并标明委托形态；诊断引用共用的反射证据。
 
 ## 常用对象类地址
 
@@ -194,7 +205,7 @@ CheatManager
 
 ## 验证与状态
 
-AndUEFker 会在绑定和 Schema 解析阶段记录以下证据：
+AndUEFker 会在绑定、Schema 解析、反射采集和 SDK 生成阶段记录以下证据：
 
 - 对象和名称候选数量；
 - 选中的容器布局及探针评分；
@@ -202,21 +213,23 @@ AndUEFker 会在绑定和 Schema 解析阶段记录以下证据：
 - 对象槽位和反射统计；
 - 未知属性、未解析类型细节、布局冲突和读取失败。
 
-生成的 `manifest.json` 会报告以下产物状态：
+产物状态分为以下几种；已发布的产物会在 `manifest.json` 中记录状态：
 
 | 状态 | 含义 |
 | --- | --- |
 | `Complete` | 反射读取与 SDK 描述均完整，所有必需产物文件均已写入并关闭。 |
 | `Partial` | 反射读取或 SDK 描述存在限制，产物目录会标记为 `.partial`。 |
-| `Failed` | 绑定、Schema 解析、反射或产物写入失败。 |
+| `Failed` | 绑定、Schema 解析、反射或产物写入失败，可能没有产物或 manifest 文件。 |
 
-命令行程序在完整产物就绪时返回 `0`，反射读取或 SDK 描述部分完成时返回 `3`，其他失败或未完成运行阶段返回 `1`。
+命令行程序在完整产物就绪时返回 `0`，反射读取或 SDK 描述部分完成时返回 `3`，命令行参数无效时返回 `2`，其他失败或未完成运行阶段返回 `1`。
 
-`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Typed opaque 存储保留已知字段语义和大小；已选择的普通容器布局标签描述目标偏移，不代表运行时遍历已经验证。Opaque 存储本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。
+`manifest.json` 分别记录 `reflection_status` 和 `sdk_status`。Typed opaque 存储保留已知字段语义和大小；已选择的 heap 和 MemoryImage 容器布局标签描述目标偏移，不代表所有运行时遍历均已验证。Opaque 存储本身不会使 SDK 描述变为部分完成。遗漏字段和描述布局警告会使 SDK 描述标记为部分完成。
 
 JSON 产物保留完整字段元数据。日志保留诊断汇总、有界正常样本和异常，并记录省略样本数及对应产物位置。
 
 值存储描述使用覆盖 UE4.23–5.6 的源码结构族候选，而非仅按版本猜测布局。可选的只读实例证据受预算限制并独立校验；无法读取实例值不会降低 SDK 完整性，也不代表生成描述具备 native ABI 兼容性。
+
+采集稳定不等于原子快照，`scan_complete` 仅表示对象槽位枚举完成，不表示所有字段或值均已采集。FText 证据描述外层存储，不保证获取任意显示字符串。Sparse 绑定检查依赖已定位的存储根和兼容布局候选；frozen 元素布局及 remote object 解析可能仍未验证。
 
 ## Issue
 

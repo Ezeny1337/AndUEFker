@@ -1,4 +1,5 @@
 #include "anduefker/generation/JsonExport.hpp"
+#include "Formatting.hpp"
 #include "anduefker/ue/ContainerLayout.hpp"
 
 #include <algorithm>
@@ -10,6 +11,8 @@
 
 namespace anduefker::generation
 {
+    using detail::Hex;
+
     std::string EscapeJson(std::string_view value)
     {
         static constexpr char hex[] = "0123456789ABCDEF";
@@ -50,13 +53,6 @@ namespace anduefker::generation
 
     namespace
     {
-        std::string Hex(uint64_t value)
-        {
-            std::ostringstream stream;
-            stream << "0x" << std::hex << std::uppercase << value;
-            return stream.str();
-        }
-
         const char *KindName(ir::PropertyKind kind)
         {
             static constexpr const char *names[] = {"Unknown", "Bool", "Byte", "Int8", "Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64",
@@ -795,15 +791,26 @@ namespace anduefker::generation
 
     void WriteRuntimeEvidenceJson(std::ostream &stream, const ir::RuntimeEvidence &evidence, bool fullRecords)
     {
+        using Limits = ir::RuntimeEvidenceLimits;
         stream << "{\"status\":\"" << EscapeJson(evidence.status) << "\",\"affects_sdk_completeness\":false"
                << ",\"atomic_snapshot\":false,\"coverage\":\"bounded-instance-samples-not-all-values\""
                << ",\"text_contract\":\"outer-header-and-vtable-only; not FText::ToString or current display text\""
                << ",\"weak_contract\":\"slot identity and serial observations; not GC liveness\""
-               << ",\"max_object_slots\":262144,\"max_values\":256,\"max_container_slots\":65536"
-               << ",\"max_field_nodes\":8192,\"max_field_nodes_per_class\":256"
+               << ",\"max_object_slots\":" << Limits::kMaxObjectSlots << ",\"max_values\":" << Limits::kMaxValues
+               << ",\"max_container_slots\":65536"
+               << ",\"max_field_nodes\":" << Limits::kMaxUniqueFieldNodes
+               << ",\"field_node_accounting\":\"unique-relevant-property-metadata\""
+               << ",\"max_field_nodes_per_class\":" << Limits::kMaxFieldsPerClass
+               << ",\"max_cached_fields\":" << Limits::kMaxCachedFields
+               << ",\"sampling_policy\":\"storage-category-and-instance-role; inline-and-sparse-separate\""
+               << ",\"array_instance_samples\":" << Limits::kArrayInstances
+               << ",\"array_default_samples\":" << Limits::kArrayDefaults
+               << ",\"other_category_instance_samples\":" << Limits::kOtherInstances
+               << ",\"other_category_default_samples\":" << Limits::kOtherDefaults
                << ",\"max_elements_per_container\":8,\"element_preview_bytes\":64"
                << ",\"object_slots\":" << evidence.objectSlots << ",\"scanned_slots\":" << evidence.scannedSlots
                << ",\"scan_complete\":" << (evidence.scanComplete ? "true" : "false")
+               << ",\"field_coverage\":\"bounded; scan_complete only covers object-slot enumeration\""
                << ",\"value_records\":" << evidence.values.size();
         const auto counts = [&](const char *name, const auto &values)
         {

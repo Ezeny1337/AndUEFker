@@ -1,4 +1,5 @@
 #include "anduefker/binding/GlobalLocator.hpp"
+#include "anduefker/analyzer/AnalyzerMemoryAdapter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -14,15 +15,15 @@ namespace anduefker::binding
 {
     namespace
     {
-        EArch ToAnalyzerArchitecture(ModuleArchitecture architecture)
+        EArch ToAnalyzerArchitecture(module::ModuleArchitecture architecture)
         {
             switch (architecture)
             {
-            case ModuleArchitecture::Arm32:
+            case module::ModuleArchitecture::Arm32:
                 return EArch::Arm32;
-            case ModuleArchitecture::Arm64:
+            case module::ModuleArchitecture::Arm64:
                 return EArch::Arm64;
-            case ModuleArchitecture::Unknown:
+            case module::ModuleArchitecture::Unknown:
                 return EArch::Unknown;
             }
             return EArch::Unknown;

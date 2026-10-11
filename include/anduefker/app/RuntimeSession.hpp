@@ -7,31 +7,19 @@
 #include <vector>
 
 #include "anduefker/ir/ReflectionIR.hpp"
-#include "anduefker/binding/BindingBuilder.hpp"
+#include "anduefker/app/RuntimeContext.hpp"
 #include "anduefker/generation/ArtifactWriter.hpp"
-#include "anduefker/binding/GlobalLocator.hpp"
-#include "anduefker/module/ModuleCatalog.hpp"
-#include "anduefker/reflection/ReflectionReader.hpp"
-#include "anduefker/memory/RemoteMemorySource.hpp"
-#include "anduefker/ue/SchemaResolver.hpp"
+
+namespace anduefker::memory
+{
+    class RemoteMemorySource;
+}
 
 namespace anduefker::app
 {
-    using ::anduefker::binding::BindingBuilder;
-    using ::anduefker::binding::BindingCandidates;
-    using ::anduefker::binding::GlobalLocator;
-    using ::anduefker::binding::RuntimeBinding;
     using ::anduefker::generation::ArtifactResult;
-    using ::anduefker::generation::ArtifactWriter;
     using ::anduefker::ir::ReflectionIR;
     using ::anduefker::memory::RemoteMemorySource;
-    using ::anduefker::module::ModuleCatalog;
-    using ::anduefker::reflection::ReflectionReader;
-    using ::anduefker::ue::EngineSchema;
-    using ::anduefker::ue::SchemaCandidateSummary;
-    using ::anduefker::ue::SchemaResolutionReport;
-    using ::anduefker::ue::SchemaResolver;
-    using ::anduefker::ue::SchemaSelectionResult;
 
     enum class RuntimeLogLevel
     {

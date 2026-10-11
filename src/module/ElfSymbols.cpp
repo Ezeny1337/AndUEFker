@@ -45,7 +45,7 @@ namespace anduefker::module
 
         // 返回 false 会将未解析的名称判定为未完成状态
         // 它不会擦除已从任意符号表中解析出的名称
-        bool DebugSymbols(const app::ModuleImage &module, const ElfScanner &elf,
+        bool DebugSymbols(const module::ModuleImage &module, const ElfScanner &elf,
                           const std::vector<std::string> &names, SymbolQueryResult &result)
         {
             const auto fail = [&](const char *reason)
@@ -137,7 +137,7 @@ namespace anduefker::module
         }
     }
 
-    SymbolQueryResult QueryElfSymbols(const memory::IMemorySource &memory, const app::ModuleImage &module,
+    SymbolQueryResult QueryElfSymbols(const memory::IMemorySource &memory, const module::ModuleImage &module,
                                       const ElfScanner &elf, const std::vector<std::string> &requested)
     {
         if (!elf.isValid())
