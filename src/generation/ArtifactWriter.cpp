@@ -131,6 +131,8 @@ namespace anduefker::generation
         };
         if (!writeFile("BasicTypes.hpp", [&](std::ostream &stream)
                        { emitter.BasicTypes(stream, symbols); }) ||
+            !writeFile("EngineLayouts.hpp", [&](std::ostream &stream)
+                       { emitter.EngineLayouts(stream); }) ||
             !writeFile("Types.hpp", [&](std::ostream &stream)
                        { emitter.Types(stream, symbols, report); }) ||
             !writeFile("Enums.hpp", [&](std::ostream &stream)

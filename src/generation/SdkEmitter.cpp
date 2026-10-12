@@ -3,9 +3,11 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <initializer_list>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 #include "anduefker/generation/JsonExport.hpp"
 #include "anduefker/ue/ContainerLayout.hpp"
@@ -395,6 +397,113 @@ namespace anduefker::generation::detail
             stream << "    std::uint8_t UnknownTailData[" << Hex(size - cursor) << "];\n";
         stream << "};\n";
         stream << '\n';
+    }
+
+    void SdkEmitter::EngineLayouts(std::ostream &stream) const
+    {
+        const auto writeLayout = [&](const char *name, std::initializer_list<std::pair<const char *, int32_t>> fields)
+        {
+            stream << "struct " << name << "Layout\n{\n";
+            for (const auto &[field, offset] : fields)
+                stream << "    static constexpr std::int32_t " << field << " = " << offset << ";\n";
+            stream << "};\n\n";
+        };
+
+        stream << "#pragma once\n#include <cstdint>\n\n";
+        stream << "// Runtime-resolved metadata offsets, not complete native C++ object layouts.\n";
+        stream << "// A value of -1 means that the member offset was not resolved for this target.\n";
+        stream << "// Layout profile: " << ::anduefker::ue::SchemaLayoutVariantName(schema_.layout) << ".\n";
+        stream << "namespace AndUE::Engine\n{\n";
+        stream << "inline constexpr const char *LayoutProfileId = \"" << EscapeJson(schema_.validation.profileId) << "\";\n";
+        stream << "inline constexpr const char *LayoutVariant = \""
+               << ::anduefker::ue::SchemaLayoutVariantName(schema_.layout) << "\";\n";
+        stream << "inline constexpr std::uint8_t TargetPointerWidth = "
+               << static_cast<unsigned int>(module_.pointerWidth) << ";\n\n";
+        stream << "inline constexpr bool UsesFProperty = " << (schema_.features.useFProperty ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool UsesNamePool = " << (schema_.features.useNamePool ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool CasePreservingName = " << (schema_.features.casePreservingName ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool OutlineNumberName = " << (schema_.features.outlineNumberName ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool LargeWorldCoordinates = " << (schema_.features.largeWorldCoordinates ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool TaggedFFieldOwner = "
+               << (schema_.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer ? "true" : "false")
+               << ";\n\n";
+        stream << "inline constexpr bool FNameNumberOutlined = "
+               << (schema_.fname.numberLayout == ::anduefker::ue::FNameNumberLayout::Outlined ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool FNameDisplayBeforeNumber = "
+               << (schema_.fname.displayLayout == ::anduefker::ue::FNameDisplayLayout::BeforeNumber ? "true" : "false") << ";\n";
+        stream << "inline constexpr bool FNameDisplayAfterNumber = "
+               << (schema_.fname.displayLayout == ::anduefker::ue::FNameDisplayLayout::AfterNumber ? "true" : "false") << ";\n\n";
+
+        writeLayout("FName", {{"Size", schema_.fname.size},
+                              {"ComparisonIndex", schema_.fname.comparisonIndex},
+                              {"Number", schema_.fname.number},
+                              {"DisplayIndex", schema_.fname.displayIndex}});
+        writeLayout("UObject", {{"VTable", schema_.uobject.vtable},
+                                {"Flags", schema_.uobject.flags},
+                                {"InternalIndex", schema_.uobject.internalIndex},
+                                {"Class", schema_.uobject.classPointer},
+                                {"Name", schema_.uobject.name},
+                                {"Outer", schema_.uobject.outer}});
+        writeLayout("UField", {{"Next", schema_.ufield.next}});
+        if (schema_.family == ::anduefker::ue::EngineFamily::UE5FProperty)
+        {
+            writeLayout("FField", {{"VTable", schema_.ffield.vtable},
+                                   {"Class", schema_.ffield.classPointer},
+                                   {"Owner", schema_.ffield.owner},
+                                   {"Next", schema_.ffield.next},
+                                   {"Name", schema_.ffield.name},
+                                   {"EditorOnlyMetadata", schema_.ffield.editorOnlyMetadata}});
+            writeLayout("FFieldClass", {{"Name", schema_.ffieldClass.name},
+                                        {"Id", schema_.ffieldClass.id},
+                                        {"CastFlags", schema_.ffieldClass.castFlags},
+                                        {"ClassFlags", schema_.ffieldClass.classFlags},
+                                        {"SuperClass", schema_.ffieldClass.superClass}});
+        }
+        writeLayout("UStruct", {{"SuperStruct", schema_.ustruct.superStruct},
+                                {"Children", schema_.ustruct.children},
+                                {"ChildProperties", schema_.ustruct.childProperties},
+                                {"PropertiesSize", schema_.ustruct.propertiesSizeOffset},
+                                {"MinAlignment", schema_.ustruct.minAlignment},
+                                {"StructBaseChain", schema_.ustruct.structBaseChain},
+                                {"Tail", schema_.ustruct.tail}});
+        writeLayout("UClass", {{"CastFlags", schema_.uclass.castFlags},
+                               {"ClassDefaultObject", schema_.uclass.classDefaultObject},
+                               {"ImplementedInterfaces", schema_.uclass.implementedInterfaces}});
+        writeLayout("UFunction", {{"FunctionFlags", schema_.ufunction.functionFlags},
+                                  {"NumParams", schema_.ufunction.numParams},
+                                  {"ParamSize", schema_.ufunction.paramSize},
+                                  {"ReturnValueOffset", schema_.ufunction.returnValueOffset},
+                                  {"NativeFunction", schema_.ufunction.nativeFunction}});
+        writeLayout("UEnum", {{"Names", schema_.uenum.names},
+                              {"CppForm", schema_.uenum.cppForm},
+                              {"Flags", schema_.uenum.flags},
+                              {"UnderlyingType", schema_.uenum.underlyingType},
+                              {"Package", schema_.uenum.enumPackage}});
+
+        const char *propertyName = schema_.features.useFProperty ? "FProperty" : "UProperty";
+        writeLayout(propertyName, {{"ArrayDim", schema_.property.arrayDim},
+                                   {"ElementSize", schema_.property.elementSize},
+                                   {"PropertyFlags", schema_.property.propertyFlags},
+                                   {"OffsetInternal", schema_.property.offsetInternal},
+                                   {"BaseSize", schema_.property.baseSize},
+                                   {"RepNotify", schema_.property.repNotify},
+                                   {"PropertyLinks", schema_.property.propertyLinks},
+                                   {"PropertyLinksEnd", schema_.property.propertyLinksEnd},
+                                   {"SubtypeStart", schema_.property.subtypeStart}});
+        writeLayout("PropertySubtypes", {{"ByteEnum", schema_.propertySubtypes.byteEnum},
+                                         {"BoolBase", schema_.propertySubtypes.boolBase},
+                                         {"ObjectClass", schema_.propertySubtypes.objectClass},
+                                         {"InterfaceClass", schema_.propertySubtypes.interfaceClass},
+                                         {"ClassMetaClass", schema_.propertySubtypes.classMetaClass},
+                                         {"StructType", schema_.propertySubtypes.structType},
+                                         {"ArrayInner", schema_.propertySubtypes.arrayInner},
+                                         {"DelegateSignature", schema_.propertySubtypes.delegateSignature},
+                                         {"MapBase", schema_.propertySubtypes.mapBase},
+                                         {"SetElement", schema_.propertySubtypes.setElement},
+                                         {"EnumBase", schema_.propertySubtypes.enumBase},
+                                         {"FieldPathClass", schema_.propertySubtypes.fieldPathClass},
+                                         {"OptionalValue", schema_.propertySubtypes.optionalValue}});
+        stream << "}\n";
     }
 
     void SdkEmitter::Types(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const

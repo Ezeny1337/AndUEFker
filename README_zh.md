@@ -22,6 +22,7 @@ AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运�
 - **Schema 自动解析** — 从实时数据中解析 `UObject`、`UStruct`、`FField`/`FProperty`、`UFunction` 和 `UEnum` 布局。
 - **ARM 架构分析** — 支持 ARM64 和 ARM32 ARM-mode 指令解码，以及面向 Unreal 二进制的候选地址分析策略；Thumb/Thumb-2 暂未支持。
 - **反射提取** — 遍历 Unreal 运行时对象，输出类型、属性、函数、枚举、继承关系和布局元数据。
+- **IDA 导入** — 导入反射类型描述，并为已验证的模块内执行入口 RVA 添加标注。
 - **常用类地址收集** — 记录 `World`、`Engine`、`GameInstance`、`PlayerController` 等常用 `UClass` 对象地址。
 - **可追溯产物输出** — 将生成头文件、JSON 元数据、诊断、运行时绑定及生成器身份写入统一产物目录。
 - **验证失败即拒绝** — 对无效候选和不一致布局进行拒绝，避免静默使用错误结果。
@@ -150,6 +151,7 @@ AndUEFker -o <输出目录> -p <包名>
 ```text
 <输出目录>/com_example_game/
 ├── BasicTypes.hpp
+├── EngineLayouts.hpp
 ├── Types.hpp
 ├── Enums.hpp
 ├── Functions.hpp
@@ -172,6 +174,7 @@ AndUEFker -o <输出目录> -p <包名>
 | 文件 | 用途 |
 | --- | --- |
 | `BasicTypes.hpp` | SDK 基础类型、typed opaque 存储及源码驱动的布局标签。 |
+| `EngineLayouts.hpp` | 选定 Unreal 反射结构的运行时解析偏移；`-1` 表示该偏移未解析，不代表完整的 native C++ ABI 布局。 |
 | `Types.hpp` | 生成的 Unreal 类和结构体，包含反射身份与目标布局信息。 |
 | `Enums.hpp` | 生成的枚举声明和值。 |
 | `Functions.hpp` | 反射执行入口 RVA 与参数布局。 |
@@ -185,6 +188,12 @@ AndUEFker -o <输出目录> -p <包名>
 SDK 不是可直接调用的运行库，不保证 native C++ ABI 兼容；应使用反射元数据，而非 `sizeof`/`offsetof`。执行入口 RVA 不保证对应原始 C++ 业务实现。
 
 生成元数据区分语义声明与存储描述，并标明委托形态；诊断引用共用的反射证据。
+
+### IDA 导入
+
+在 IDA 中运行 `tools/ida/anduefker_import.py` 并选择 AndUEFker 产物目录。导入器会在产物旁生成 `AndUEFker_IDA_types.h`，将反射类型的字节布局描述导入 IDA 本地类型库，并为符合条件的模块内执行入口 RVA 添加名称和可重复注释。它不会把运行时堆地址应用到静态镜像，也不会自动创建函数。底层值超出 32 位 C 枚举范围的枚举会保留在 `reflection.json` 中，但不会写入生成的 IDA 头文件。
+
+产物不包含目标二进制的内容哈希。应用 RVA 标注前，请确认 IDA 当前打开的文件与本次采集所用镜像完全匹配。
 
 ## 常用对象类地址
 

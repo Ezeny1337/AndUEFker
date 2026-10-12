@@ -284,7 +284,7 @@ namespace anduefker::generation::detail
         const RuntimeBinding &binding = context.Binding();
         const EngineSchema &schema = context.Schema();
         std::ostringstream stream;
-        stream << "{\n  \"schema_version\": 4,\n";
+        stream << "{\n  \"schema_version\": 5,\n";
         stream << "  \"engine\": \"" << EscapeJson(schema.identity.canonicalVersionRange.empty() ? schema.validation.familyEvidence : schema.identity.canonicalVersionRange) << "\",\n";
         stream << "  \"profile\": {\"id\":\"" << EscapeJson(schema.validation.profileId)
                << "\",\"label\":\"" << EscapeJson(schema.validation.profileLabel)
@@ -305,7 +305,11 @@ namespace anduefker::generation::detail
                << (schema.profileFeatures.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
                        ? "tagged-pointer"
                        : "explicit-discriminator")
-               << "\",\"observed_enum_tail\":\"" << EnumTailLayoutName(schema.features.enumTailLayout)
+               << "\",\"use_fproperty\":" << (schema.features.useFProperty ? "true" : "false")
+               << ",\"use_name_pool\":" << (schema.features.useNamePool ? "true" : "false")
+               << ",\"case_preserving_name\":" << (schema.features.casePreservingName ? "true" : "false")
+               << ",\"outline_number_name\":" << (schema.features.outlineNumberName ? "true" : "false")
+               << ",\"observed_enum_tail\":\"" << EnumTailLayoutName(schema.features.enumTailLayout)
                << "\",\"profile_expected_enum_tail\":\"" << EnumTailLayoutName(schema.profileFeatures.enumTailLayout)
                << "\",\"optional_property_sample_count\":" << schema.optionalPropertySupport.sampleCount << "},\n";
         stream << "  \"module\": {\"name\":\"" << EscapeJson(context.Module().name)
@@ -358,7 +362,8 @@ namespace anduefker::generation::detail
                    << ",\"entry_string_offset\":" << binding.names.array.entryStringOffset;
         }
         stream << "}\n  },\n  \"schema\": {\n";
-        stream << "    \"uobject\": {\"flags\":" << schema.uobject.flags
+        stream << "    \"uobject\": {\"vtable\":" << schema.uobject.vtable
+               << ",\"flags\":" << schema.uobject.flags
                << ",\"internal_index\":" << schema.uobject.internalIndex
                << ",\"class\":" << schema.uobject.classPointer
                << ",\"name\":" << schema.uobject.name << ",\"outer\":" << schema.uobject.outer << "},\n";
@@ -374,23 +379,33 @@ namespace anduefker::generation::detail
                    : schema.fname.displayLayout == FNameDisplayLayout::AfterNumber ? "after-number"
                                                                                    : "none")
                << "\"},\n";
-        stream << "    \"ffield\": {\"class\":" << schema.ffield.classPointer
+        stream << "    \"ffield\": {\"vtable\":" << schema.ffield.vtable
+               << ",\"class\":" << schema.ffield.classPointer
                << ",\"owner\":" << schema.ffield.owner << ",\"next\":" << schema.ffield.next
                << ",\"name\":" << schema.ffield.name
+               << ",\"editor_only_metadata\":" << schema.ffield.editorOnlyMetadata
                << ",\"owner_encoding\":\"" << (schema.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer ? "tagged-pointer" : "explicit-discriminator") << "\"},\n";
         stream << "    \"ffield_class\": {\"name\":" << schema.ffieldClass.name
                << ",\"id\":" << schema.ffieldClass.id
                << ",\"cast_flags\":" << schema.ffieldClass.castFlags
                << ",\"class_flags\":" << schema.ffieldClass.classFlags
                << ",\"super_class\":" << schema.ffieldClass.superClass << "},\n";
+        stream << "    \"ufield\": {\"next\":" << schema.ufield.next << "},\n";
         stream << "    \"ustruct\": {\"super\":" << schema.ustruct.superStruct
                << ",\"children\":" << schema.ustruct.children
                << ",\"child_properties\":" << schema.ustruct.childProperties
-               << ",\"size\":" << schema.ustruct.propertiesSizeOffset << "},\n";
+               << ",\"size\":" << schema.ustruct.propertiesSizeOffset
+               << ",\"min_alignment\":" << schema.ustruct.minAlignment
+               << ",\"struct_base_chain\":" << schema.ustruct.structBaseChain
+               << ",\"tail\":" << schema.ustruct.tail << "},\n";
+        stream << "    \"uclass\": {\"cast_flags\":" << schema.uclass.castFlags
+               << ",\"class_default_object\":" << schema.uclass.classDefaultObject
+               << ",\"implemented_interfaces\":" << schema.uclass.implementedInterfaces << "},\n";
         stream << "    \"property\": {\"array_dim\":" << schema.property.arrayDim
                << ",\"element_size\":" << schema.property.elementSize
                << ",\"flags\":" << schema.property.propertyFlags
-               << ",\"offset_internal\":" << schema.property.offsetInternal << "},\n";
+               << ",\"offset_internal\":" << schema.property.offsetInternal
+               << ",\"base_size\":" << schema.property.baseSize << "},\n";
         stream << "    \"property_tail\": {\"layout\":\""
                << (schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::UProperty ? "uproperty" : schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::RepNotifyBeforeLinks ? "repnotify-before-links"
                                                                                                                     : schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::LinksBeforeRepNotify   ? "links-before-repnotify"

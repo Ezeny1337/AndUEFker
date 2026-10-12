@@ -22,6 +22,7 @@ Build the tool with the ABI matching the target process: use the `arm64-v8a` bin
 - **Schema discovery** — resolves `UObject`, `UStruct`, `FField`/`FProperty`, `UFunction`, and `UEnum` layouts from live data.
 - **ARM-aware analysis** — supports ARM64 and ARM32 ARM-mode decoding for Unreal Android binaries; Thumb/Thumb-2 analysis remains a separate follow-up.
 - **Reflection extraction** — walks live Unreal objects and emits types, properties, functions, enums, inheritance, and layout metadata.
+- **IDA import** — imports reflected type descriptions and annotates validated in-module execution-entry RVAs.
 - **Common class addresses** — records useful `UClass` objects such as `World`, `Engine`, `GameInstance`, and `PlayerController`.
 - **Traceable artifacts** — writes generated headers, JSON metadata, diagnostics, runtime bindings, and producer identity as one artifact directory.
 - **Fail-closed validation** — invalid candidates and inconsistent layouts are rejected rather than silently treated as valid.
@@ -150,6 +151,7 @@ If the package name is `com.example.game`, a successful run creates an artifact 
 ```text
 <output-dir>/com_example_game/
 ├── BasicTypes.hpp
+├── EngineLayouts.hpp
 ├── Types.hpp
 ├── Enums.hpp
 ├── Functions.hpp
@@ -172,6 +174,7 @@ Existing artifact directories are not overwritten. Use a fresh output directory 
 | File | Purpose |
 | --- | --- |
 | `BasicTypes.hpp` | SDK primitives, typed opaque storage, and source-backed layout tags. |
+| `EngineLayouts.hpp` | Runtime-resolved offsets for selected Unreal reflection structures; `-1` marks unresolved offsets. This is not a complete native C++ ABI layout. |
 | `Types.hpp` | Reflected Unreal classes and structs with identities and target layout information. |
 | `Enums.hpp` | Reflected enum declarations and values. |
 | `Functions.hpp` | Reflected execution-entry RVAs and parameter layouts. |
@@ -185,6 +188,12 @@ The generated headers use the `AndUE` namespace and describe target memory for d
 The SDK is not a directly callable runtime library. Native C++ ABI compatibility is not asserted; use reflected metadata rather than `sizeof`/`offsetof`. Execution-entry RVAs are not guaranteed to identify original C++ business implementations.
 
 Generation metadata separates semantic declarations from storage descriptions and identifies delegate forms; diagnostics reference shared reflection evidence.
+
+### IDA import
+
+Run `tools/ida/anduefker_import.py` from IDA and select an AndUEFker artifact directory. The importer writes `AndUEFker_IDA_types.h` beside the artifact, imports reflected byte-layout types into IDA's local type library, and annotates eligible in-module execution-entry RVAs with names and repeatable comments. It does not apply runtime heap addresses to the static image or create functions automatically. Enum declarations with values outside the 32-bit C enum range are left in `reflection.json` and omitted from the generated IDA header.
+
+The artifact does not contain a hash of the target image. Confirm that the IDA input is the exact binary used for the capture before applying RVA annotations.
 
 ## Common object addresses
 

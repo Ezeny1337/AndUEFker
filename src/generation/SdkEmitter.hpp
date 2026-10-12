@@ -21,6 +21,7 @@ namespace anduefker::generation::detail
             : module_(module), schema_(schema), reflection_(reflection) {}
 
         void BasicTypes(std::ostream &stream, const CppSymbols &symbols) const;
+        void EngineLayouts(std::ostream &stream) const;
         void Types(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;
         void Enums(std::ostream &stream, const CppSymbols &symbols) const;
         void Functions(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const;
