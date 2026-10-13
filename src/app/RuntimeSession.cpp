@@ -10,6 +10,7 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include <ctime>
 
 #include "anduefker/binding/CommonObjectCollector.hpp"
 #include "anduefker/binding/BindingBuilder.hpp"
@@ -84,6 +85,18 @@ namespace anduefker::app
             return "INFO";
         }
 
+        std::string LogTimestamp()
+        {
+            const std::time_t now = std::time(nullptr);
+            const std::tm *local = std::localtime(&now);
+            if (local == nullptr)
+                return {};
+            char buffer[32];
+            if (std::strftime(buffer, sizeof(buffer), "%Y%m%d%H%M%S", local) == 0)
+                return {};
+            return buffer;
+        }
+
     } // namespace
 
     RuntimeSession::RuntimeSession(RuntimeSessionConfig config) : config_(std::move(config))
@@ -96,7 +109,13 @@ namespace anduefker::app
     {
         if (config_.outputRoot.empty())
             return {};
-        return (std::filesystem::path(config_.outputRoot) / "AndUEFker.log").string();
+        if (logPath_.empty())
+        {
+            const std::string suffix = LogTimestamp();
+            const std::string fileName = "AndUEFker" + (suffix.empty() ? std::string{} : "_" + suffix) + ".log";
+            logPath_ = (std::filesystem::path(config_.outputRoot) / fileName).string();
+        }
+        return logPath_;
     }
 
     void RuntimeSession::Note(std::string message)
@@ -217,6 +236,7 @@ namespace anduefker::app
         started_ = std::chrono::steady_clock::now();
         liveLogFailed_ = false;
         liveLog_.clear();
+        logPath_.clear();
         if (!config_.outputRoot.empty())
         {
             std::error_code error;

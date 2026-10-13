@@ -156,8 +156,13 @@ namespace anduefker::generation
         const std::filesystem::path finalPath = outputRoot_ / artifactStem;
         if (std::filesystem::exists(finalPath, error))
         {
-            result.error = "output directory already exists";
-            return result;
+            // 目标目录已有相同 SDK 时先整体删除，随后由临时目录 rename 重建
+            std::filesystem::remove_all(finalPath, error);
+            if (error)
+            {
+                result.error = "existing output directory removal failed: " + error.message();
+                return result;
+            }
         }
         if (error)
         {

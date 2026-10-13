@@ -74,5 +74,6 @@ namespace anduefker::app
         std::chrono::steady_clock::time_point started_;
         std::ofstream liveLog_;
         bool liveLogFailed_ = false;
+        mutable std::string logPath_;
     };
 } // namespace anduefker::app

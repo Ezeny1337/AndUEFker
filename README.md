@@ -164,10 +164,10 @@ If the package name is `com.example.game`, a successful run creates an artifact 
 The output directory also receives the session log:
 
 ```text
-<output-dir>/AndUEFker.log
+<output-dir>/AndUEFker_YYYYMMDDHHMMSS.log
 ```
 
-Existing artifact directories are not overwritten. Use a fresh output directory for repeated captures; the session log is overwritten on each run.
+The timestamp (year to second) is generated at session start in local time, so each run writes its own log file. If an artifact directory with the same name already exists, it is replaced: the old directory is removed first and the new one is committed from a temporary directory.
 
 ### Generated files
 
@@ -247,7 +247,7 @@ Please open an [issue](https://github.com/Ezeny1337/AndUEFker/issues) when you e
 1. The commit or release used.
 2. Android version, device ABI, and target Unreal Engine information if known.
 3. The command line with package names or sensitive values redacted where necessary.
-4. The relevant `AndUEFker.log` section.
+4. The relevant section of the timestamped `AndUEFker_*.log` session log.
 5. `manifest.json`, `diagnostics.json`, and `runtime.json` when available.
 6. A concise reproduction description and the expected result.
 
