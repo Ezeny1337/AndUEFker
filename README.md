@@ -35,27 +35,80 @@ Build the tool with the ABI matching the target process: use the `arm64-v8a` bin
 flowchart TD
     A[Android process] --> B[RemoteMemorySource]
     B --> C[ModuleCatalog]
-    C --> D[GlobalLocator + UEAnalyzer]
-    D --> E[BindingBuilder]
-    E --> F[SchemaResolver]
-    F --> G[CommonObjectCollector]
-    G --> H[ReflectionReader]
-    H --> K[RuntimeInspector]
-    K --> I[ArtifactWriter + SdkEmitter]
-    I --> J[Generated SDK + JSON diagnostics]
+    C --> D[Compiled GameProfile]
+    D --> E[GlobalLocator + UEAnalyzer]
+    E --> F[BindingBuilder]
+    F --> G[SchemaResolver]
+    G --> H[CommonObjectCollector]
+    H --> I[ReflectionReader]
+    I --> K[RuntimeInspector]
+    K --> L[ArtifactWriter + SdkEmitter]
+    L --> M[Generated SDK + JSON diagnostics]
 ```
 
 The runtime session follows these stages:
 
 1. Attach to the target process and discover the Unreal module.
-2. Analyze the module and collect candidate object/name roots.
-3. Validate object container and name store layouts.
-4. Probe engine schema profiles and validate the runtime reflection layout.
-5. Collect selected common `UClass` object addresses.
-6. Read and validate reflection definitions and analyze their layouts.
-7. Collect bounded, independently checked instance evidence and publish the SDK artifact.
+2. Select the unique compiled game profile matching the package and module; use identity decoding when none matches.
+3. Collect object/name root candidates from ELF symbols, profiles, and UEAnalyzer.
+4. Validate object and name stores with profile decoders and optional layout hints.
+5. Probe engine schema profiles and validate the runtime reflection layout.
+6. Collect common `UClass` objects and read validated reflection definitions.
+7. Collect bounded instance evidence, publish the SDK, and write a separate compatibility diagnosis.
 
 Schema profiles cover UE 4.23–4.27 and 5.0–5.6 layout families. Selection records the validated runtime layout, compatible profiles, and engine-version confidence; profile coverage does not guarantee every engine branch or build configuration.
+
+## Game Profiles and Compatibility Diagnosis
+
+Compiled profiles are the current extension point for game-specific adaptation. Derive an `IGameProfile` defined in `include/anduefker/compat/GameProfile.hpp` and register it in `src/compat/GameProfiles.cpp`. With no matching profile, the existing automatic discovery and identity decoding path remains active.
+
+A minimal profile shape is shown below. The class can live in a separate header included by `GameProfiles.cpp` and be added to `CreateGameProfiles()`; if it needs a separate `.cpp`, add that source to `CMakeLists.txt`:
+
+```cpp
+class ExampleGameProfile final : public anduefker::compat::IGameProfile
+{
+public:
+    std::string_view Id() const override { return "example-game"; }
+
+    bool Matches(std::string_view packageName,
+                 const anduefker::module::ModuleImage &module) const override
+    {
+        return packageName == "com.example.game" && module.pointerWidth == 8;
+    }
+
+    anduefker::binding::DecodePlan MakeDecodePlan(
+        const anduefker::memory::IMemorySource &,
+        const anduefker::module::ModuleImage &) const override
+    {
+        auto decode = anduefker::binding::DecodePlan::Identity();
+        // 只覆盖已通过目标样本验证的字段解码器。
+        return decode;
+    }
+};
+```
+
+Add the class to `CreateGameProfiles()`. `Matches()` should check the package, target ABI, and module name where possible; each runtime stage accepts the profile only after its probes pass.
+
+| Adaptation layer | Profile capability | Validation and diagnostic boundary |
+| --- | --- | --- |
+| Process, memory access, and module discovery | Not overridden by game profiles | Failures are runtime blockers; compatibility is not evaluated. |
+| Global root location and pointer chains | `LocateRoots()` returns additional object/name root candidates | Candidates still require layout and semantic validation; an unresolved root does not prove encryption. |
+| Object/name container layout | `LayoutHints()` can supply one object/name layout hint | A hint replaces automatic discovery for that container but still goes through runtime probes. |
+| Object and name field decoding | `MakeDecodePlan()` configures pointer, count, index, `FName` number, header, and related decoders | Decoded values must still pass object-index, name-sentinel, and other checks. |
+| Name text | `DecodePlan::nameText` can decode raw UTF-8/UTF-16 bytes | The same callback is used by layout discovery, probes, and actual reads. |
+| Unreal reflection schema | Built-in `SchemaResolver` probes supported UE layout families | Game profiles cannot currently override arbitrary vendor-modified reflection schemas; extend this only when a real case requires it. |
+
+`Matches()` should use explicit package and module/ABI conditions. Module identity is not a content hash, so a package-name match alone cannot prove that the target binary is identical to the reverse-engineered sample. Profiles receive only the read-only `IMemorySource` interface. Decoder callbacks are retained with the profile and binding for the lifetime of `RuntimeSession`; do not capture short-lived objects.
+
+Each run attempts to write `AndUEFker_<timestamp>.diagnosis.json` to the output directory, including when it stops before binding or schema resolution. The report includes the package, module, architecture, and pointer width; it separates runtime outcome from compatibility assessment and provides stable finding domains, codes, stages, confidence, summaries, and next actions:
+
+- Process, memory-access, module, or output failures are reported as runtime findings. Compatibility remains `not-evaluated` or retains a conclusion already reached.
+- Without a profile, failed root binding is reported as `ROOT_BINDING_NOT_VALIDATED`. This points to root, layout, or decoding validation; it does not claim encryption was detected.
+- A selected profile that fails validation is reported as `profile-validation-failed`, with the failed stage and suggested inspection points.
+- A complete no-profile binding/schema/reflection path is `baseline-compatible`; a complete profile path is `profile-validated`.
+- Exceptions from profile decoders are reported separately. During binding, the tool retries with identity decoding; in later stages it stops before publishing untrusted results.
+
+The diagnosis provides evidence-based investigation targets. It does not infer vendor algorithms or label a layout difference or ordinary runtime failure as encryption.
 
 ## Build
 
@@ -165,9 +218,12 @@ The output directory also receives the session log:
 
 ```text
 <output-dir>/AndUEFker_YYYYMMDDHHMMSS.log
+<output-dir>/AndUEFker_YYYYMMDDHHMMSS.diagnosis.json
 ```
 
-The timestamp (year to second) is generated at session start in local time, so each run writes its own log file. If an artifact directory with the same name already exists, it is replaced: the old directory is removed first and the new one is committed from a temporary directory.
+The timestamp (year to second) is generated at session start in local time, so each run attempts to write its own log and compatibility diagnosis. Stage findings are retained even if the run fails before SDK artifact generation. If an artifact directory with the same name already exists, it is replaced: the old directory is removed first and the new one is committed from a temporary directory.
+
+The `.diagnosis.json` file provides stable stage and finding codes. `session_status` describes Dumper execution, `compatibility_status` describes target compatibility, and `profile_status` describes whether the selected profile was activated and validated; they are independent results.
 
 ### Generated files
 

@@ -35,27 +35,80 @@ AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运�
 flowchart TD
     A[Android 目标进程] --> B[RemoteMemorySource]
     B --> C[ModuleCatalog]
-    C --> D[GlobalLocator + UEAnalyzer]
-    D --> E[BindingBuilder]
-    E --> F[SchemaResolver]
-    F --> G[CommonObjectCollector]
-    G --> H[ReflectionReader]
-    H --> K[RuntimeInspector]
-    K --> I[ArtifactWriter + SdkEmitter]
-    I --> J[生成 SDK + JSON 诊断]
+    C --> D[编译期 GameProfile]
+    D --> E[GlobalLocator + UEAnalyzer]
+    E --> F[BindingBuilder]
+    F --> G[SchemaResolver]
+    G --> H[CommonObjectCollector]
+    H --> I[ReflectionReader]
+    I --> K[RuntimeInspector]
+    K --> L[ArtifactWriter + SdkEmitter]
+    L --> M[生成 SDK + JSON 诊断]
 ```
 
 一次运行会依次执行以下阶段：
 
 1. 连接目标进程并发现 Unreal 模块。
-2. 分析模块，收集对象根和名称根候选地址。
-3. 验证对象容器和名称存储布局。
-4. 探测引擎 Schema profile，并验证运行时反射布局。
-5. 收集选定的常用 `UClass` 对象地址。
-6. 读取并校验反射定义，分析其布局。
-7. 采集有界、独立校验的实例证据，并发布 SDK 产物。
+2. 按包名和模块信息选择唯一匹配的编译期游戏 profile；未匹配时使用 identity 解码。
+3. 汇总 ELF 符号、profile 和 UEAnalyzer 提供的对象根及名称根候选。
+4. 使用 profile 解码和可选布局提示，验证对象容器与名称存储。
+5. 探测引擎 Schema profile，并验证运行时反射布局。
+6. 收集常见 `UClass` 对象，读取并校验反射定义。
+7. 采集有界实例证据并发布 SDK 产物，同时输出独立兼容性诊断。
 
 Schema profile 覆盖 UE 4.23–4.27 和 5.0–5.6 的布局族，选择结果记录已验证的运行时布局、兼容 profile 和引擎版本置信度；profile 覆盖不代表保证适配每个引擎分支或构建配置。
+
+## 游戏适配与兼容性诊断
+
+编译期 profile 是当前游戏专有适配入口。开发者在 `include/anduefker/compat/GameProfile.hpp` 定义的 `IGameProfile` 上派生实现，并在 `src/compat/GameProfiles.cpp` 注册实例；没有匹配 profile 时程序保持现有自动探测与 identity 解码行为。
+
+最小 profile 形态如下。可将类放入单独的头文件并由 `GameProfiles.cpp` 包含，再在 `CreateGameProfiles()` 工厂中加入实例；若实现需要独立 `.cpp`，还需将它加入 `CMakeLists.txt`：
+
+```cpp
+class ExampleGameProfile final : public anduefker::compat::IGameProfile
+{
+public:
+    std::string_view Id() const override { return "example-game"; }
+
+    bool Matches(std::string_view packageName,
+                 const anduefker::module::ModuleImage &module) const override
+    {
+        return packageName == "com.example.game" && module.pointerWidth == 8;
+    }
+
+    anduefker::binding::DecodePlan MakeDecodePlan(
+        const anduefker::memory::IMemorySource &,
+        const anduefker::module::ModuleImage &) const override
+    {
+        auto decode = anduefker::binding::DecodePlan::Identity();
+        // 只覆盖已通过目标样本验证的字段解码器。
+        return decode;
+    }
+};
+```
+
+在 `CreateGameProfiles()` 中将该类加入返回列表。`Matches()` 应尽量同时检查包名、目标 ABI 和模块名；每个运行时阶段都以实际探针结果决定是否接受 profile。
+
+| 适配层 | profile 能力 | 验证与诊断边界 |
+| --- | --- | --- |
+| 进程、内存访问与模块发现 | 不由游戏 profile 覆盖 | 失败属于运行环境阻断；兼容性标记为未评估。 |
+| 全局根定位与指针链 | `LocateRoots()` 返回额外的对象/名称根候选 | 候选仍需经过布局和语义验证；找不到根不等同于已确认加密。 |
+| 对象表、名称存储布局 | `LayoutHints()` 可提供单个对象/名称布局提示 | 提示替代对应自动布局发现，但不能跳过运行时探针。 |
+| 对象与名称字段解码 | `MakeDecodePlan()` 配置指针、计数、索引、`FName` number、header 等解码器 | 解码后的数据仍须通过对象自索引、名称 sentinel 等验证。 |
+| 名称文本 | `DecodePlan::nameText` 可解码 UTF-8/UTF-16 原始字节 | 同一回调用于名称布局发现、探测和实际读取，避免探测与读取行为不一致。 |
+| UE 反射 Schema | 使用内置 SchemaResolver 自动探测 UE 布局族 | 当前游戏 profile 不覆盖任意厂商自定义反射 Schema；若实际案例需要，再基于证据扩展。 |
+
+`Matches()` 应使用明确的包名及模块/ABI 条件；当前模块身份不是内容哈希，因此包名匹配不能证明目标二进制与逆向样本完全相同。profile 只能通过只读 `IMemorySource` 读取目标数据。解码回调随 `RuntimeSession` 中的 profile 和绑定共同存活，不能捕获短生命周期对象。
+
+每次运行会在输出目录生成 `AndUEFker_时间戳.diagnosis.json`，即使流程在绑定或 Schema 阶段提前结束也会尝试写入。报告包含包名、模块名、架构和指针宽度，并将运行状态与兼容性结论分开；findings 提供稳定的 domain、code、stage、confidence、summary 和 next action：
+
+- 进程、内存访问、模块或输出失败记录为 `runtime` 问题；兼容性仍为 `not-evaluated` 或保留已完成的兼容性结论。
+- 没有 profile 时，根绑定失败记录为 `ROOT_BINDING_NOT_VALIDATED`；它只指出根、布局或解码未通过验证，不宣称检测到加密。
+- 已选 profile 但未通过验证时记录为 `profile-validation-failed`，并保留失败阶段及建议检查项。
+- 无 profile 的绑定、Schema 与反射流程完整通过时记录为 `baseline-compatible`；profile 路径完整通过时记录为 `profile-validated`。
+- profile 解码器抛出异常会被单独记录；绑定阶段会回退并尝试 identity 解码，后续阶段则停止发布不可信结果。
+
+诊断报告提供可复核的分析方向，不会自动推导厂商算法，也不会将布局差异或普通运行故障直接标记为“加密”。
 
 ## 构建
 
@@ -165,9 +218,12 @@ AndUEFker -o <输出目录> -p <包名>
 
 ```text
 <输出目录>/AndUEFker_YYYYMMDDHHMMSS.log
+<输出目录>/AndUEFker_YYYYMMDDHHMMSS.diagnosis.json
 ```
 
-时间戳（从年到秒）在会话启动时按本地时间生成，因此每次运行都会写入独立的日志文件。如果目标目录已存在同名产物目录，将执行覆盖：先删除旧目录，再由临时目录提交生成新目录。
+时间戳（从年到秒）在会话启动时按本地时间生成，因此每次运行都会尝试写入独立的日志和兼容性诊断文件。即使运行在 SDK 产物生成前失败，也会保留阶段诊断。如果目标目录已存在同名产物目录，将执行覆盖：先删除旧目录，再由临时目录提交生成新目录。
+
+`.diagnosis.json` 文件为本次运行提供稳定的阶段和 finding code；`session_status` 描述 Dumper 执行结果，`compatibility_status` 描述目标兼容性，`profile_status` 描述所选 profile 是否实际启用及其验证状态，三者不可互相替代。
 
 ### 文件说明
 
