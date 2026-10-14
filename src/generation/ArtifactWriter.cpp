@@ -152,7 +152,8 @@ namespace anduefker::generation
         result.layoutWarnings = report.layoutWarnings;
         report.LogOmitted();
         result.generationDiagnostics = report.Summaries();
-        const std::string artifactStem = packageStem + (status == ParseStatus::Partial ? ".partial" : "");
+        const std::string artifactStem = packageStem + (status == ParseStatus::Partial ? ".partial" : "") +
+                                         (provenance_.runTimestamp.empty() ? std::string{} : "_" + provenance_.runTimestamp);
         const std::filesystem::path finalPath = outputRoot_ / artifactStem;
         if (std::filesystem::exists(finalPath, error))
         {

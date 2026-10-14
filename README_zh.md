@@ -202,7 +202,7 @@ AndUEFker -o <输出目录> -p <包名>
 例如包名为 `com.example.game` 时，成功运行后会生成类似目录：
 
 ```text
-<输出目录>/com_example_game/
+<输出目录>/com_example_game_YYYYMMDDHHMMSS/
 ├── BasicTypes.hpp
 ├── EngineLayouts.hpp
 ├── Types.hpp
@@ -213,6 +213,8 @@ AndUEFker -o <输出目录> -p <包名>
 ├── diagnostics.json
 └── runtime.json
 ```
+
+目录名以与会话日志、诊断文件相同的本地时间戳（从年到秒）结尾，一次运行对应一组可识别的产物。
 
 输出目录本身还会保存本次运行日志：
 
@@ -283,7 +285,7 @@ AndUEFker 会在绑定、Schema 解析、反射采集和 SDK 生成阶段记录�
 | 状态 | 含义 |
 | --- | --- |
 | `Complete` | 反射读取与 SDK 描述均完整，所有必需产物文件均已写入并关闭。 |
-| `Partial` | 反射读取或 SDK 描述存在限制，产物目录会标记为 `.partial`。 |
+| `Partial` | 反射读取或 SDK 描述存在限制，产物目录会在时间戳前标记 `.partial`。 |
 | `Failed` | 绑定、Schema 解析、反射或产物写入失败，可能没有产物或 manifest 文件。 |
 
 命令行程序在完整产物就绪时返回 `0`，反射读取或 SDK 描述部分完成时返回 `3`，命令行参数无效时返回 `2`，其他失败或未完成运行阶段返回 `1`。

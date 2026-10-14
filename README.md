@@ -202,7 +202,7 @@ Run the tool on the Android device while the target process is running. It requi
 If the package name is `com.example.game`, a successful run creates an artifact directory similar to:
 
 ```text
-<output-dir>/com_example_game/
+<output-dir>/com_example_game_YYYYMMDDHHMMSS/
 ├── BasicTypes.hpp
 ├── EngineLayouts.hpp
 ├── Types.hpp
@@ -213,6 +213,8 @@ If the package name is `com.example.game`, a successful run creates an artifact 
 ├── diagnostics.json
 └── runtime.json
 ```
+
+The directory name ends with the same local timestamp (year to second) as the session log and diagnosis file, so one run produces one identifiable artifact set.
 
 The output directory also receives the session log:
 
@@ -283,7 +285,7 @@ Artifact status uses the following states; published artifacts record their stat
 | State | Meaning |
 | --- | --- |
 | `Complete` | Reflection reading and SDK descriptions are complete; all required files were written and closed. |
-| `Partial` | Reflection reading or SDK descriptions have limitations; the artifact is marked `.partial`. |
+| `Partial` | Reflection reading or SDK descriptions have limitations; the artifact is marked `.partial` before the directory timestamp. |
 | `Failed` | Binding, schema resolution, reflection, or artifact writing failed; an artifact or manifest may not be available. |
 
 The command-line process exits with `0` for a complete artifact, `3` for partial reflection reading or SDK descriptions, `2` for invalid command-line arguments, and `1` for other failures or incomplete runtime stages.

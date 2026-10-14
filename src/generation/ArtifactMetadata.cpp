@@ -45,6 +45,7 @@ namespace anduefker::generation::detail
                << "\",\"producer_worktree_at_configure\":\"" << EscapeJson(provenance.producerWorktree) << '"'
                << ",\"producer_identity_source\":\"cmake-configure\""
                << ",\"run_id\":\"" << EscapeJson(provenance.runId) << "\",\"target_pid\":" << provenance.targetPid
+               << ",\"run_timestamp\":\"" << EscapeJson(provenance.runTimestamp) << "\""
                << ",\"address_space_generation\":" << provenance.addressSpaceGeneration
                << ",\"architecture\":\"" << module::ModuleArchitectureName(context.Module().architecture)
                << "\",\"pointer_width\":" << static_cast<unsigned int>(context.Module().pointerWidth)

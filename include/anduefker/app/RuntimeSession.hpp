@@ -67,6 +67,7 @@ namespace anduefker::app
         void Note(RuntimeLogLevel level, std::string message);
         void RecordDiagnosis(DiagnosisDomain domain, std::string code, std::string stage,
                              std::string confidence, std::string summary, std::string nextAction);
+        [[nodiscard]] const std::string &RunTimestamp() const;
         [[nodiscard]] bool WriteDiagnosisReport() const;
         [[nodiscard]] bool FlushDiagnostics();
         [[nodiscard]] RuntimeSessionStatus RunImpl();
@@ -83,6 +84,7 @@ namespace anduefker::app
         std::chrono::steady_clock::time_point started_;
         std::ofstream liveLog_;
         bool liveLogFailed_ = false;
+        mutable std::string runTimestamp_;
         mutable std::string logPath_;
         mutable std::string diagnosisPath_;
     };

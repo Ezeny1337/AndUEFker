@@ -20,6 +20,8 @@ namespace anduefker::generation
         std::string producerCommit = "unknown";
         std::string producerVersion = "unknown";
         std::string runId;
+        // 与会话日志文件名共用的本地时间戳（YYYYMMDDHHMMSS），用于产物目录命名
+        std::string runTimestamp;
         std::string producerWorktree = "unknown";
         int32_t targetPid = -1;
         uint64_t addressSpaceGeneration = 0;

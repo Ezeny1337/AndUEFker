@@ -182,13 +182,20 @@ namespace anduefker::app
         context_ = RuntimeContext(memory_);
     }
 
+    const std::string &RuntimeSession::RunTimestamp() const
+    {
+        if (runTimestamp_.empty())
+            runTimestamp_ = LogTimestamp();
+        return runTimestamp_;
+    }
+
     std::string RuntimeSession::LogPath() const
     {
         if (config_.outputRoot.empty())
             return {};
         if (logPath_.empty())
         {
-            const std::string suffix = LogTimestamp();
+            const std::string suffix = RunTimestamp();
             const std::string fileName = "AndUEFker" + (suffix.empty() ? std::string{} : "_" + suffix) + ".log";
             logPath_ = (std::filesystem::path(config_.outputRoot) / fileName).string();
         }
@@ -410,6 +417,8 @@ namespace anduefker::app
         liveLog_.clear();
         logPath_.clear();
         diagnosisPath_.clear();
+        runTimestamp_.clear();
+        provenance_.runTimestamp = RunTimestamp();
         if (!config_.outputRoot.empty())
         {
             std::error_code error;
@@ -443,7 +452,8 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Debug, "run_provenance producer_commit=" + provenance_.producerCommit +
                                          " producer_version=" + provenance_.producerVersion +
                                          " producer_worktree_at_configure=" + provenance_.producerWorktree +
-                                         " identity_source=cmake-configure run_id=" + provenance_.runId);
+                                         " identity_source=cmake-configure run_id=" + provenance_.runId +
+                                         " run_timestamp=" + provenance_.runTimestamp);
         Note(RuntimeLogLevel::Debug, "diagnostic_encoding=6 owner_contexts=referenced-only exec_entries=bounded-normal-samples-and-all-anomalies opaque_fields=bounded-normal-samples-and-all-gaps opaque_normal_samples_per_class=8 generation_types=shared-context full_records=reflection.json-and-diagnostics.json array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1 container_metadata=all-visited-nodes raw_container_evidence=bounded-samples container_normal_log_samples_per_class=8 optional_runtime_values=independent-bounded-capture layout_info_samples_per_category=8");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
