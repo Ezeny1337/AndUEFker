@@ -82,6 +82,7 @@ target_compile_options(ue_analyzer PRIVATE -Wall -Wextra -Wno-unused-parameter -
 target_link_libraries(ue_analyzer PUBLIC kitty_memory_ex)
 
 add_library(anduefker_core STATIC
+    src/app/CompatibilityDiagnosis.cpp
     src/app/RuntimeSession.cpp
     src/analyzer/AnalyzerMemoryAdapter.cpp
     src/binding/BindingBuilder.cpp
@@ -90,6 +91,7 @@ add_library(anduefker_core STATIC
     src/binding/LayoutDiscovery.cpp
     src/binding/LayoutProbes.cpp
     src/binding/RuntimeBinding.cpp
+    src/compat/GameProfiles.cpp
     src/generation/ArtifactWriter.cpp
     src/generation/ArtifactMetadata.cpp
     src/generation/GenerationReport.cpp

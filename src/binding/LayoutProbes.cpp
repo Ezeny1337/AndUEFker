@@ -202,25 +202,30 @@ namespace anduefker::binding
         return report;
     }
 
-    bool NameLayoutProbe::ReadString(uintptr_t address, int32_t length, bool wide, std::string &out) const
+    bool NameLayoutProbe::ReadString(uintptr_t address, int32_t length, bool wide,
+                                     const DecodePlan &decode, std::string &out) const
     {
         if (length <= 0 || length > 1024)
             return false;
+        const size_t characterWidth = wide ? sizeof(char16_t) : sizeof(char);
+        const size_t characterCount = static_cast<size_t>(length);
+        if (characterCount > std::numeric_limits<size_t>::max() / characterWidth)
+            return false;
+        std::vector<uint8_t> bytes(characterCount * characterWidth);
+        if (!memory_.ReadBytes(address, bytes.data(), bytes.size()).Ok() ||
+            !decode.nameText(bytes, address, wide))
+            return false;
         if (!wide)
         {
-            std::vector<char> bytes(static_cast<size_t>(length));
-            if (!memory_.ReadBytes(address, bytes.data(), bytes.size()).Ok())
-                return false;
-            out.assign(bytes.data(), bytes.data() + bytes.size());
+            out.assign(reinterpret_cast<const char *>(bytes.data()), bytes.size());
             return true;
         }
 
-        std::vector<char16_t> chars(static_cast<size_t>(length));
-        if (!memory_.ReadBytes(address, chars.data(), chars.size() * sizeof(char16_t)).Ok())
-            return false;
         out.clear();
-        for (char16_t character : chars)
+        for (size_t offset = 0; offset < bytes.size(); offset += sizeof(char16_t))
         {
+            char16_t character = 0;
+            std::memcpy(&character, bytes.data() + offset, sizeof(character));
             if (character == 0)
                 break;
             if (character < 0x80)
@@ -248,7 +253,7 @@ namespace anduefker::binding
             if (!indexAddress || !stringAddress || !memory_.Read(*indexAddress, rawIndex))
                 return false;
             const uint32_t index = decode.nameEntryIndex(rawIndex, *indexAddress);
-            return ReadString(*stringAddress, 4, (index & 1u) != 0, out);
+            return ReadString(*stringAddress, 4, (index & 1u) != 0, decode, out);
         }
 
         const auto headerAddress = Add(entry, static_cast<uintptr_t>(layout.pool.entryHeaderOffset));
@@ -258,7 +263,7 @@ namespace anduefker::binding
         const uint16_t header = decode.nameHeader(rawHeader, *headerAddress);
         const int32_t length = static_cast<int32_t>(header >> layout.pool.entryLengthShift);
         const bool wide = (header & layout.pool.entryWideMask) != 0;
-        return ReadString(*stringAddress, length, wide, out);
+        return ReadString(*stringAddress, length, wide, decode, out);
     }
 
     LayoutProbeReport NameLayoutProbe::Validate(uintptr_t root,

@@ -88,13 +88,30 @@ namespace anduefker::binding
 
     std::optional<RuntimeBinding> BindingBuilder::Build(const BindingCandidates &candidates,
                                                         const DecodePlan &decode,
-                                                        const std::function<void(const std::string &)> &progress) const
+                                                        const std::function<void(const std::string &)> &progress,
+                                                        const BindingLayoutHints &hints) const
     {
+        if (!decode.IsValid() || !hints.IsValid())
+        {
+            if (progress)
+                progress("binding_validation accepted=0 reason=invalid-decode-plan-or-layout-hint");
+            return std::nullopt;
+        }
+
         const uint64_t generation = memory_.AddressSpaceGeneration();
         const auto objectRoots = ResolveRoots(candidates.objectRoots);
         const auto nameRoots = ResolveRoots(candidates.nameRoots);
+        if (progress)
+            progress("binding_roots candidates_objects=" + std::to_string(candidates.objectRoots.size()) +
+                     " candidates_names=" + std::to_string(candidates.nameRoots.size()) +
+                     " resolved_objects=" + std::to_string(objectRoots.size()) +
+                     " resolved_names=" + std::to_string(nameRoots.size()));
         if (objectRoots.empty() || nameRoots.empty())
+        {
+            if (progress)
+                progress("binding_validation accepted=0 reason=object-or-name-root-unresolved");
             return std::nullopt;
+        }
 
         ObjectLayoutDiscovery objectDiscovery(memory_);
         NameLayoutDiscovery nameDiscovery(memory_);
@@ -116,7 +133,11 @@ namespace anduefker::binding
         {
             if (progress)
                 progress("binding: probing name root=" + std::to_string(nameRoot));
-            NameCandidates group{nameRoot, nameDiscovery.Discover(nameRoot, decode), {}};
+            NameCandidates group{nameRoot,
+                                 hints.names
+                                     ? std::vector<std::pair<NameContainerLayout, double>>{{*hints.names, 1.0}}
+                                     : nameDiscovery.Discover(nameRoot, decode),
+                                 {}};
             for (const auto &[layout, score] : group.layouts)
             {
                 (void)score;
@@ -180,7 +201,9 @@ namespace anduefker::binding
         {
             if (progress)
                 progress("binding: probing object root=" + std::to_string(objectRoot));
-            const auto objectLayouts = objectDiscovery.Discover(objectRoot, decode);
+            const auto objectLayouts = hints.objects
+                                           ? std::vector<std::pair<ObjectContainerLayout, double>>{{*hints.objects, 1.0}}
+                                           : objectDiscovery.Discover(objectRoot, decode);
             size_t acceptedObjectLayouts = 0;
             for (const auto &[objectLayout, objectScore] : objectLayouts)
             {

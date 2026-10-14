@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -110,12 +111,24 @@ namespace anduefker::binding
         [[nodiscard]] bool IsValid() const;
     };
 
+    struct BindingLayoutHints
+    {
+        std::optional<ObjectContainerLayout> objects;
+        std::optional<NameContainerLayout> names;
+
+        [[nodiscard]] bool IsValid() const
+        {
+            return (!objects || objects->IsValid()) && (!names || names->IsValid());
+        }
+    };
+
     struct DecodePlan
     {
         using PointerDecoder = std::function<uintptr_t(uintptr_t value, uintptr_t fieldAddress)>;
         using Int32Decoder = std::function<int32_t(int32_t value, uintptr_t fieldAddress)>;
         using UInt32Decoder = std::function<uint32_t(uint32_t value, uintptr_t fieldAddress)>;
         using UInt16Decoder = std::function<uint16_t(uint16_t value, uintptr_t fieldAddress)>;
+        using NameTextDecoder = std::function<bool(std::span<uint8_t> bytes, uintptr_t address, bool wide)>;
 
         PointerDecoder objectStorage;
         PointerDecoder objectChunk;
@@ -129,10 +142,13 @@ namespace anduefker::binding
         Int32Decoder objectFlags;
         Int32Decoder objectIndex;
         Int32Decoder nameIndex;
+        UInt32Decoder nameNumber;
         UInt32Decoder nameEntryIndex;
         UInt16Decoder nameHeader;
+        NameTextDecoder nameText;
 
         static DecodePlan Identity();
+        [[nodiscard]] bool IsValid() const;
     };
 
     struct CommonObjectInfo

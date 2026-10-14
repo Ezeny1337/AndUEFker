@@ -282,10 +282,12 @@ namespace anduefker::binding
         const int32_t length = static_cast<int32_t>(header >> layout.entryLengthShift);
         if (length != 4 || (header & layout.entryWideMask) != 0)
             return false;
-        std::array<char, 5> text{};
-        if (!memory_.ReadBytes(entry + static_cast<uintptr_t>(layout.entryStringOffset), text.data(), 4).Ok())
+        std::array<uint8_t, 4> text{};
+        const uintptr_t stringAddress = entry + static_cast<uintptr_t>(layout.entryStringOffset);
+        if (!memory_.ReadBytes(stringAddress, text.data(), text.size()).Ok() ||
+            !decode.nameText(text, stringAddress, false))
             return false;
-        name.assign(text.data(), 4);
+        name.assign(reinterpret_cast<const char *>(text.data()), text.size());
         return true;
     }
 
@@ -375,8 +377,10 @@ namespace anduefker::binding
             int32_t stringOffset = -1;
             for (int32_t offset = 0; offset <= 0x20 - 4; offset += 2)
             {
-                std::array<char, 4> text{};
-                if (memory_.ReadBytes(entry + static_cast<uintptr_t>(offset), text.data(), text.size()).Ok() &&
+                std::array<uint8_t, 4> text{};
+                const uintptr_t stringAddress = entry + static_cast<uintptr_t>(offset);
+                if (memory_.ReadBytes(stringAddress, text.data(), text.size()).Ok() &&
+                    decode.nameText(text, stringAddress, false) &&
                     std::memcmp(text.data(), "None", 4) == 0)
                 {
                     stringOffset = offset;

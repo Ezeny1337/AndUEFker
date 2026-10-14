@@ -1,6 +1,7 @@
 #include "anduefker/ue/NameStoreReader.hpp"
 
 #include <limits>
+#include <span>
 #include <vector>
 
 namespace anduefker::ue
@@ -173,6 +174,8 @@ namespace anduefker::ue
         std::vector<uint8_t> bytes(length);
         if (!memory_.ReadBytes(address, bytes.data(), bytes.size()).Ok())
             return std::nullopt;
+        if (!decode_.nameText(bytes, address, false))
+            return std::nullopt;
         size_t end = 0;
         while (end < bytes.size() && bytes[end] != 0)
             ++end;
@@ -185,6 +188,9 @@ namespace anduefker::ue
             return std::nullopt;
         std::vector<char16_t> chars(length);
         if (!memory_.ReadBytes(address, chars.data(), chars.size() * sizeof(char16_t)).Ok())
+            return std::nullopt;
+        std::span<uint8_t> bytes(reinterpret_cast<uint8_t *>(chars.data()), chars.size() * sizeof(char16_t));
+        if (!decode_.nameText(bytes, address, true))
             return std::nullopt;
 
         std::string result;
@@ -250,6 +256,7 @@ namespace anduefker::ue
             if (!memory_.Read(*indexAddress, rawIndex) || !memory_.Read(*numberAddress, number))
                 return std::nullopt;
             const int32_t index = decode_.nameIndex(rawIndex, *indexAddress);
+            number = decode_.nameNumber(number, *numberAddress);
             const auto baseEntry = LocateEntry(index);
             auto base = baseEntry ? ReadEntry(baseEntry->address, depth + 1, baseEntry->available) : std::nullopt;
             if (!base)
@@ -299,6 +306,7 @@ namespace anduefker::ue
             uint32_t number = 0;
             if (!numberAddress || !memory_.Read(*numberAddress, number))
                 return std::nullopt;
+            number = decode_.nameNumber(number, *numberAddress);
             if (number > 0)
                 *name += "_" + std::to_string(number - 1);
         }

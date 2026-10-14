@@ -15,6 +15,7 @@
 #include "anduefker/binding/CommonObjectCollector.hpp"
 #include "anduefker/binding/BindingBuilder.hpp"
 #include "anduefker/binding/GlobalLocator.hpp"
+#include "anduefker/compat/GameProfile.hpp"
 #include "anduefker/memory/ReadDiagnostics.hpp"
 #include "anduefker/memory/RemoteMemorySource.hpp"
 #include "anduefker/module/ModuleCatalog.hpp"
@@ -85,6 +86,82 @@ namespace anduefker::app
             return "INFO";
         }
 
+        const char *SessionStatusName(RuntimeSessionStatus status)
+        {
+            switch (status)
+            {
+            case RuntimeSessionStatus::Failed:
+                return "failed";
+            case RuntimeSessionStatus::BindingReady:
+                return "binding-ready";
+            case RuntimeSessionStatus::SchemaReady:
+                return "schema-ready";
+            case RuntimeSessionStatus::ReflectionPartial:
+                return "reflection-partial";
+            case RuntimeSessionStatus::ReflectionReady:
+                return "reflection-ready";
+            case RuntimeSessionStatus::ArtifactPartial:
+                return "artifact-partial";
+            }
+            return "failed";
+        }
+
+        struct ProfileExecutionState
+        {
+            bool failed = false;
+            std::string stage;
+            std::string error;
+        };
+
+        // 将 profile 回调异常转为受控失败，避免被误记为普通内存读取失败。
+        template <typename Decoder, typename Result>
+        Decoder GuardProfileDecoder(Decoder decoder, Result fallback,
+                                    const std::shared_ptr<ProfileExecutionState> &state)
+        {
+            if (!decoder)
+                return decoder;
+            return Decoder([decoder = std::move(decoder), fallback, state](auto... arguments) mutable -> Result
+                           {
+                              if (state->failed)
+                                  return fallback;
+                              try
+                              {
+                                  return decoder(arguments...);
+                              }
+                              catch (const std::exception &error)
+                              {
+                                  state->failed = true;
+                                  state->error = error.what();
+                              }
+                              catch (...)
+                              {
+                                  state->failed = true;
+                                  state->error = "unknown decoder exception";
+                              }
+                              return fallback; });
+        }
+
+        void GuardProfileDecoders(::anduefker::binding::DecodePlan &decode,
+                                  const std::shared_ptr<ProfileExecutionState> &state)
+        {
+            decode.objectStorage = GuardProfileDecoder(std::move(decode.objectStorage), uintptr_t{0}, state);
+            decode.objectChunk = GuardProfileDecoder(std::move(decode.objectChunk), uintptr_t{0}, state);
+            decode.objectPointer = GuardProfileDecoder(std::move(decode.objectPointer), uintptr_t{0}, state);
+            decode.objectClass = GuardProfileDecoder(std::move(decode.objectClass), uintptr_t{0}, state);
+            decode.objectOuter = GuardProfileDecoder(std::move(decode.objectOuter), uintptr_t{0}, state);
+            decode.nameBlocks = GuardProfileDecoder(std::move(decode.nameBlocks), uintptr_t{0}, state);
+            decode.nameChunks = GuardProfileDecoder(std::move(decode.nameChunks), uintptr_t{0}, state);
+            decode.nameEntry = GuardProfileDecoder(std::move(decode.nameEntry), uintptr_t{0}, state);
+            decode.objectCount = GuardProfileDecoder(std::move(decode.objectCount), int32_t{-1}, state);
+            decode.objectFlags = GuardProfileDecoder(std::move(decode.objectFlags), int32_t{0}, state);
+            decode.objectIndex = GuardProfileDecoder(std::move(decode.objectIndex), int32_t{-1}, state);
+            decode.nameIndex = GuardProfileDecoder(std::move(decode.nameIndex), int32_t{-1}, state);
+            decode.nameNumber = GuardProfileDecoder(std::move(decode.nameNumber), uint32_t{0}, state);
+            decode.nameEntryIndex = GuardProfileDecoder(std::move(decode.nameEntryIndex), uint32_t{0}, state);
+            decode.nameHeader = GuardProfileDecoder(std::move(decode.nameHeader), uint16_t{0}, state);
+            decode.nameText = GuardProfileDecoder(std::move(decode.nameText), false, state);
+        }
+
         std::string LogTimestamp()
         {
             const std::time_t now = std::time(nullptr);
@@ -116,6 +193,45 @@ namespace anduefker::app
             logPath_ = (std::filesystem::path(config_.outputRoot) / fileName).string();
         }
         return logPath_;
+    }
+
+    std::string RuntimeSession::DiagnosisPath() const
+    {
+        if (config_.outputRoot.empty())
+            return {};
+        if (diagnosisPath_.empty())
+        {
+            std::filesystem::path path(LogPath());
+            path.replace_extension(".diagnosis.json");
+            diagnosisPath_ = path.string();
+        }
+        return diagnosisPath_;
+    }
+
+    bool RuntimeSession::WriteDiagnosisReport() const
+    {
+        const std::string path = DiagnosisPath();
+        if (path.empty())
+            return true;
+        std::ofstream report(path, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!report.is_open())
+            return false;
+        report << diagnosis_.ToJson();
+        report.flush();
+        const bool written = report.good();
+        report.close();
+        return written && !report.fail();
+    }
+
+    void RuntimeSession::RecordDiagnosis(DiagnosisDomain domain, std::string code, std::string stage,
+                                         std::string confidence, std::string summary, std::string nextAction)
+    {
+        diagnosis_.stage = stage;
+        diagnosis_.Add({domain, code, stage, confidence, summary, nextAction});
+        const RuntimeLogLevel level = domain == DiagnosisDomain::Runtime ? RuntimeLogLevel::Error : RuntimeLogLevel::Warning;
+        Note(level, "diagnosis domain=" + std::string(DiagnosisDomainName(domain)) +
+                        " code=" + code + " stage=" + stage + " confidence=" + confidence +
+                        " summary=" + summary + " next_action=" + nextAction);
     }
 
     void RuntimeSession::Note(std::string message)
@@ -183,6 +299,15 @@ namespace anduefker::app
         catch (const std::bad_alloc &)
         {
             std::fprintf(stderr, "Runtime session failed: memory allocation failed\n");
+            try
+            {
+                RecordDiagnosis(DiagnosisDomain::Runtime, "MEMORY_ALLOCATION_FAILED", diagnosis_.stage,
+                                "observed", "The runtime session could not allocate required memory.",
+                                "Reduce concurrent load and retry; do not change the game profile based on this failure.");
+            }
+            catch (...)
+            {
+            }
         }
         catch (const std::exception &error)
         {
@@ -190,6 +315,8 @@ namespace anduefker::app
             try
             {
                 failures_.push_back(error.what());
+                RecordDiagnosis(DiagnosisDomain::Runtime, "RUNTIME_SESSION_EXCEPTION", diagnosis_.stage,
+                                "observed", error.what(), "Inspect the failing runtime stage and its preceding diagnostics.");
                 Note(RuntimeLogLevel::Error, std::string("Runtime session exception: ") + error.what());
             }
             catch (...)
@@ -200,20 +327,62 @@ namespace anduefker::app
         catch (...)
         {
             std::fprintf(stderr, "Runtime session failed: unknown exception\n");
+            try
+            {
+                RecordDiagnosis(DiagnosisDomain::Runtime, "UNKNOWN_RUNTIME_EXCEPTION", diagnosis_.stage,
+                                "observed", "An unknown exception stopped the runtime session.",
+                                "Inspect the last completed stage and reproduce with debug logging.");
+            }
+            catch (...)
+            {
+            }
         }
+        Note(RuntimeLogLevel::Info, "compatibility_diagnosis status=" +
+                                        std::string(CompatibilityStatusName(diagnosis_.status)) +
+                                        " profile=" + diagnosis_.profileId +
+                                        " profile_status=" + diagnosis_.profileStatus +
+                                        " stage=" + diagnosis_.stage);
         try
         {
             diagnosticsWritten = FlushDiagnostics();
             if (!diagnosticsWritten)
             {
                 std::fprintf(stderr, "Runtime log write or close failed\n");
+                RecordDiagnosis(DiagnosisDomain::Runtime, "RUNTIME_LOG_WRITE_FAILED", "diagnostics",
+                                "observed", "The runtime log could not be fully written or closed.",
+                                "Check output permissions and free space; compatibility status is independent of log output.");
                 status = RuntimeSessionStatus::Failed;
             }
         }
         catch (...)
         {
             std::fprintf(stderr, "Runtime log could not be flushed\n");
+            try
+            {
+                RecordDiagnosis(DiagnosisDomain::Runtime, "RUNTIME_LOG_FLUSH_EXCEPTION", "diagnostics",
+                                "observed", "An exception occurred while flushing the runtime log.",
+                                "Check the output filesystem and retry; compatibility status is independent of log output.");
+            }
+            catch (...)
+            {
+            }
             status = RuntimeSessionStatus::Failed;
+        }
+        diagnosis_.sessionStatus = SessionStatusName(status);
+        try
+        {
+            if (!WriteDiagnosisReport())
+            {
+                std::fprintf(stderr, "Compatibility diagnosis report could not be written\n");
+                status = RuntimeSessionStatus::Failed;
+                diagnosis_.sessionStatus = SessionStatusName(status);
+            }
+        }
+        catch (...)
+        {
+            std::fprintf(stderr, "Compatibility diagnosis report could not be serialized\n");
+            status = RuntimeSessionStatus::Failed;
+            diagnosis_.sessionStatus = SessionStatusName(status);
         }
         return status;
     }
@@ -223,6 +392,8 @@ namespace anduefker::app
         failures_.clear();
         reflection_ = {};
         artifacts_ = {};
+        diagnosis_ = {};
+        diagnosis_.packageName = config_.packageName;
         provenance_ = {};
         provenance_.producerCommit = kProducerCommit;
         provenance_.producerVersion = kProducerVersion;
@@ -233,10 +404,12 @@ namespace anduefker::app
                             "-" +
                             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
         context_ = RuntimeContext(memory_);
+        profiles_.clear();
         started_ = std::chrono::steady_clock::now();
         liveLogFailed_ = false;
         liveLog_.clear();
         logPath_.clear();
+        diagnosisPath_.clear();
         if (!config_.outputRoot.empty())
         {
             std::error_code error;
@@ -247,7 +420,8 @@ namespace anduefker::app
             if (liveLogFailed_)
             {
                 failures_.push_back("Runtime log open failed" + (error ? ": " + error.message() : std::string{}));
-                Note(RuntimeLogLevel::Error, failures_.back());
+                RecordDiagnosis(DiagnosisDomain::Runtime, "RUNTIME_LOG_OPEN_FAILED", "output",
+                                "observed", failures_.back(), "Verify the output directory exists and is writable.");
                 return RuntimeSessionStatus::Failed;
             }
         }
@@ -273,31 +447,43 @@ namespace anduefker::app
         Note(RuntimeLogLevel::Debug, "diagnostic_encoding=6 owner_contexts=referenced-only exec_entries=bounded-normal-samples-and-all-anomalies opaque_fields=bounded-normal-samples-and-all-gaps opaque_normal_samples_per_class=8 generation_types=shared-context full_records=reflection.json-and-diagnostics.json array_dim_default=1 opaque_reason_default=internals-not-expanded valid_bounds_default=1 container_metadata=all-visited-nodes raw_container_evidence=bounded-samples container_normal_log_samples_per_class=8 optional_runtime_values=independent-bounded-capture layout_info_samples_per_category=8");
         Note("Package=" + config_.packageName + " PID=auto UE=auto");
 
+        diagnosis_.stage = "process-discovery";
         const int pid = KittyMemoryEx::getProcessID(config_.packageName);
         if (pid <= 0)
         {
             failures_.push_back("target process was not found");
-            Note(RuntimeLogLevel::Error, failures_.back());
+            RecordDiagnosis(DiagnosisDomain::Runtime, "TARGET_PROCESS_NOT_FOUND", "process-discovery",
+                            "observed", failures_.back(),
+                            "Start the target game and confirm its package name before investigating compatibility.");
             return RuntimeSessionStatus::Failed;
         }
         Note(RuntimeLogLevel::Debug, "Target PID=" + std::to_string(pid));
         provenance_.targetPid = pid;
+        diagnosis_.stage = "memory-attach";
         if (!memory_->Initialize(static_cast<pid_t>(pid)))
         {
             failures_.push_back("remote memory source initialization failed");
-            Note(RuntimeLogLevel::Error, failures_.back());
+            RecordDiagnosis(DiagnosisDomain::Runtime, "REMOTE_MEMORY_INIT_FAILED", "memory-attach",
+                            "observed", failures_.back(),
+                            "Check target process access permissions and the memory backend before investigating game layouts.");
             return RuntimeSessionStatus::Failed;
         }
         stageStats = memory_->Stats();
 
+        diagnosis_.stage = "module-discovery";
         module::ModuleImage module;
         if (!ModuleCatalog::Discover(*memory_, config_.moduleNames, module))
         {
             failures_.push_back("Unreal module was not found");
-            Note(RuntimeLogLevel::Error, failures_.back());
+            RecordDiagnosis(DiagnosisDomain::Runtime, "UNREAL_MODULE_NOT_FOUND", "module-discovery",
+                            "observed", failures_.back(),
+                            "Inspect the target mappings and module name; compatibility has not yet been evaluated.");
             return RuntimeSessionStatus::Failed;
         }
         context_.SetModule(std::move(module));
+        diagnosis_.moduleName = context_.Module().name;
+        diagnosis_.architecture = module::ModuleArchitectureName(context_.Module().architecture);
+        diagnosis_.pointerWidth = context_.Module().pointerWidth;
         Note("Module=" + context_.Module().name + " base=" + std::to_string(context_.Module().base) +
              " architecture=" + module::ModuleArchitectureName(context_.Module().architecture) +
              " pointer_width=" + std::to_string(context_.Module().pointerWidth));
@@ -316,23 +502,173 @@ namespace anduefker::app
                                              " private=" + std::to_string(segment.privateMapping) + " path=" + segment.path);
 
         finishStage("module-discovery");
+        profiles_ = ::anduefker::compat::CreateGameProfiles();
+        std::vector<compat::IGameProfile *> matchingProfiles;
+        bool profileMatcherFailed = false;
+        diagnosis_.stage = "profile-selection";
+        for (const auto &profile : profiles_)
+        {
+            if (!profile || profile->Id().empty())
+            {
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_ID_INVALID", "profile-selection",
+                                "observed", "A compiled game profile has an empty identifier.",
+                                "Give each compiled profile a stable, non-empty Id().");
+                continue;
+            }
+            try
+            {
+                if (profile->Matches(config_.packageName, context_.Module()))
+                    matchingProfiles.push_back(profile.get());
+            }
+            catch (const std::exception &error)
+            {
+                profileMatcherFailed = true;
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_MATCH_EXCEPTION", "profile-selection",
+                                "observed", std::string("Profile matching threw an exception: ") + error.what(),
+                                "Fix the profile matcher; no profile will be selected unless all matchers complete.");
+            }
+            catch (...)
+            {
+                profileMatcherFailed = true;
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_MATCH_EXCEPTION", "profile-selection",
+                                "observed", "Profile matching threw an unknown exception.",
+                                "Fix the profile matcher; no profile will be selected unless all matchers complete.");
+            }
+        }
+
+        compat::IGameProfile *selectedGameProfile = nullptr;
+        if (profileMatcherFailed)
+        {
+            diagnosis_.status = CompatibilityStatus::Inconclusive;
+            diagnosis_.profileStatus = "matcher-failed";
+            Note(RuntimeLogLevel::Warning, "compatibility_profile selected=none reason=profile-matcher-failed source=identity-decoding");
+        }
+        else if (matchingProfiles.size() == 1)
+        {
+            selectedGameProfile = matchingProfiles.front();
+            diagnosis_.profileId = std::string(selectedGameProfile->Id());
+            diagnosis_.status = CompatibilityStatus::ProfileSelected;
+            diagnosis_.profileStatus = "selected";
+            Note(RuntimeLogLevel::Info, "compatibility_profile selected=" + diagnosis_.profileId +
+                                            " source=compiled-profile");
+        }
+        else if (matchingProfiles.size() > 1)
+        {
+            diagnosis_.status = CompatibilityStatus::Inconclusive;
+            diagnosis_.profileStatus = "ambiguous";
+            RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_MATCH_AMBIGUOUS", "profile-selection",
+                            "observed", "More than one compiled profile matches this package and module.",
+                            "Make profile match conditions mutually exclusive; the run will use identity decoding.");
+        }
+        else
+        {
+            diagnosis_.status = CompatibilityStatus::Inconclusive;
+            diagnosis_.profileStatus = "none";
+            Note(RuntimeLogLevel::Info, "compatibility_profile selected=none source=identity-decoding");
+        }
+
+        ::anduefker::binding::DecodePlan decode = ::anduefker::binding::DecodePlan::Identity();
+        ::anduefker::binding::BindingLayoutHints layoutHints;
+        BindingCandidates profileCandidates;
+        const auto profileExecutionState = std::make_shared<ProfileExecutionState>();
+        bool profileHooksValid = selectedGameProfile != nullptr;
+        if (selectedGameProfile)
+        {
+            try
+            {
+                diagnosis_.stage = "profile-configuration";
+                decode = selectedGameProfile->MakeDecodePlan(*memory_, context_.Module());
+                layoutHints = selectedGameProfile->LayoutHints();
+                if (!decode.IsValid() || !layoutHints.IsValid())
+                {
+                    diagnosis_.profileStatus = "configuration-failed";
+                    RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_CONFIGURATION_INVALID", "profile-configuration",
+                                    "observed", "The selected profile returned an invalid decode plan or layout hint.",
+                                    "Check every decode callback and validate any supplied object or name layout.");
+                    profileHooksValid = false;
+                }
+                else
+                {
+                    GuardProfileDecoders(decode, profileExecutionState);
+                    diagnosis_.profileStatus = "active";
+                    diagnosis_.stage = "profile-root-location";
+                    profileCandidates = selectedGameProfile->LocateRoots(
+                        *memory_, context_.Module(),
+                        [&](const std::string &message)
+                        { Note(RuntimeLogLevel::Debug, "profile: " + message); });
+                }
+            }
+            catch (const std::exception &error)
+            {
+                diagnosis_.profileStatus = "configuration-failed";
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_CONFIGURATION_EXCEPTION", diagnosis_.stage,
+                                "observed", std::string("Profile configuration threw an exception: ") + error.what(),
+                                "Fix the profile hook; the run will continue with identity decoding and automatic layouts.");
+                profileHooksValid = false;
+            }
+            catch (...)
+            {
+                diagnosis_.profileStatus = "configuration-failed";
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_CONFIGURATION_EXCEPTION", diagnosis_.stage,
+                                "observed", "Profile configuration threw an unknown exception.",
+                                "Fix the profile hook; the run will continue with identity decoding and automatic layouts.");
+                profileHooksValid = false;
+            }
+            if (!profileHooksValid)
+            {
+                diagnosis_.status = CompatibilityStatus::Inconclusive;
+                decode = ::anduefker::binding::DecodePlan::Identity();
+                layoutHints = {};
+                if (diagnosis_.profileStatus == "selected")
+                    diagnosis_.profileStatus = "configuration-failed";
+            }
+        }
+
+        diagnosis_.stage = "root-location";
         GlobalLocator locator(*memory_, context_.Module());
         BindingCandidates candidates = locator.LocateSymbols(
             {"GUObjectArray", "GObjects", "ObjObjects"},
             {"GNameBlocksDebug", "GFNameTableForDebuggerVisualizers_MT", "NamePoolData"}, progress);
+        candidates.objectRoots.insert(candidates.objectRoots.end(),
+                                      profileCandidates.objectRoots.begin(), profileCandidates.objectRoots.end());
+        candidates.nameRoots.insert(candidates.nameRoots.end(),
+                                    profileCandidates.nameRoots.begin(), profileCandidates.nameRoots.end());
+        Note(RuntimeLogLevel::Debug, "profile_root_candidates objects=" +
+                                         std::to_string(profileCandidates.objectRoots.size()) +
+                                         " names=" + std::to_string(profileCandidates.nameRoots.size()));
         finishStage("symbol-locator");
         BindingBuilder builder(*memory_);
         const auto bindingProgress = [&](const std::string &message)
         { Note(message.starts_with("binding:") ? RuntimeLogLevel::Info : RuntimeLogLevel::Debug, message); };
-        auto binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), bindingProgress);
+        diagnosis_.stage = "binding";
+        profileExecutionState->stage = "binding";
+        auto binding = builder.Build(candidates, decode, bindingProgress, layoutHints);
         finishStage("symbol-binding");
+        const auto discardFailedProfileDecoders = [&]()
+        {
+            if (!profileHooksValid || !profileExecutionState->failed)
+                return false;
+            profileHooksValid = false;
+            diagnosis_.profileStatus = "decoder-failed-identity-fallback";
+            decode = ::anduefker::binding::DecodePlan::Identity();
+            layoutHints = {};
+            RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_DECODER_EXCEPTION", profileExecutionState->stage,
+                            "observed", std::string("A profile decoder threw an exception: ") + profileExecutionState->error,
+                            "Fix the failing profile decoder; the run will retry this binding with identity decoding.");
+            return true;
+        };
+        if (discardFailedProfileDecoders())
+            binding = builder.Build(candidates, decode, bindingProgress, layoutHints);
         if (!binding)
         {
             Note("locator_path source=analyzer reason=symbol-binding-incomplete");
             candidates = locator.LocateAnalysis(candidates, progress);
             finishStage("analyzer-locator");
-            binding = builder.Build(candidates, ::anduefker::binding::DecodePlan::Identity(), bindingProgress);
+            profileExecutionState->stage = "binding";
+            binding = builder.Build(candidates, decode, bindingProgress, layoutHints);
             finishStage("analyzer-binding");
+            if (discardFailedProfileDecoders())
+                binding = builder.Build(candidates, decode, bindingProgress, layoutHints);
         }
         else
             Note("locator_path source=symbols validation=complete");
@@ -356,11 +692,30 @@ namespace anduefker::app
         if (!binding)
         {
             failures_.push_back("runtime binding failed after symbol and analyzer validation");
-            Note(RuntimeLogLevel::Error, failures_.back());
+            const std::string bindingSummary = failures_.back() +
+                                               "; object_root_candidates=" + std::to_string(candidates.objectRoots.size()) +
+                                               " name_root_candidates=" + std::to_string(candidates.nameRoots.size());
+            if (selectedGameProfile && profileHooksValid)
+            {
+                diagnosis_.status = CompatibilityStatus::ProfileValidationFailed;
+                diagnosis_.profileStatus = "binding-validation-failed";
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_BINDING_VALIDATION_FAILED", "binding",
+                                "observed", bindingSummary,
+                                "Inspect profile root candidates, pointer decoders, and layout hints against the rejected probe evidence.");
+            }
+            else
+            {
+                diagnosis_.status = CompatibilityStatus::NeedsInvestigation;
+                RecordDiagnosis(DiagnosisDomain::Compatibility, "ROOT_BINDING_NOT_VALIDATED", "binding",
+                                "observed", bindingSummary,
+                                "Use candidate and probe evidence to inspect root location, object layout, name layout, and value decoding; this does not prove encryption.");
+            }
             return RuntimeSessionStatus::Failed;
         }
         context_.CommitBinding(*binding);
         Note(RuntimeLogLevel::Info, "Runtime binding validated");
+        Note(RuntimeLogLevel::Info, "compatibility_checkpoint stage=binding status=validated profile=" +
+                                        diagnosis_.profileId);
         for (const std::string &evidence : context_.Binding().report.evidence)
             Note(RuntimeLogLevel::Debug, "binding: " + evidence);
 
@@ -444,23 +799,53 @@ namespace anduefker::app
             schemaSelection = ::anduefker::ue::SelectSchemaCandidates(std::move(schemaSelection.candidates), candidateSchemas);
         };
 
+        bool schemaAddressSpaceRefreshFailed = false;
+        bool schemaAddressSpaceUnstable = false;
         for (int attempt = 0; attempt < 2; ++attempt)
         {
+            profileExecutionState->stage = "schema";
             resolveProfiles();
+            if (profileHooksValid && profileExecutionState->failed)
+            {
+                failures_.push_back("profile decoder failed during schema validation");
+                diagnosis_.status = CompatibilityStatus::ProfileValidationFailed;
+                diagnosis_.profileStatus = "decoder-failed";
+                RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_DECODER_EXCEPTION", "schema",
+                                "observed", std::string("A profile decoder threw an exception: ") + profileExecutionState->error,
+                                "Fix the decoder used by schema probes; no schema result from this profile is trusted.");
+                return RuntimeSessionStatus::BindingReady;
+            }
             bool addressSpaceChanged = false;
             for (const SchemaCandidateSummary &candidate : schemaSelection.candidates)
                 addressSpaceChanged = addressSpaceChanged || candidate.addressSpaceChanged;
-            if (!addressSpaceChanged || attempt != 0)
+            if (!addressSpaceChanged)
                 break;
+            if (attempt != 0)
+            {
+                schemaAddressSpaceUnstable = true;
+                failures_.push_back("remote address space changed again during schema retry");
+                diagnosis_.status = CompatibilityStatus::Inconclusive;
+                RecordDiagnosis(DiagnosisDomain::Runtime, "ADDRESS_SPACE_UNSTABLE", "schema",
+                                "observed", failures_.back(),
+                                "Keep the target process stable and retry; compatibility could not be evaluated on a consistent address space.");
+                break;
+            }
             Note(RuntimeLogLevel::Warning, "Remote address space changed during schema resolution; refreshing and retrying");
             if (!memory_->RefreshAddressSpace())
             {
-                Note(RuntimeLogLevel::Error, "remote address-space refresh failed after schema probe invalidation");
+                schemaAddressSpaceRefreshFailed = true;
+                failures_.push_back("remote address-space refresh failed after schema probe invalidation");
+                diagnosis_.status = CompatibilityStatus::Inconclusive;
+                RecordDiagnosis(DiagnosisDomain::Runtime, "ADDRESS_SPACE_REFRESH_FAILED", "schema",
+                                "observed", failures_.back(),
+                                "Rerun with a stable target process; no schema result from the invalidated address space is trusted.");
                 break;
             }
         }
 
         finishStage("schema-resolution");
+        if (schemaAddressSpaceRefreshFailed || schemaAddressSpaceUnstable)
+            return RuntimeSessionStatus::BindingReady;
         const bool schemaAccepted = schemaSelection.accepted;
         if (schemaAccepted)
         {
@@ -527,7 +912,15 @@ namespace anduefker::app
             const std::string failure = schemaReport.failures.empty()
                                             ? "schema resolution failed without a diagnostic"
                                             : schemaReport.failures.front();
-            Note(RuntimeLogLevel::Error, failure);
+            diagnosis_.status = selectedGameProfile && profileHooksValid
+                                    ? CompatibilityStatus::ProfileValidationFailed
+                                    : CompatibilityStatus::NeedsInvestigation;
+            if (selectedGameProfile && profileHooksValid)
+                diagnosis_.profileStatus = "schema-validation-failed";
+            RecordDiagnosis(selectedGameProfile && profileHooksValid ? DiagnosisDomain::Profile : DiagnosisDomain::Compatibility,
+                            selectedGameProfile && profileHooksValid ? "PROFILE_SCHEMA_VALIDATION_FAILED" : "ENGINE_SCHEMA_NOT_RESOLVED",
+                            "schema", "observed", failure,
+                            "Review schema-stage evidence and name/object validation first; an unsupported reflection layout is not evidence of encryption.");
             for (size_t index = 1; index < schemaReport.failures.size(); ++index)
                 Note(RuntimeLogLevel::Error, schemaReport.failures[index]);
         }
@@ -539,6 +932,8 @@ namespace anduefker::app
             return RuntimeSessionStatus::BindingReady;
         }
         context_.CommitSchema(std::move(schema));
+        Note(RuntimeLogLevel::Info, "compatibility_checkpoint stage=schema status=validated profile=" +
+                                        diagnosis_.profileId);
         Note(RuntimeLogLevel::Info, "Engine schema resolved; profile=" + selectedProfile.id +
                                         " range=" + selectedProfile.versionRange +
                                         " source=runtime-schema-probe");
@@ -546,12 +941,25 @@ namespace anduefker::app
         if (!memory_->RefreshAddressSpace())
         {
             failures_.push_back("address-space refresh failed before reflection capture");
-            Note(RuntimeLogLevel::Error, failures_.back());
+            RecordDiagnosis(DiagnosisDomain::Runtime, "ADDRESS_SPACE_REFRESH_FAILED", "reflection-prepare",
+                            "observed", failures_.back(),
+                            "Check target process stability and memory-map refresh before changing a game profile.");
             return RuntimeSessionStatus::SchemaReady;
         }
         Note(RuntimeLogLevel::Info, "Collecting common object classes...");
+        profileExecutionState->stage = "common-objects";
         binding::CommonObjectCollector collector(*memory_, context_.Binding(), context_.Schema());
         std::vector<binding::CommonObjectInfo> commonObjects = collector.Collect();
+        if (profileHooksValid && profileExecutionState->failed)
+        {
+            failures_.push_back("profile decoder failed during common object collection");
+            diagnosis_.status = CompatibilityStatus::ProfileValidationFailed;
+            diagnosis_.profileStatus = "decoder-failed";
+            RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_DECODER_EXCEPTION", "common-objects",
+                            "observed", std::string("A profile decoder threw an exception: ") + profileExecutionState->error,
+                            "Fix the profile decoder; common-object output from this run is not published.");
+            return RuntimeSessionStatus::SchemaReady;
+        }
         Note(RuntimeLogLevel::Info, "Found " + std::to_string(commonObjects.size()) + " common object classes");
         for (const auto &obj : commonObjects)
         {
@@ -566,11 +974,22 @@ namespace anduefker::app
         finishStage("common-objects");
 
         const ReadStats beforeReflection = memory_->Stats();
+        profileExecutionState->stage = "reflection";
         ReflectionReader reader(*memory_, context_.Binding(), context_.Schema(),
                                 context_.Module().base, context_.Module().end, progress,
                                 [&](const std::string &message)
                                 { Note(RuntimeLogLevel::Debug, message); });
         reflection_ = reader.Read();
+        if (profileHooksValid && profileExecutionState->failed)
+        {
+            failures_.push_back("profile decoder failed during reflection capture");
+            diagnosis_.status = CompatibilityStatus::ProfileValidationFailed;
+            diagnosis_.profileStatus = "decoder-failed";
+            RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_DECODER_EXCEPTION", "reflection",
+                            "observed", std::string("A profile decoder threw an exception: ") + profileExecutionState->error,
+                            "Fix the profile decoder; reflection output from this run is not trusted.");
+            return RuntimeSessionStatus::SchemaReady;
+        }
         finishStage("reflection");
         const ReadStats afterReflection = memory_->Stats();
         Note(RuntimeLogLevel::Debug, "memory stats stage=reflection" +
@@ -614,10 +1033,42 @@ namespace anduefker::app
                                         " failures=" + std::to_string(reflection_.stats.failures));
         if (reflection_.status == ParseStatus::Failed)
         {
+            diagnosis_.status = selectedGameProfile && profileHooksValid
+                                    ? CompatibilityStatus::ProfileValidationFailed
+                                    : CompatibilityStatus::NeedsInvestigation;
+            if (selectedGameProfile && profileHooksValid)
+                diagnosis_.profileStatus = "reflection-validation-failed";
+            RecordDiagnosis(selectedGameProfile && profileHooksValid ? DiagnosisDomain::Profile : DiagnosisDomain::Compatibility,
+                            selectedGameProfile && profileHooksValid ? "PROFILE_REFLECTION_FAILED" : "REFLECTION_CAPTURE_FAILED",
+                            "reflection", "observed",
+                            "Reflection capture failed after object/name binding and schema validation.",
+                            "Inspect reflection read failures and identity diagnostics before attributing the failure to game encryption.");
             return RuntimeSessionStatus::SchemaReady;
         }
         if (reflection_.status == ParseStatus::Partial)
+        {
             Note(RuntimeLogLevel::Warning, "Reflection is partial; output will be written to a .partial artifact");
+            diagnosis_.status = CompatibilityStatus::Inconclusive;
+            if (selectedGameProfile && profileHooksValid)
+                diagnosis_.profileStatus = "reflection-partial";
+            RecordDiagnosis(selectedGameProfile && profileHooksValid ? DiagnosisDomain::Profile : DiagnosisDomain::Compatibility,
+                            selectedGameProfile && profileHooksValid ? "PROFILE_REFLECTION_PARTIAL" : "REFLECTION_PARTIAL",
+                            "reflection", "observed",
+                            "Reflection capture completed with skipped or unreadable definitions.",
+                            "Review reflection.json and diagnostics.json to separate unsupported field semantics from transient or inaccessible reads.");
+        }
+        else
+        {
+            diagnosis_.status = selectedGameProfile && profileHooksValid
+                                    ? CompatibilityStatus::ProfileValidated
+                                    : CompatibilityStatus::BaselineCompatible;
+            if (selectedGameProfile && profileHooksValid)
+                diagnosis_.profileStatus = "validated";
+            diagnosis_.stage = "reflection";
+            Note(RuntimeLogLevel::Info, "compatibility_assessment status=" +
+                                            std::string(CompatibilityStatusName(diagnosis_.status)) +
+                                            " profile=" + diagnosis_.profileId);
+        }
 
         const ReadStats beforeValues = memory_->Stats();
         try
@@ -659,6 +1110,16 @@ namespace anduefker::app
             reflection_.runtimeEvidence.sparse.status = "inspection-aborted";
             Note(RuntimeLogLevel::Warning, "runtime_value_evidence failed: " + std::string(error.what()));
         }
+        if (profileHooksValid && profileExecutionState->failed)
+        {
+            failures_.push_back("profile decoder failed during runtime value inspection");
+            diagnosis_.status = CompatibilityStatus::ProfileValidationFailed;
+            diagnosis_.profileStatus = "decoder-failed";
+            RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_DECODER_EXCEPTION", "runtime-value-evidence",
+                            "observed", std::string("A profile decoder threw an exception: ") + profileExecutionState->error,
+                            "Fix the profile decoder; runtime evidence from this run is not trusted.");
+            return RuntimeSessionStatus::SchemaReady;
+        }
         finishStage("runtime-value-evidence");
         const auto &runtime = reflection_.runtimeEvidence;
         Note(RuntimeLogLevel::Info, "runtime_value_evidence status=" + runtime.status +
@@ -692,7 +1153,9 @@ namespace anduefker::app
             if (artifacts_.status == ParseStatus::Failed)
             {
                 failures_.push_back(artifacts_.error);
-                Note(RuntimeLogLevel::Error, failures_.back());
+                RecordDiagnosis(DiagnosisDomain::Runtime, "ARTIFACT_WRITE_FAILED", "artifact-generation",
+                                "observed", failures_.back(),
+                                "Check output permissions and free space; compatibility binding may already be validated.");
                 return RuntimeSessionStatus::Failed;
             }
             Note(RuntimeLogLevel::Info, "Artifact status=" + std::string(ParseStatusName(artifacts_.status)) +

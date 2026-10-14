@@ -83,16 +83,28 @@ namespace anduefker::binding
         { return value; };
         result.nameIndex = [](int32_t value, uintptr_t)
         { return value; };
+        result.nameNumber = [](uint32_t value, uintptr_t)
+        { return value; };
         result.nameEntryIndex = [](uint32_t value, uintptr_t)
         { return value; };
         result.nameHeader = [](uint16_t value, uintptr_t)
         { return value; };
+        result.nameText = [](std::span<uint8_t>, uintptr_t, bool)
+        { return true; };
         return result;
+    }
+
+    bool DecodePlan::IsValid() const
+    {
+        return objectStorage && objectChunk && objectPointer && objectClass && objectOuter &&
+               nameBlocks && nameChunks && nameEntry && objectCount && objectFlags && objectIndex &&
+               nameIndex && nameNumber && nameEntryIndex && nameHeader && nameText;
     }
 
     bool RuntimeBinding::IsValid() const
     {
         return objectRoot.address != 0 && nameRoot.address != 0 && objects.IsValid() && names.IsValid() &&
-               report.objectContainerValidated && report.nameContainerValidated && report.semanticValidationPassed;
+               decode.IsValid() && report.objectContainerValidated && report.nameContainerValidated &&
+               report.semanticValidationPassed;
     }
 } // namespace anduefker::binding

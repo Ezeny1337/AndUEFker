@@ -53,7 +53,8 @@ namespace anduefker::binding
                                                  const DecodePlan &decode) const;
 
     private:
-        [[nodiscard]] bool ReadString(uintptr_t address, int32_t length, bool wide, std::string &out) const;
+        [[nodiscard]] bool ReadString(uintptr_t address, int32_t length, bool wide,
+                                      const DecodePlan &decode, std::string &out) const;
         [[nodiscard]] bool ReadEntry(uintptr_t entry,
                                      const NameContainerLayout &layout,
                                      const DecodePlan &decode,
