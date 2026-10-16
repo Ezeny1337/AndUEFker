@@ -47,7 +47,7 @@ namespace anduefker::binding
         [[nodiscard]] bool IsValid() const;
     };
 
-    // UE 5.5/5.6 packed FUObjectItem: ObjectPtrLow followed by Flags (low 14 bits carry the pointer high part).
+    // UE 5.6 可能会对 FUObjectItem 指针进行打包，运行时布局探测会据此选择该候选布局
     [[nodiscard]] inline uintptr_t UnpackObjectItemPointer(uintptr_t value, bool packed)
     {
         if (!packed)

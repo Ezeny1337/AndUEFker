@@ -17,6 +17,13 @@ namespace anduefker::ir
         return total > 0 && end >= property.offset && end <= bound;
     }
 
+    [[nodiscard]] inline bool IsVirtualProperty(const PropertyIR &property)
+    {
+        // UE 5.6 将该位定义为 CPF_Virtual
+        constexpr uint64_t kCPFVirtual = 0x04000000ull;
+        return property.type.kind == PropertyKind::Interface && (property.flags & kCPFVirtual) != 0;
+    }
+
     [[nodiscard]] inline bool IsValidPropertyBoolLayout(const PropertyIR &property)
     {
         return property.type.kind == PropertyKind::Bool && property.boolean.fieldSize == property.elementSize &&

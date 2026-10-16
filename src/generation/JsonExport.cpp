@@ -1,6 +1,7 @@
 #include "anduefker/generation/JsonExport.hpp"
 #include "Formatting.hpp"
 #include "anduefker/ue/ContainerLayout.hpp"
+#include "anduefker/ir/ReflectionLayout.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -311,7 +312,12 @@ namespace anduefker::generation
                    << "\",\"class\":\"" << EscapeJson(property.reflectedClass) << "\",\"offset\":" << property.offset
                    << ",\"element_size\":" << property.elementSize << ",\"array_dim\":" << property.arrayDim
                    << ",\"storage_size\":" << static_cast<int64_t>(property.elementSize) * property.arrayDim
-                   << ",\"offset_origin\":\"" << (property.isParameter ? "parameter-buffer" : "owner-start") << "\""
+                   << ",\"has_physical_storage\":" << (ir::IsVirtualProperty(property) ? "false" : "true")
+                   << ",\"offset_origin\":\""
+                   << (ir::IsVirtualProperty(property) ? "virtual-no-storage"
+                       : property.isParameter          ? "parameter-buffer"
+                                                       : "owner-start")
+                   << "\""
                    << ",\"is_parameter\":" << (property.isParameter ? "true" : "false")
                    << ",\"is_return_parameter\":" << (property.isReturnParameter ? "true" : "false")
                    << ",\"is_out_parameter\":" << (property.isOutParameter ? "true" : "false")

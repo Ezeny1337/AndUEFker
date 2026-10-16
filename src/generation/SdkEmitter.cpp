@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "anduefker/generation/JsonExport.hpp"
+#include "anduefker/ir/ReflectionLayout.hpp"
 #include "anduefker/ue/ContainerLayout.hpp"
 
 namespace anduefker::generation::detail
@@ -46,7 +47,10 @@ namespace anduefker::generation::detail
         stream << "using TargetAddress = " << targetPointer << ";\n";
         stream << "// Pointer-width words preserve semantic pointees; encoded object handles are not decoded.\n";
         stream << "template <typename SemanticType> struct TTargetPointer { using Pointee = SemanticType; TargetAddress Bits; };\n";
+        stream << "// String families share this header shape; their character encoding is distinct and not decoded here.\n";
         stream << "struct FString { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "struct FUtf8String { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
+        stream << "struct FAnsiString { TargetAddress Data; std::int32_t Num; std::int32_t Max; };\n";
         stream << "// Allocator internals are not selected from a matching total size.\n";
         stream << "// Layout tags describe target offsets, not native C++ instances or verified live values.\n";
         stream << "struct FUnknownContainerLayout {};\n";
@@ -152,6 +156,8 @@ namespace anduefker::generation::detail
         const auto opaqueReasonFor = [](const FieldDescription &entry)
         {
             const auto &property = *entry.property;
+            if (ir::IsVirtualProperty(property))
+                return "virtual-property-no-storage";
             if (!entry.validBounds)
                 return "invalid-bounds";
             if (!property.typeDetailsResolved)
@@ -241,7 +247,9 @@ namespace anduefker::generation::detail
             if (conflicting != plan.fields.end())
                 event.conflictingProperty = conflicting->property->name;
             event.strategy = LayoutRepresentationName(plan.representation);
-            if (issue.kind == LayoutIssueKind::InheritedExtentIntersection && !issue.affectsCompleteness)
+            if ((issue.kind == LayoutIssueKind::InheritedExtentIntersection ||
+                 issue.kind == LayoutIssueKind::VirtualPropertyWithoutOffset) &&
+                !issue.affectsCompleteness)
                 report.Info(std::move(event));
             else
                 report.Warn(std::move(event));
@@ -264,6 +272,12 @@ namespace anduefker::generation::detail
                 describe(entry);
                 const PropertyIR &property = *entry.property;
                 const std::string member = SanitizeIdentifier(property.name, "Member_") + "_" + std::to_string(ordinal++);
+                if (ir::IsVirtualProperty(property))
+                {
+                    stream << "    // Virtual property has no useful Offset_Internal and is excluded from physical storage: name="
+                           << EscapeJson(property.name) << " symbol=" << member << " flags=" << Hex(property.flags) << "\n";
+                    continue;
+                }
                 const std::string typeName = entry.type.name.empty() ? property.reflectedClass : entry.type.name;
                 if (!entry.validBounds)
                 {

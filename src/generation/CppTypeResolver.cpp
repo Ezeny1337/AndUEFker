@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <string_view>
 #include <tuple>
 #include <unordered_set>
 
@@ -69,6 +70,19 @@ namespace anduefker::generation
             return EnumUnderlyingType::Int64;
         }
 
+        std::string ReflectedStringType(std::string_view reflectedClass)
+        {
+            if (reflectedClass.size() > 1 &&
+                (reflectedClass.front() == 'F' || reflectedClass.front() == 'U') &&
+                reflectedClass[1] >= 'A' && reflectedClass[1] <= 'Z')
+                reflectedClass.remove_prefix(1);
+            if (reflectedClass == "Utf8StrProperty")
+                return "FUtf8String";
+            if (reflectedClass == "AnsiStrProperty")
+                return "FAnsiString";
+            return "FString";
+        }
+
         std::string UniqueName(std::unordered_set<std::string> &used, std::string stem)
         {
             std::string name = stem;
@@ -116,7 +130,7 @@ namespace anduefker::generation
     CppSymbols BuildCppSymbols(const ir::ReflectionIR &reflection)
     {
         CppSymbols result;
-        std::unordered_set<std::string> used = {"FName", "FString", "FScriptInterface", "TargetAddress", "TTargetPointer", "FUnknownContainerLayout", "FHeapArrayLayout", "FHeapSparseSetLayout", "TArray", "TSet", "TMap", "TEnumStorage", "TOpaqueStorage", "TStructStorage", "TStaticArrayStorage", "FTextStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TFieldPathStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"};
+        std::unordered_set<std::string> used = {"FName", "FString", "FUtf8String", "FAnsiString", "FScriptInterface", "TargetAddress", "TTargetPointer", "FUnknownContainerLayout", "FHeapArrayLayout", "FHeapSparseSetLayout", "TArray", "TSet", "TMap", "TEnumStorage", "TOpaqueStorage", "TStructStorage", "TStaticArrayStorage", "FTextStorage", "TWeakObjectStorage", "TLazyObjectStorage", "TSoftObjectStorage", "TSoftClassStorage", "TFieldPathStorage", "TDelegateStorage", "TInlineMulticastDelegateStorage", "TSparseMulticastDelegateStorage", "TUnknownMulticastDelegateStorage", "TOptionalStorage"};
         used.insert({"FUnknownValueLayout", "FMemoryImageArrayLayout", "FMemoryImageSparseSetLayout"});
         for (const auto &[id, layout] : reflection.valueStorageLayouts)
         {
@@ -273,7 +287,7 @@ namespace anduefker::generation
         case PropertyKind::Name:
             return sized("FName", nameSize);
         case PropertyKind::String:
-            return sized("FString", pointerWidth + 8);
+            return sized(ReflectedStringType(reference.reflectedClass), pointerWidth + 8);
         case PropertyKind::Object:
         case PropertyKind::Class:
             if (const auto found = symbols.types.find(reference.referencedObject); found != symbols.types.end())
@@ -563,7 +577,7 @@ namespace anduefker::generation
         result.type.semanticName = property.reflectedClass;
         result.type.semanticsResolved = property.typeDetailsResolved;
         int64_t end = 0;
-        result.validBounds = ir::IsValidPropertyBounds(property, bound, end);
+        result.validBounds = !ir::IsVirtualProperty(property) && ir::IsValidPropertyBounds(property, bound, end);
         result.boolLayout = ir::IsValidPropertyBoolLayout(property);
         if (property.type.elementSize != property.elementSize)
             result.type.failureReason = "property-type-size-disagreement";

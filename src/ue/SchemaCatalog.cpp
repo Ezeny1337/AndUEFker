@@ -74,7 +74,7 @@ namespace anduefker::ue
         result.useNamePool = true;
         result.enumUsesFNameData = false;
         // 在源码的运行时布局中，反射出的 FProperty/UProperty ArrayDim 字段仍保持为 int32 类型
-        // 生成参数描述符中的 byte-sized ArrayDim 字段属于另一种不同的契约
+        // UHT 参数描述符有独立契约，不能用于推断运行时字段宽度
         result.arrayDimIsByte = false;
 
         // 这些是运行时观测到的选项

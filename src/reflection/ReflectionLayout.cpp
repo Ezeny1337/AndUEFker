@@ -30,7 +30,8 @@ namespace anduefker::ir
         {
             analysis.issues.push_back({kind, property.address, conflicting ? conflicting->address : 0,
                                        affectsCompleteness, std::move(message)});
-            if (affectsCompleteness || kind == LayoutIssueKind::InheritedExtentIntersection)
+            if (affectsCompleteness || kind == LayoutIssueKind::InheritedExtentIntersection ||
+                kind == LayoutIssueKind::VirtualPropertyWithoutOffset)
                 analysis.representation = LayoutRepresentation::OffsetDescription;
         }
 
@@ -51,6 +52,12 @@ namespace anduefker::ir
                     AddIssue(analysis, LayoutIssueKind::MissingTypeInformation, *property, nullptr, true,
                              "field type information is incomplete: name=" + property->name +
                                  " reflected_class=" + property->reflectedClass);
+                }
+                if (IsVirtualProperty(*property))
+                {
+                    AddIssue(analysis, LayoutIssueKind::VirtualPropertyWithoutOffset, *property, nullptr, false,
+                             "virtual interface property has no useful Offset_Internal: name=" + property->name);
+                    continue;
                 }
                 int64_t end = 0;
                 if (!IsValidPropertyBounds(*property, bound, end))
@@ -109,6 +116,8 @@ namespace anduefker::ir
             {
                 for (const auto &property : base->properties)
                 {
+                    if (IsVirtualProperty(property))
+                        continue;
                     int64_t end = 0;
                     if (!IsValidPropertyBounds(property, base->size, end))
                         continue;
@@ -139,6 +148,8 @@ namespace anduefker::ir
                         const auto inherited = InheritedIntervals(chain);
                         for (const auto &property : type.properties)
                         {
+                            if (IsVirtualProperty(property))
+                                continue;
                             int64_t end = 0;
                             if (!IsValidPropertyBounds(property, type.size, end))
                                 continue;

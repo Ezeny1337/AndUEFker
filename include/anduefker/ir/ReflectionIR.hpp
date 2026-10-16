@@ -43,6 +43,7 @@ namespace anduefker::ir
         InheritedExtentIntersection,
         KnownInheritedFieldConflict,
         MissingTypeInformation,
+        VirtualPropertyWithoutOffset,
     };
 
     [[nodiscard]] inline const char *LayoutIssueKindName(LayoutIssueKind kind)
@@ -61,6 +62,8 @@ namespace anduefker::ir
             return "known-inherited-field-conflict";
         case LayoutIssueKind::MissingTypeInformation:
             return "missing-type-information";
+        case LayoutIssueKind::VirtualPropertyWithoutOffset:
+            return "virtual-property-without-offset";
         }
         return "unknown-layout-issue";
     }
