@@ -5,7 +5,7 @@
 #include <sstream>
 #include <string>
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
     inline std::string Hex(uint64_t value)
     {
@@ -14,4 +14,4 @@ namespace anduefker::generation::detail
         return stream.str();
     }
 
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

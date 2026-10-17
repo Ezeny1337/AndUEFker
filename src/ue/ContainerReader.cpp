@@ -1,11 +1,11 @@
-#include "anduefker/ue/ContainerReader.hpp"
-#include "anduefker/ue/StorageLayout.hpp"
+#include "nextdumper/ue/ContainerReader.hpp"
+#include "nextdumper/ue/StorageLayout.hpp"
 
 #include <algorithm>
 #include <bit>
 #include <cstring>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     namespace
     {
@@ -226,4 +226,4 @@ namespace anduefker::ue
         result.status = result.count == 0 ? "empty-header-observed" : "allocated-elements-sampled";
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

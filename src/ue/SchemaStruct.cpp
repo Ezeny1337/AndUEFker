@@ -3,7 +3,7 @@
 #include <array>
 #include <cstring>
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     bool SchemaProbeContext::ResolveStructSchema(EngineSchema &schema, SchemaResolutionReport &report) const
     {
@@ -100,8 +100,8 @@ namespace anduefker::ue::schema_probe
                     std::array<uint8_t, 4> bytes{};
                     const auto read = address && memory_.IsReadable(*address, static_cast<size_t>(width))
                                           ? memory_.ReadBytes(*address, bytes.data(), static_cast<size_t>(width))
-                                          : ::anduefker::memory::ReadResult{
-                                                ::anduefker::memory::ReadError::UnreadableRange,
+                                          : ::nextdumper::memory::ReadResult{
+                                                ::nextdumper::memory::ReadError::UnreadableRange,
                                                 address.value_or(0), static_cast<size_t>(width), 0};
                     const bool readable = read.Ok();
                     if (width == 2)
@@ -148,4 +148,4 @@ namespace anduefker::ue::schema_probe
         report.evidence.push_back(schema.features.useFProperty ? "FProperty struct schema selected" : "UProperty struct schema selected");
         return true;
     }
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

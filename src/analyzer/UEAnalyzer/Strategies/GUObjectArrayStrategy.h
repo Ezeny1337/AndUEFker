@@ -4,7 +4,7 @@
 
 #include "StrategyBase.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -52,4 +52,4 @@ namespace anduefker::analyzer
 	/// to StrategyPtr wherever only the interface is needed.
 	std::unique_ptr<GUObjectArrayStrategy> MakeGUObjectArrayStrategy();
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

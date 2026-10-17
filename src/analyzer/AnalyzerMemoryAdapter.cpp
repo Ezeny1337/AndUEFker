@@ -1,13 +1,13 @@
-#include "anduefker/analyzer/AnalyzerMemoryAdapter.hpp"
+#include "nextdumper/analyzer/AnalyzerMemoryAdapter.hpp"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
 
 #include <KittyMemoryEx.hpp>
-#include "anduefker/module/ElfSymbols.hpp"
+#include "nextdumper/module/ElfSymbols.hpp"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
     AnalyzerMemoryAdapter::AnalyzerMemoryAdapter(RemoteMemorySource &memory, const module::ModuleImage &module)
         : memory_(&memory), module_(module)
@@ -250,4 +250,4 @@ namespace anduefker::analyzer
         const auto hits = FindAllRawDataInRange(data, dataSize, start, range, 1);
         return hits.empty() ? 0 : hits.front();
     }
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

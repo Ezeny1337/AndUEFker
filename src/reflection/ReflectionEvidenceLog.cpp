@@ -7,9 +7,9 @@
 #include <tuple>
 #include <unordered_set>
 
-#include "anduefker/ue/FunctionSemantics.hpp"
+#include "nextdumper/ue/FunctionSemantics.hpp"
 
-namespace anduefker::reflection::detail
+namespace nextdumper::reflection::detail
 {
     using ir::ParseStatus;
     using ir::PropertyIR;
@@ -151,7 +151,7 @@ namespace anduefker::reflection::detail
                          << " root=" << std::quoted(property.name) << " root_address=" << property.address
                          << " path=" << path << " node=" << reference.metadataAddress
                          << " class=" << reference.reflectedClass
-                         << " storage_kind=" << ::anduefker::ir::DelegateStorageKindName(reference.delegateStorage)
+                         << " storage_kind=" << ::nextdumper::ir::DelegateStorageKindName(reference.delegateStorage)
                          << " signature=" << reference.referencedObject
                          << " details_resolved=" << reference.detailsResolved;
                     diagnostic(line.str());
@@ -181,7 +181,7 @@ namespace anduefker::reflection::detail
                                 function.headerReadable && function.parameterSemanticsConsistent && function.parameterSemanticsValid &&
                                 function.status == ParseStatus::Complete && function.layoutConflicts.empty() &&
                                 function.entryReadable && function.entryExecutable && function.entryInModule &&
-                                function.nativeFlag == ((function.flags & ::anduefker::ue::kFUNCNative) != 0) &&
+                                function.nativeFlag == ((function.flags & ::nextdumper::ue::kFUNCNative) != 0) &&
                                 function.nativeExecRva.has_value() == function.nativeFlag;
             bool emitEntry = true;
             if (normal)
@@ -229,7 +229,7 @@ namespace anduefker::reflection::detail
                     line << " consistent=0";
                 if (!function.parameterSemanticsValid)
                     line << " semantics_valid=0";
-                if (function.nativeFlag != ((function.flags & ::anduefker::ue::kFUNCNative) != 0))
+                if (function.nativeFlag != ((function.flags & ::nextdumper::ue::kFUNCNative) != 0))
                     line << " native=" << function.nativeFlag;
                 if (function.nativeExecRva.has_value() !=
                     (function.nativeFlag && function.entryInModule && function.entryExecutable))
@@ -289,7 +289,7 @@ namespace anduefker::reflection::detail
                  << " read_error=" << observation.readError << " requested=" << observation.requested
                  << " transferred=" << observation.transferred
                  << " status=" << observation.status << " basis=" << std::quoted(observation.basis)
-                 << " allocator=" << ::anduefker::ir::ContainerAllocatorKindName(observation.storage.allocator)
+                 << " allocator=" << ::nextdumper::ir::ContainerAllocatorKindName(observation.storage.allocator)
                  << " allocator_status=" << observation.storage.allocatorStatus
                  << " header_status=" << observation.storage.headerStatus
                  << " element_layout_status=" << observation.storage.layoutStatus
@@ -315,4 +315,4 @@ namespace anduefker::reflection::detail
                 diagnostic("enum_diagnostic owner=" + enumeration.fullName + " address=" + std::to_string(enumeration.address) + " message=" + message);
     }
 
-} // namespace anduefker::reflection::detail
+} // namespace nextdumper::reflection::detail

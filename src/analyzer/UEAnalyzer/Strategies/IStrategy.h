@@ -14,7 +14,7 @@
 #include "../Core/Layout.h"
 #include "../Core/Scoring.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -203,4 +203,4 @@ namespace anduefker::analyzer
 
 	using StrategyPtr = std::unique_ptr<IStrategy>;
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

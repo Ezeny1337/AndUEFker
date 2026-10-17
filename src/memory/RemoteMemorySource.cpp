@@ -1,10 +1,10 @@
-#include "anduefker/memory/RemoteMemorySource.hpp"
+#include "nextdumper/memory/RemoteMemorySource.hpp"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
 
-namespace anduefker::memory
+namespace nextdumper::memory
 {
     namespace
     {
@@ -233,4 +233,4 @@ namespace anduefker::memory
             PutCached(address, static_cast<const uint8_t *>(buffer), size);
         return result;
     }
-} // namespace anduefker::memory
+} // namespace nextdumper::memory

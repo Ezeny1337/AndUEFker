@@ -9,11 +9,11 @@
 #include <unordered_map>
 #include <utility>
 
-#include "anduefker/generation/JsonExport.hpp"
-#include "anduefker/ir/ReflectionLayout.hpp"
-#include "anduefker/ue/ContainerLayout.hpp"
+#include "nextdumper/generation/JsonExport.hpp"
+#include "nextdumper/ir/ReflectionLayout.hpp"
+#include "nextdumper/ue/ContainerLayout.hpp"
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
     using ir::EnumIR;
     using ir::EnumUnderlyingType;
@@ -36,12 +36,12 @@ namespace anduefker::generation::detail
         stream << "\n";
         for (const auto &evidence : identity.evidence)
             stream << "// Version evidence: " << evidence.kind << "=" << evidence.observed
-                   << " [" << ::anduefker::ue::VersionEvidenceStrengthName(evidence.strength) << "]\n";
+                   << " [" << ::nextdumper::ue::VersionEvidenceStrengthName(evidence.strength) << "]\n";
         stream << "// Capture observations stable: " << (reflection_.capture.observationsStable ? "yes" : "no")
                << "; changed ranges: " << reflection_.capture.changedRanges
                << "; read failures: " << reflection_.capture.readFailures << ".\n";
         stream << "// Target pointer width: " << static_cast<unsigned int>(module_.pointerWidth) << " bytes.\n";
-        stream << "namespace AndUE\n{\n";
+        stream << "namespace NextDumper\n{\n";
         stream << "struct FName { std::uint8_t Data[" << schema_.fname.size << "]; };\n";
         const char *targetPointer = module_.pointerWidth == 8 ? "std::uint64_t" : "std::uint32_t";
         stream << "using TargetAddress = " << targetPointer << ";\n";
@@ -66,7 +66,7 @@ namespace anduefker::generation::detail
         }
         for (const auto &[kind, name] : {std::pair{PropertyKind::Array, "FHeapArrayLayout"},
                                          std::pair{PropertyKind::Set, "FHeapSparseSetLayout"}})
-            if (const auto layout = ::anduefker::ue::DescribeHeapContainer(kind, module_.pointerWidth))
+            if (const auto layout = ::nextdumper::ue::DescribeHeapContainer(kind, module_.pointerWidth))
             {
                 stream << "struct " << name << " // " << layout->id << "\n{\n";
                 stream << "    static constexpr std::size_t size = " << layout->size << ";\n";
@@ -77,7 +77,7 @@ namespace anduefker::generation::detail
             }
         for (const auto &[kind, name] : {std::pair{PropertyKind::Array, "FMemoryImageArrayLayout"},
                                          std::pair{PropertyKind::Set, "FMemoryImageSparseSetLayout"}})
-            if (const auto layout = ::anduefker::ue::DescribeMemoryImageContainer(kind, module_.pointerWidth))
+            if (const auto layout = ::nextdumper::ue::DescribeMemoryImageContainer(kind, module_.pointerWidth))
             {
                 stream << "struct " << name << " // candidate encodings: UE4 shift-1 or UE5 packed-offset-40\n{\n";
                 stream << "    static constexpr std::size_t size = " << layout->size
@@ -426,11 +426,11 @@ namespace anduefker::generation::detail
         stream << "#pragma once\n#include <cstdint>\n\n";
         stream << "// Runtime-resolved metadata offsets, not complete native C++ object layouts.\n";
         stream << "// A value of -1 means that the member offset was not resolved for this target.\n";
-        stream << "// Layout profile: " << ::anduefker::ue::SchemaLayoutVariantName(schema_.layout) << ".\n";
-        stream << "namespace AndUE::Engine\n{\n";
+        stream << "// Layout profile: " << ::nextdumper::ue::SchemaLayoutVariantName(schema_.layout) << ".\n";
+        stream << "namespace NextDumper::Engine\n{\n";
         stream << "inline constexpr const char *LayoutProfileId = \"" << EscapeJson(schema_.validation.profileId) << "\";\n";
         stream << "inline constexpr const char *LayoutVariant = \""
-               << ::anduefker::ue::SchemaLayoutVariantName(schema_.layout) << "\";\n";
+               << ::nextdumper::ue::SchemaLayoutVariantName(schema_.layout) << "\";\n";
         stream << "inline constexpr std::uint8_t TargetPointerWidth = "
                << static_cast<unsigned int>(module_.pointerWidth) << ";\n\n";
         stream << "inline constexpr bool UsesFProperty = " << (schema_.features.useFProperty ? "true" : "false") << ";\n";
@@ -439,14 +439,14 @@ namespace anduefker::generation::detail
         stream << "inline constexpr bool OutlineNumberName = " << (schema_.features.outlineNumberName ? "true" : "false") << ";\n";
         stream << "inline constexpr bool LargeWorldCoordinates = " << (schema_.features.largeWorldCoordinates ? "true" : "false") << ";\n";
         stream << "inline constexpr bool TaggedFFieldOwner = "
-               << (schema_.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer ? "true" : "false")
+               << (schema_.features.fFieldOwnerEncoding == ::nextdumper::ue::FFieldOwnerEncoding::TaggedPointer ? "true" : "false")
                << ";\n\n";
         stream << "inline constexpr bool FNameNumberOutlined = "
-               << (schema_.fname.numberLayout == ::anduefker::ue::FNameNumberLayout::Outlined ? "true" : "false") << ";\n";
+               << (schema_.fname.numberLayout == ::nextdumper::ue::FNameNumberLayout::Outlined ? "true" : "false") << ";\n";
         stream << "inline constexpr bool FNameDisplayBeforeNumber = "
-               << (schema_.fname.displayLayout == ::anduefker::ue::FNameDisplayLayout::BeforeNumber ? "true" : "false") << ";\n";
+               << (schema_.fname.displayLayout == ::nextdumper::ue::FNameDisplayLayout::BeforeNumber ? "true" : "false") << ";\n";
         stream << "inline constexpr bool FNameDisplayAfterNumber = "
-               << (schema_.fname.displayLayout == ::anduefker::ue::FNameDisplayLayout::AfterNumber ? "true" : "false") << ";\n\n";
+               << (schema_.fname.displayLayout == ::nextdumper::ue::FNameDisplayLayout::AfterNumber ? "true" : "false") << ";\n\n";
 
         writeLayout("FName", {{"Size", schema_.fname.size},
                               {"ComparisonIndex", schema_.fname.comparisonIndex},
@@ -459,7 +459,7 @@ namespace anduefker::generation::detail
                                 {"Name", schema_.uobject.name},
                                 {"Outer", schema_.uobject.outer}});
         writeLayout("UField", {{"Next", schema_.ufield.next}});
-        if (schema_.family == ::anduefker::ue::EngineFamily::UE5FProperty)
+        if (schema_.family == ::nextdumper::ue::EngineFamily::UE5FProperty)
         {
             writeLayout("FField", {{"VTable", schema_.ffield.vtable},
                                    {"Class", schema_.ffield.classPointer},
@@ -526,7 +526,7 @@ namespace anduefker::generation::detail
 
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include \"BasicTypes.hpp\"\n#include \"Enums.hpp\"\n\n";
         stream << "// Sizes and offsets describe target memory, not native C++ layout.\n";
-        stream << "namespace AndUE\n{\n";
+        stream << "namespace NextDumper\n{\n";
         for (const TypeIR &type : reflection_.types)
             stream << "struct " << types.at(type.address).name << ";\n";
         if (!reflection_.types.empty())
@@ -575,7 +575,7 @@ namespace anduefker::generation::detail
     void SdkEmitter::Functions(std::ostream &stream, const CppSymbols &symbols, GenerationReport &report) const
     {
         stream << "#pragma once\n#include <cstddef>\n#include <cstdint>\n#include \"Types.hpp\"\n\n";
-        stream << "namespace AndUE\n{\n";
+        stream << "namespace NextDumper\n{\n";
         if (reflection_.stats.parsedFunctions == 0)
             stream << "// No UFunction metadata was resolved in this dump.\n";
         stream << "// RVAs describe reflected execution entries, not original C++ business implementations.\n";
@@ -616,7 +616,7 @@ namespace anduefker::generation::detail
 
     void SdkEmitter::Enums(std::ostream &stream, const CppSymbols &symbols) const
     {
-        stream << "#pragma once\n#include <cstdint>\n\nnamespace AndUE\n{\n";
+        stream << "#pragma once\n#include <cstdint>\n\nnamespace NextDumper\n{\n";
         if (reflection_.enums.empty())
             stream << "// No UEnum metadata was resolved in this dump.\n";
         for (const EnumIR &enumeration : reflection_.enums)
@@ -642,4 +642,4 @@ namespace anduefker::generation::detail
         stream << "}\n";
     }
 
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

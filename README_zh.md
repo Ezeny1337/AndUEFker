@@ -1,4 +1,4 @@
-# AndUEFker
+# NextDumper
 
 > 面向 Android 的 Unreal Engine 运行时反射与 SDK 生成工具。
 
@@ -6,11 +6,11 @@
 [![Build system](https://img.shields.io/badge/build-CMake%20%7C%20Ninja-064F8C?logo=cmake&logoColor=white)](https://cmake.org/)
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![License](https://img.shields.io/badge/license-MIT-yellow)](https://choosealicense.com/licenses/mit/)
-[![Release](https://img.shields.io/github/v/release/Ezeny1337/AndUEFker?label=release&color=green)](https://github.com/Ezeny1337/AndUEFker/releases/)
+[![Release](https://img.shields.io/github/v/release/Ezeny1337/NextDumper?label=release&color=green)](https://github.com/Ezeny1337/NextDumper/releases/)
 
 [English](README.md)
 
-AndUEFker 可以从正在运行的 Android 进程中发现 Unreal Engine 的运行时结构，验证对象表与名称存储，解析反射 Schema，并为开发者和逆向分析工具生成 C++ 描述及机器可读的反射元数据。
+NextDumper 可以从正在运行的 Android 进程中发现 Unreal Engine 的运行时结构，验证对象表与名称存储，解析反射 Schema，并为开发者和逆向分析工具生成 C++ 描述及机器可读的反射元数据。
 
 它不依赖单一硬编码布局，而是结合二进制分析、运行时探针、交叉验证和反射数据，在读取对象图之前先建立经过验证的运行时绑定。
 
@@ -60,27 +60,27 @@ Schema profile 覆盖 UE 4.23–4.27 和 5.0–5.6 的布局族，选择结果�
 
 ## 游戏适配与兼容性诊断
 
-编译期 profile 是当前游戏专有适配入口。开发者在 `include/anduefker/compat/GameProfile.hpp` 定义的 `IGameProfile` 上派生实现，并在 `src/compat/GameProfiles.cpp` 注册实例；没有匹配 profile 时程序保持现有自动探测与 identity 解码行为。
+编译期 profile 是当前游戏专有适配入口。开发者在 `include/nextdumper/compat/GameProfile.hpp` 定义的 `IGameProfile` 上派生实现，并在 `src/compat/GameProfiles.cpp` 注册实例；没有匹配 profile 时程序保持现有自动探测与 identity 解码行为。
 
 最小 profile 形态如下。可将类放入单独的头文件并由 `GameProfiles.cpp` 包含，再在 `CreateGameProfiles()` 工厂中加入实例；若实现需要独立 `.cpp`，还需将它加入 `CMakeLists.txt`：
 
 ```cpp
-class ExampleGameProfile final : public anduefker::compat::IGameProfile
+class ExampleGameProfile final : public nextdumper::compat::IGameProfile
 {
 public:
     std::string_view Id() const override { return "example-game"; }
 
     bool Matches(std::string_view packageName,
-                 const anduefker::module::ModuleImage &module) const override
+                 const nextdumper::module::ModuleImage &module) const override
     {
         return packageName == "com.example.game" && module.pointerWidth == 8;
     }
 
-    anduefker::binding::DecodePlan MakeDecodePlan(
-        const anduefker::memory::IMemorySource &,
-        const anduefker::module::ModuleImage &) const override
+    nextdumper::binding::DecodePlan MakeDecodePlan(
+        const nextdumper::memory::IMemorySource &,
+        const nextdumper::module::ModuleImage &) const override
     {
-        auto decode = anduefker::binding::DecodePlan::Identity();
+        auto decode = nextdumper::binding::DecodePlan::Identity();
         // 只覆盖已通过目标样本验证的字段解码器。
         return decode;
     }
@@ -100,7 +100,7 @@ public:
 
 `Matches()` 应使用明确的包名及模块/ABI 条件；当前模块身份不是内容哈希，因此包名匹配不能证明目标二进制与逆向样本完全相同。profile 只能通过只读 `IMemorySource` 读取目标数据。解码回调随 `RuntimeSession` 中的 profile 和绑定共同存活，不能捕获短生命周期对象。
 
-每次运行会在输出目录生成 `AndUEFker_时间戳.diagnosis.json`，即使流程在绑定或 Schema 阶段提前结束也会尝试写入。报告包含包名、模块名、架构和指针宽度，并将运行状态与兼容性结论分开；findings 提供稳定的 domain、code、stage、confidence、summary 和 next action：
+每次运行会在输出目录生成 `NextDumper_时间戳.diagnosis.json`，即使流程在绑定或 Schema 阶段提前结束也会尝试写入。报告包含包名、模块名、架构和指针宽度，并将运行状态与兼容性结论分开；findings 提供稳定的 domain、code、stage、confidence、summary 和 next action：
 
 - 进程、内存访问、模块或输出失败记录为 `runtime` 问题；兼容性仍为 `not-evaluated` 或保留已完成的兼容性结论。
 - 没有 profile 时，根绑定失败记录为 `ROOT_BINDING_NOT_VALIDATED`；它只指出根、布局或解码未通过验证，不宣称检测到加密。
@@ -145,7 +145,7 @@ chmod +x build.sh
 ./build.sh --mode debug --abi armeabi-v7a --jobs 4
 ```
 
-脚本构建默认生成 `build/android-<abi>-<mode>/AndUEFker`。使用 `--build-dir` 指定构建目录，或使用 `--no-strip` 保留 release 符号。
+脚本构建默认生成 `build/android-<abi>-<mode>/NextDumper`。使用 `--build-dir` 指定构建目录，或使用 `--no-strip` 保留 release 符号。
 
 ### 直接使用 CMake 配置与构建
 
@@ -156,7 +156,7 @@ cmake -S . -B build/android-arm64-release -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-29 \
-  -DANDUEFKER_ENABLE_THINLTO=ON \
+  -DNEXTDUMPER_ENABLE_THINLTO=ON \
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build/android-arm64-release --parallel
@@ -165,13 +165,13 @@ cmake --build build/android-arm64-release --parallel
 可执行文件位于：
 
 ```text
-build/android-arm64-release/AndUEFker
+build/android-arm64-release/NextDumper
 ```
 
 ## 使用方法
 
 ```text
-AndUEFker -o <输出目录> -p <包名>
+NextDumper -o <输出目录> -p <包名>
 ```
 
 在 Android 设备上运行工具，并保持目标进程运行。工具需要读取目标进程内存和写入输出目录的权限，不会绕过平台访问限制。
@@ -192,8 +192,8 @@ AndUEFker -o <输出目录> -p <包名>
 ### 示例
 
 ```bash
-./AndUEFker \
-  --output /storage/emulated/0/AndUEFker-output \
+./NextDumper \
+  --output /storage/emulated/0/NextDumper-output \
   --package com.example.game
 ```
 
@@ -219,8 +219,8 @@ AndUEFker -o <输出目录> -p <包名>
 输出目录本身还会保存本次运行日志：
 
 ```text
-<输出目录>/AndUEFker_YYYYMMDDHHMMSS.log
-<输出目录>/AndUEFker_YYYYMMDDHHMMSS.diagnosis.json
+<输出目录>/NextDumper_YYYYMMDDHHMMSS.log
+<输出目录>/NextDumper_YYYYMMDDHHMMSS.diagnosis.json
 ```
 
 时间戳（从年到秒）在会话启动时按本地时间生成，因此每次运行都会尝试写入独立的日志和兼容性诊断文件。即使运行在 SDK 产物生成前失败，也会保留阶段诊断。如果目标目录已存在同名产物目录，将执行覆盖：先删除旧目录，再由临时目录提交生成新目录。
@@ -241,7 +241,7 @@ AndUEFker -o <输出目录> -p <包名>
 | `diagnostics.json` | 反射与生成诊断、计数及共用证据引用。 |
 | `runtime.json` | 运行时模块、绑定布局、Schema 偏移和常用对象地址。 |
 
-生成的头文件使用 `AndUE` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
+生成的头文件使用 `NextDumper` 命名空间，用于开发者阅读目标内存结构、开发游戏分析工具，以及辅助 IDA/Ghidra 分析。反射得到的大小、偏移、掩码和引用关系是依据，C++ 声明用于描述目标布局。
 
 SDK 不是可直接调用的运行库，不保证 native C++ ABI 兼容；应使用反射元数据，而非 `sizeof`/`offsetof`。执行入口 RVA 不保证对应原始 C++ 业务实现。
 
@@ -249,7 +249,7 @@ SDK 不是可直接调用的运行库，不保证 native C++ ABI 兼容；应使
 
 ### IDA 导入
 
-在 IDA 中运行 `tools/ida/anduefker_import.py` 并选择 AndUEFker 产物目录。导入器会在产物旁生成 `AndUEFker_IDA_types.h`，将反射类型的字节布局描述导入 IDA 本地类型库，并为符合条件的模块内执行入口 RVA 添加名称和可重复注释。它不会把运行时堆地址应用到静态镜像，也不会自动创建函数。底层值超出 32 位 C 枚举范围的枚举会保留在 `reflection.json` 中，但不会写入生成的 IDA 头文件。
+在 IDA 中运行 `tools/ida/nextdumper_import.py` 并选择 NextDumper 产物目录。导入器会在产物旁生成 `NextDumper_IDA_types.h`，将反射类型的字节布局描述导入 IDA 本地类型库，并为符合条件的模块内执行入口 RVA 添加名称和可重复注释。它不会把运行时堆地址应用到静态镜像，也不会自动创建函数。底层值超出 32 位 C 枚举范围的枚举会保留在 `reflection.json` 中，但不会写入生成的 IDA 头文件。
 
 产物不包含目标二进制的内容哈希。应用 RVA 标注前，请确认 IDA 当前打开的文件与本次采集所用镜像完全匹配。
 
@@ -272,7 +272,7 @@ CheatManager
 
 ## 验证与状态
 
-AndUEFker 会在绑定、Schema 解析、反射采集和 SDK 生成阶段记录以下证据：
+NextDumper 会在绑定、Schema 解析、反射采集和 SDK 生成阶段记录以下证据：
 
 - 对象和名称候选数量；
 - 选中的容器布局及探针评分；
@@ -300,12 +300,12 @@ JSON 产物保留完整字段元数据。日志保留诊断汇总、有界正常
 
 ## Issue
 
-遇到可复现的目标识别、绑定、Schema、反射或产物生成问题时，请提交 [Issue](https://github.com/Ezeny1337/AndUEFker/issues)。建议包含：
+遇到可复现的目标识别、绑定、Schema、反射或产物生成问题时，请提交 [Issue](https://github.com/Ezeny1337/NextDumper/issues)。建议包含：
 
 1. 使用的 commit 或 release。
 2. Android 版本、设备 ABI，以及已知的目标 Unreal Engine 信息。
 3. 执行命令；必要时请先隐藏包名或其他敏感值。
-4. 相关的带时间戳 `AndUEFker_*.log` 日志片段。
+4. 相关的带时间戳 `NextDumper_*.log` 日志片段。
 5. 可提供时附上 `manifest.json`、`diagnostics.json` 和 `runtime.json`。
 6. 简洁的问题复现步骤和预期结果。
 
@@ -313,7 +313,7 @@ JSON 产物保留完整字段元数据。日志保留诊断汇总、有界正常
 
 ## 免责声明
 
-AndUEFker 仅面向获得授权的研究、调试、互操作和开发用途。使用者应自行确保拥有检查目标进程的合法授权，并遵守适用法律、许可证、平台规则和软件服务条款。不同引擎版本、分支、构建配置和 Shipping 进程之间的运行时布局可能存在差异；绑定成功不代表每个生成字段或函数都完整，也不代表生成代码适合直接用于生产环境。本项目按现状提供，不作任何明示或默示保证；因使用、误用或无法使用本项目造成的损坏、数据丢失、服务中断或其他后果，维护者不承担责任。
+NextDumper 仅面向获得授权的研究、调试、互操作和开发用途。使用者应自行确保拥有检查目标进程的合法授权，并遵守适用法律、许可证、平台规则和软件服务条款。不同引擎版本、分支、构建配置和 Shipping 进程之间的运行时布局可能存在差异；绑定成功不代表每个生成字段或函数都完整，也不代表生成代码适合直接用于生产环境。本项目按现状提供，不作任何明示或默示保证；因使用、误用或无法使用本项目造成的损坏、数据丢失、服务中断或其他后果，维护者不承担责任。
 
 ## 许可证
 

@@ -4,7 +4,7 @@
 #include "NameStrategy.h"
 #include "ObjObjectsStrategy.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	// Nothing here but construction: a strategy carries its own anchors, its own
@@ -26,4 +26,4 @@ namespace anduefker::analyzer
 		return std::make_unique<NameStrategy>();
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

@@ -1,10 +1,10 @@
-#include "anduefker/binding/BindingBuilder.hpp"
+#include "nextdumper/binding/BindingBuilder.hpp"
 
 #include <algorithm>
 
-#include "anduefker/ue/SchemaResolver.hpp"
+#include "nextdumper/ue/SchemaResolver.hpp"
 
-namespace anduefker::binding
+namespace nextdumper::binding
 {
     namespace
     {
@@ -327,4 +327,4 @@ namespace anduefker::binding
                      " semantic_rejections=" + std::to_string(semanticRejections));
         return bestBinding;
     }
-} // namespace anduefker::binding
+} // namespace nextdumper::binding

@@ -9,7 +9,7 @@
 #include "LiteralScanner.h"
 #include "StringAnchors.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	namespace
 	{
@@ -117,4 +117,4 @@ namespace anduefker::analyzer
 		return Kind;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

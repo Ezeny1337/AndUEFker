@@ -1,10 +1,10 @@
-#include "anduefker/ue/ContainerLayout.hpp"
-#include "anduefker/ue/StorageLayout.hpp"
+#include "nextdumper/ue/ContainerLayout.hpp"
+#include "nextdumper/ue/StorageLayout.hpp"
 
 #include <algorithm>
 #include <cstring>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     std::optional<ContainerLayoutDescription> DescribeHeapContainer(ir::PropertyKind kind, int32_t pointerWidth)
     {
@@ -228,4 +228,4 @@ namespace anduefker::ue
             storage.headerStatus = "element-layout-mismatch";
         }
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

@@ -1,8 +1,8 @@
-#include "anduefker/ue/EngineVersion.hpp"
+#include "nextdumper/ue/EngineVersion.hpp"
 
 #include <cctype>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     std::string EngineVersion::ToString() const
     {
@@ -39,4 +39,4 @@ namespace anduefker::ue
             result.patch = 0;
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

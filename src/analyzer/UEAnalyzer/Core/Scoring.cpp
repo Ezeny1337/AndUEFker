@@ -5,7 +5,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	namespace Scoring
@@ -111,4 +111,4 @@ namespace anduefker::analyzer
 
 	} // namespace Scoring
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

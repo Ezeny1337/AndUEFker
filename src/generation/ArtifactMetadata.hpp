@@ -2,10 +2,10 @@
 
 #include <iosfwd>
 
-#include "anduefker/generation/ArtifactWriter.hpp"
+#include "nextdumper/generation/ArtifactWriter.hpp"
 #include "GenerationReport.hpp"
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
     // 纯序列化接口，只消费已生成的报告，不触发目标进程读取
     [[nodiscard]] std::string ManifestJson(const RuntimeContext &context, const ReflectionIR &reflection,
@@ -16,4 +16,4 @@ namespace anduefker::generation::detail
     [[nodiscard]] std::string RuntimeJson(const RuntimeContext &context);
     void ReflectionJson(std::ostream &stream, const RuntimeContext &context, const ReflectionIR &reflection,
                         const GenerationReport &report, const CppSymbols &symbols);
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

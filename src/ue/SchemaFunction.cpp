@@ -1,5 +1,5 @@
 #include "ProbeContext.hpp"
-#include "anduefker/ue/FunctionSemantics.hpp"
+#include "nextdumper/ue/FunctionSemantics.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     bool SchemaProbeContext::ResolveFunctionSchema(EngineSchema &schema, SchemaResolutionReport &report) const
     {
@@ -866,4 +866,4 @@ namespace anduefker::ue::schema_probe
         return true;
     }
 
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

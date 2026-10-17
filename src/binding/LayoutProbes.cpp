@@ -1,4 +1,4 @@
-#include "anduefker/binding/LayoutProbes.hpp"
+#include "nextdumper/binding/LayoutProbes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -6,7 +6,7 @@
 #include <limits>
 #include <optional>
 
-namespace anduefker::binding
+namespace nextdumper::binding
 {
     namespace
     {
@@ -419,4 +419,4 @@ namespace anduefker::binding
         }
         return report;
     }
-} // namespace anduefker::binding
+} // namespace nextdumper::binding

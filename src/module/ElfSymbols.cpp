@@ -1,4 +1,4 @@
-#include "anduefker/module/ElfSymbols.hpp"
+#include "nextdumper/module/ElfSymbols.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -8,7 +8,7 @@
 
 #include <KittyScanner.hpp>
 
-namespace anduefker::module
+namespace nextdumper::module
 {
     namespace
     {

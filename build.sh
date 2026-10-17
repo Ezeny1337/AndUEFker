@@ -125,27 +125,27 @@ CONFIGURE_ARGS=(
     "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN_FILE"
     "-DANDROID_ABI=$ABI"
     -DANDROID_PLATFORM=android-29
-    -DANDUEFKER_ENABLE_THINLTO=ON
+    -DNEXTDUMPER_ENABLE_THINLTO=ON
 )
 
 case "$MODE" in
     verify)
         CONFIGURE_ARGS+=(
             -DCMAKE_BUILD_TYPE=Release
-            -DANDUEFKER_OPTIMIZE_FOR_SIZE=OFF
+            -DNEXTDUMPER_OPTIMIZE_FOR_SIZE=OFF
         )
         ;;
     release)
         CONFIGURE_ARGS+=(
             -DCMAKE_BUILD_TYPE=Release
-            -DANDUEFKER_OPTIMIZE_FOR_SIZE=ON
-            -DANDUEFKER_DISABLE_NDEBUG=ON
+            -DNEXTDUMPER_OPTIMIZE_FOR_SIZE=ON
+            -DNEXTDUMPER_DISABLE_NDEBUG=ON
         )
         ;;
     debug)
         CONFIGURE_ARGS+=(
             -DCMAKE_BUILD_TYPE=Debug
-            -DANDUEFKER_FORCE_NDEBUG=ON
+            -DNEXTDUMPER_FORCE_NDEBUG=ON
         )
         ;;
 esac
@@ -156,7 +156,7 @@ cmake "${CONFIGURE_ARGS[@]}"
 printf 'Building with %s parallel job(s)\n' "$JOBS"
 cmake --build "$BUILD_DIR" --parallel "$JOBS"
 
-ARTIFACT="$BUILD_DIR/AndUEFker"
+ARTIFACT="$BUILD_DIR/NextDumper"
 [[ -x "$ARTIFACT" ]] || die "build completed but artifact was not found: $ARTIFACT"
 
 if [[ "$MODE" == release && "$STRIP_RELEASE" == 1 ]]; then

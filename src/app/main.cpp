@@ -4,7 +4,7 @@
 #include <utility>
 #include <exception>
 
-#include "anduefker/app/RuntimeSession.hpp"
+#include "nextdumper/app/RuntimeSession.hpp"
 
 namespace
 {
@@ -24,7 +24,7 @@ namespace
 int main(int argc, char **argv)
 try
 {
-    anduefker::app::RuntimeSessionConfig config;
+    nextdumper::app::RuntimeSessionConfig config;
 
     bool hasOutput = false;
     bool hasPackage = false;
@@ -77,7 +77,7 @@ try
         return 2;
     }
 
-    anduefker::app::RuntimeSession session(std::move(config));
+    nextdumper::app::RuntimeSession session(std::move(config));
     const auto status = session.Run();
 
     std::printf("\n=== Session Summary ===\n");
@@ -98,10 +98,10 @@ try
     if (!session.Artifacts().outputPath.empty())
         std::printf("\nOutput: %s\n", session.Artifacts().outputPath.string().c_str());
 
-    if (status == anduefker::app::RuntimeSessionStatus::ReflectionReady)
+    if (status == nextdumper::app::RuntimeSessionStatus::ReflectionReady)
         return 0;
-    if (status == anduefker::app::RuntimeSessionStatus::ReflectionPartial ||
-        status == anduefker::app::RuntimeSessionStatus::ArtifactPartial)
+    if (status == nextdumper::app::RuntimeSessionStatus::ReflectionPartial ||
+        status == nextdumper::app::RuntimeSessionStatus::ArtifactPartial)
         return 3;
     return 1;
 }

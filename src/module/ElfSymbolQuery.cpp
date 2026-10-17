@@ -1,10 +1,10 @@
-#include "anduefker/module/ElfSymbols.hpp"
+#include "nextdumper/module/ElfSymbols.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 
-namespace anduefker::module
+namespace nextdumper::module
 {
     namespace
     {

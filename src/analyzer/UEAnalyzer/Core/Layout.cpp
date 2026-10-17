@@ -1,6 +1,6 @@
 #include "Layout.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	const char *EVerdictToString(EVerdict Verdict)
@@ -19,4 +19,4 @@ namespace anduefker::analyzer
 		return "unknown";
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

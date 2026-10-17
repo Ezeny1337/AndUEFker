@@ -1,12 +1,12 @@
-#include "anduefker/module/ModuleCatalog.hpp"
+#include "nextdumper/module/ModuleCatalog.hpp"
 
 #include <elf.h>
 
-#include "anduefker/memory/RemoteMemorySource.hpp"
+#include "nextdumper/memory/RemoteMemorySource.hpp"
 
-namespace anduefker::module
+namespace nextdumper::module
 {
-    using ::anduefker::memory::RemoteMemorySource;
+    using ::nextdumper::memory::RemoteMemorySource;
 
     namespace
     {
@@ -61,4 +61,4 @@ namespace anduefker::module
         return false;
     }
 
-} // namespace anduefker::module
+} // namespace nextdumper::module

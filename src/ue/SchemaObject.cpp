@@ -4,7 +4,7 @@
 #include <array>
 #include <unordered_set>
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     std::optional<uintptr_t> SchemaProbeContext::FindObjectByName(const EngineSchema &schema,
                                                                   const std::string &name) const
@@ -767,4 +767,4 @@ namespace anduefker::ue::schema_probe
             report.failures.push_back("UObject names, class identities and outers did not agree with the object store");
         return accepted;
     }
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

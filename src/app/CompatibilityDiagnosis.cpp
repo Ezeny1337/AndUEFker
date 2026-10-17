@@ -1,9 +1,9 @@
-#include "anduefker/app/CompatibilityDiagnosis.hpp"
+#include "nextdumper/app/CompatibilityDiagnosis.hpp"
 
 #include <sstream>
 #include <utility>
 
-namespace anduefker::app
+namespace nextdumper::app
 {
     namespace
     {
@@ -133,4 +133,4 @@ namespace anduefker::app
         stream << "]\n}\n";
         return stream.str();
     }
-} // namespace anduefker::app
+} // namespace nextdumper::app

@@ -1,8 +1,8 @@
-#include "anduefker/ue/StorageLayout.hpp"
+#include "nextdumper/ue/StorageLayout.hpp"
 
 #include <algorithm>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     std::vector<StorageLayoutDescription> ValueStorageCandidates(
         const ir::TypeReferenceIR &reference, int32_t pointerWidth, int32_t nameSize)
@@ -154,4 +154,4 @@ namespace anduefker::ue
             result.typeIndex = static_cast<int32_t>((raw >> 1) & 0x7FFFFFu) - 1;
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

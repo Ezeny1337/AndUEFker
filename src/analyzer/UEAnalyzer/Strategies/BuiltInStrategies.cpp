@@ -4,7 +4,7 @@
 #include "NameStrategy.h"
 #include "ObjObjectsStrategy.h"
 
-namespace anduefker::analyzer::Targets
+namespace nextdumper::analyzer::Targets
 {
 	std::vector<StrategyPtr> CreateAll()
 	{
@@ -14,4 +14,4 @@ namespace anduefker::analyzer::Targets
 		Out.push_back(MakeGUObjectArrayStrategy());
 		return Out;
 	}
-} // namespace anduefker::analyzer::Targets
+} // namespace nextdumper::analyzer::Targets

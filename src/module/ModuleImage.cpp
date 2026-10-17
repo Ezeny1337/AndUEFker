@@ -1,6 +1,6 @@
-#include "anduefker/module/ModuleImage.hpp"
+#include "nextdumper/module/ModuleImage.hpp"
 
-namespace anduefker::module
+namespace nextdumper::module
 {
     bool ModuleImage::IsExecutable(uintptr_t address, size_t size) const
     {
@@ -27,4 +27,4 @@ namespace anduefker::module
         }
         return false;
     }
-} // namespace anduefker::module
+} // namespace nextdumper::module

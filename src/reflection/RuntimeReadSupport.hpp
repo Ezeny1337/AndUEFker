@@ -3,10 +3,10 @@
 #include <algorithm>
 #include <cstring>
 
-#include "anduefker/memory/CaptureMemorySource.hpp"
-#include "anduefker/ue/ContainerLayout.hpp"
+#include "nextdumper/memory/CaptureMemorySource.hpp"
+#include "nextdumper/ue/ContainerLayout.hpp"
 
-namespace anduefker::reflection::detail
+namespace nextdumper::reflection::detail
 {
     inline std::optional<uintptr_t> Add(uintptr_t address, uint64_t offset)
     {
@@ -74,4 +74,4 @@ namespace anduefker::reflection::detail
         return result;
     }
 
-} // namespace anduefker::reflection::detail
+} // namespace nextdumper::reflection::detail

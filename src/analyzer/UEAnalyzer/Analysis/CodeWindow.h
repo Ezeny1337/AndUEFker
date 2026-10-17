@@ -6,7 +6,7 @@
 
 class IMemory;
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -86,4 +86,4 @@ namespace anduefker::analyzer
 		size_t Valid_ = 0;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

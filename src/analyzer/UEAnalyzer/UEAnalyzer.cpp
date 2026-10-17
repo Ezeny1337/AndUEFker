@@ -16,7 +16,7 @@
 #include "Analysis/TCharDetect.h"
 #include "Strategies/IStrategy.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	namespace
 	{
@@ -689,4 +689,4 @@ namespace anduefker::analyzer
 		return Result;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

@@ -18,7 +18,7 @@
 
 class IArchDecoder;
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	class GlobalAccessHarvester;
@@ -235,4 +235,4 @@ namespace anduefker::analyzer
 		mutable std::vector<AnchorTrace> Traces_;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

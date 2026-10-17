@@ -18,7 +18,7 @@
 
 class IArchDecoder;
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -348,4 +348,4 @@ namespace anduefker::analyzer
 		std::shared_ptr<Analysis> State_;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

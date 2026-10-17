@@ -86,8 +86,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI="$ANDROID_ABI" \
             -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
-            -DANDUEFKER_ENABLE_THINLTO=ON \
-            -DANDUEFKER_OPTIMIZE_FOR_SIZE=OFF \
+            -DNEXTDUMPER_ENABLE_THINLTO=ON \
+            -DNEXTDUMPER_OPTIMIZE_FOR_SIZE=OFF \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -151,9 +151,9 @@ jobs:
             -DANDROID_ABI="$ANDROID_ABI" \
             -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DANDUEFKER_ENABLE_THINLTO=ON \
-            -DANDUEFKER_OPTIMIZE_FOR_SIZE=ON \
-            -DANDUEFKER_DISABLE_NDEBUG=ON
+            -DNEXTDUMPER_ENABLE_THINLTO=ON \
+            -DNEXTDUMPER_OPTIMIZE_FOR_SIZE=ON \
+            -DNEXTDUMPER_DISABLE_NDEBUG=ON
 
       - name: Configure debug variant with NDEBUG
         shell: bash
@@ -164,8 +164,8 @@ jobs:
             -DANDROID_ABI="$ANDROID_ABI" \
             -DANDROID_PLATFORM="$ANDROID_PLATFORM" \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DANDUEFKER_ENABLE_THINLTO=ON \
-            -DANDUEFKER_FORCE_NDEBUG=ON
+            -DNEXTDUMPER_ENABLE_THINLTO=ON \
+            -DNEXTDUMPER_FORCE_NDEBUG=ON
 
       - name: Build release variants
         shell: bash
@@ -178,8 +178,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x "$RELEASE_BUILD_DIR/AndUEFker"
-          test -x "$DEBUG_BUILD_DIR/AndUEFker"
+          test -x "$RELEASE_BUILD_DIR/NextDumper"
+          test -x "$DEBUG_BUILD_DIR/NextDumper"
           version="$GITHUB_REF_NAME"
           strip_tool="$(command -v llvm-strip)"
 
@@ -191,15 +191,15 @@ jobs:
               build_dir="$DEBUG_BUILD_DIR"
               package_suffix="debug"
             fi
-            package_name="AndUEFker-android-${ANDROID_ABI}-${package_suffix}-${version}"
+            package_name="NextDumper-android-${ANDROID_ABI}-${package_suffix}-${version}"
             archive_name="${package_name}.tar.gz"
             mkdir -p "dist/$package_name"
-            install -m 0755 "$build_dir/AndUEFker" "dist/$package_name/AndUEFker"
+            install -m 0755 "$build_dir/NextDumper" "dist/$package_name/NextDumper"
             if [[ "$variant" == release ]]; then
-              "$strip_tool" --strip-unneeded "dist/$package_name/AndUEFker"
+              "$strip_tool" --strip-unneeded "dist/$package_name/NextDumper"
             fi
             printf '%s\n' \
-              'Project: AndUEFker' \
+              'Project: NextDumper' \
               "Commit: $GITHUB_SHA" \
               "Ref: $GITHUB_REF" \
               "Target: Android $ANDROID_PLATFORM / $ANDROID_ABI" \
@@ -257,7 +257,7 @@ jobs:
           else
             gh release create "$tag" dist/*.tar.gz dist/*.sha256 \
               --repo "$GITHUB_REPOSITORY" \
-              --title "AndUEFker $tag" \
+              --title "NextDumper $tag" \
               --generate-notes \
               --verify-tag
           fi

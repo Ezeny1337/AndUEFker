@@ -9,7 +9,7 @@
 #include "GlobalAccessHarvester.h"
 #include "LiteralScanner.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	int StringAnchors::DecideTCharWidth(size_t Utf16Hits, size_t Utf32Hits)
@@ -197,4 +197,4 @@ namespace anduefker::analyzer
 		return static_cast<float>(Near) / static_cast<float>(Sites.size());
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

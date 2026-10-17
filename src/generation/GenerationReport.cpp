@@ -5,7 +5,7 @@
 #include <sstream>
 #include <string_view>
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
     using ir::PropertyKind;
 
@@ -175,4 +175,4 @@ namespace anduefker::generation::detail
         return result;
     }
 
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

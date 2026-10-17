@@ -1,4 +1,4 @@
-#include "anduefker/ir/ReflectionLayout.hpp"
+#include "nextdumper/ir/ReflectionLayout.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -8,7 +8,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace anduefker::ir
+namespace nextdumper::ir
 {
     namespace
     {
@@ -342,4 +342,4 @@ namespace anduefker::ir
                    (reference.value && HasStorageRepresentationGap(*reference.value, plan, depth + 1));
         }
     }
-} // namespace anduefker::ir
+} // namespace nextdumper::ir

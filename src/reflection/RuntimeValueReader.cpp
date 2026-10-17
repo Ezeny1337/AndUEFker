@@ -1,10 +1,10 @@
 #include "RuntimeValueReader.hpp"
 #include "RuntimeReadSupport.hpp"
 
-#include "anduefker/ue/ContainerReader.hpp"
-#include "anduefker/ue/StorageLayout.hpp"
+#include "nextdumper/ue/ContainerReader.hpp"
+#include "nextdumper/ue/StorageLayout.hpp"
 
-namespace anduefker::reflection::detail
+namespace nextdumper::reflection::detail
 {
     RuntimeValueReader::RuntimeValueReader(memory::CaptureMemorySource &capture, ue::ObjectModelReader &objects,
                                            const ue::EngineSchema &schema, const module::ModuleImage &module, const ir::ReflectionIR &reflection)
@@ -355,4 +355,4 @@ namespace anduefker::reflection::detail
                                                                             : root.owners->status;
     }
 
-} // namespace anduefker::reflection::detail
+} // namespace nextdumper::reflection::detail

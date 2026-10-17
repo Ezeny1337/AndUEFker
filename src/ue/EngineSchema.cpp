@@ -1,9 +1,9 @@
-#include "anduefker/ue/EngineSchema.hpp"
+#include "nextdumper/ue/EngineSchema.hpp"
 
 #include <algorithm>
 #include <iterator>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     std::string NormalizeRuntimeFieldName(std::string_view name)
     {
@@ -135,4 +135,4 @@ namespace anduefker::ue
             return false;
         return validation.properties && validation.functions && validation.enums;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

@@ -6,7 +6,7 @@
 
 #include "GlobalAccessHarvester.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	bool StructureVerifier::IsPlausibleGlobalLocation(uint64_t Address) const
@@ -62,4 +62,4 @@ namespace anduefker::analyzer
 		return HotThreshold_;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

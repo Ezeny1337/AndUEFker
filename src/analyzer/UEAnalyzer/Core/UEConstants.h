@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/// NumElementsPerChunk in UE 4.20: 66560 / 0x10400.
@@ -23,4 +23,4 @@ namespace anduefker::analyzer
 	/// shape of header.
 	inline constexpr int64_t kStructHeaderWindow = 0x20;
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

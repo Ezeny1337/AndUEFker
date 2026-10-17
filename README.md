@@ -1,4 +1,4 @@
-# AndUEFker
+# NextDumper
 
 > A runtime Unreal Engine reflection and SDK generation tool for Android.
 
@@ -6,11 +6,11 @@
 [![Build system](https://img.shields.io/badge/build-CMake%20%7C%20Ninja-064F8C?logo=cmake&logoColor=white)](https://cmake.org/)
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![License](https://img.shields.io/badge/license-MIT-yellow)](https://choosealicense.com/licenses/mit/)
-[![Release](https://img.shields.io/github/v/release/Ezeny1337/AndUEFker?label=release&color=green)](https://github.com/Ezeny1337/AndUEFker/releases/)
+[![Release](https://img.shields.io/github/v/release/Ezeny1337/NextDumper?label=release&color=green)](https://github.com/Ezeny1337/NextDumper/releases/)
 
 [中文文档](README_zh.md)
 
-AndUEFker discovers Unreal Engine runtime structures from a live Android process, validates the object and name stores, resolves the reflection schema, and generates C++ descriptions and machine-readable reflection metadata for developers and reverse engineering tools.
+NextDumper discovers Unreal Engine runtime structures from a live Android process, validates the object and name stores, resolves the reflection schema, and generates C++ descriptions and machine-readable reflection metadata for developers and reverse engineering tools.
 
 Rather than relying on a single hardcoded layout, it combines binary analysis, runtime probing, cross-validation, and reflection data to establish verified runtime bindings prior to reading the object graph.
 
@@ -60,27 +60,27 @@ Schema profiles cover UE 4.23–4.27 and 5.0–5.6 layout families. Selection re
 
 ## Game Profiles and Compatibility Diagnosis
 
-Compiled profiles are the current extension point for game-specific adaptation. Derive an `IGameProfile` defined in `include/anduefker/compat/GameProfile.hpp` and register it in `src/compat/GameProfiles.cpp`. With no matching profile, the existing automatic discovery and identity decoding path remains active.
+Compiled profiles are the current extension point for game-specific adaptation. Derive an `IGameProfile` defined in `include/nextdumper/compat/GameProfile.hpp` and register it in `src/compat/GameProfiles.cpp`. With no matching profile, the existing automatic discovery and identity decoding path remains active.
 
 A minimal profile shape is shown below. The class can live in a separate header included by `GameProfiles.cpp` and be added to `CreateGameProfiles()`; if it needs a separate `.cpp`, add that source to `CMakeLists.txt`:
 
 ```cpp
-class ExampleGameProfile final : public anduefker::compat::IGameProfile
+class ExampleGameProfile final : public nextdumper::compat::IGameProfile
 {
 public:
     std::string_view Id() const override { return "example-game"; }
 
     bool Matches(std::string_view packageName,
-                 const anduefker::module::ModuleImage &module) const override
+                 const nextdumper::module::ModuleImage &module) const override
     {
         return packageName == "com.example.game" && module.pointerWidth == 8;
     }
 
-    anduefker::binding::DecodePlan MakeDecodePlan(
-        const anduefker::memory::IMemorySource &,
-        const anduefker::module::ModuleImage &) const override
+    nextdumper::binding::DecodePlan MakeDecodePlan(
+        const nextdumper::memory::IMemorySource &,
+        const nextdumper::module::ModuleImage &) const override
     {
-        auto decode = anduefker::binding::DecodePlan::Identity();
+        auto decode = nextdumper::binding::DecodePlan::Identity();
         // 只覆盖已通过目标样本验证的字段解码器。
         return decode;
     }
@@ -100,7 +100,7 @@ Add the class to `CreateGameProfiles()`. `Matches()` should check the package, t
 
 `Matches()` should use explicit package and module/ABI conditions. Module identity is not a content hash, so a package-name match alone cannot prove that the target binary is identical to the reverse-engineered sample. Profiles receive only the read-only `IMemorySource` interface. Decoder callbacks are retained with the profile and binding for the lifetime of `RuntimeSession`; do not capture short-lived objects.
 
-Each run attempts to write `AndUEFker_<timestamp>.diagnosis.json` to the output directory, including when it stops before binding or schema resolution. The report includes the package, module, architecture, and pointer width; it separates runtime outcome from compatibility assessment and provides stable finding domains, codes, stages, confidence, summaries, and next actions:
+Each run attempts to write `NextDumper_<timestamp>.diagnosis.json` to the output directory, including when it stops before binding or schema resolution. The report includes the package, module, architecture, and pointer width; it separates runtime outcome from compatibility assessment and provides stable finding domains, codes, stages, confidence, summaries, and next actions:
 
 - Process, memory-access, module, or output failures are reported as runtime findings. Compatibility remains `not-evaluated` or retains a conclusion already reached.
 - Without a profile, failed root binding is reported as `ROOT_BINDING_NOT_VALIDATED`. This points to root, layout, or decoding validation; it does not claim encryption was detected.
@@ -145,7 +145,7 @@ chmod +x build.sh
 ./build.sh --mode debug --abi armeabi-v7a --jobs 4
 ```
 
-Script builds produce `build/android-<abi>-<mode>/AndUEFker` by default. Use `--build-dir` to override the build directory or `--no-strip` to retain release symbols.
+Script builds produce `build/android-<abi>-<mode>/NextDumper` by default. Use `--build-dir` to override the build directory or `--no-strip` to retain release symbols.
 
 ### Direct CMake configuration
 
@@ -156,7 +156,7 @@ cmake -S . -B build/android-arm64-release -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-29 \
-  -DANDUEFKER_ENABLE_THINLTO=ON \
+  -DNEXTDUMPER_ENABLE_THINLTO=ON \
   -DCMAKE_BUILD_TYPE=Release
 
 cmake --build build/android-arm64-release --parallel
@@ -165,13 +165,13 @@ cmake --build build/android-arm64-release --parallel
 The executable is produced at:
 
 ```text
-build/android-arm64-release/AndUEFker
+build/android-arm64-release/NextDumper
 ```
 
 ## Usage
 
 ```text
-AndUEFker -o <output-dir> -p <package-name>
+NextDumper -o <output-dir> -p <package-name>
 ```
 
 Run the tool on the Android device while the target process is running. It requires permission to read the target process memory and write the output directory; it does not bypass platform access restrictions.
@@ -192,8 +192,8 @@ Run the tool on the Android device while the target process is running. It requi
 ### Example
 
 ```bash
-./AndUEFker \
-  --output /storage/emulated/0/AndUEFker-output \
+./NextDumper \
+  --output /storage/emulated/0/NextDumper-output \
   --package com.example.game
 ```
 
@@ -219,8 +219,8 @@ The directory name ends with the same local timestamp (year to second) as the se
 The output directory also receives the session log:
 
 ```text
-<output-dir>/AndUEFker_YYYYMMDDHHMMSS.log
-<output-dir>/AndUEFker_YYYYMMDDHHMMSS.diagnosis.json
+<output-dir>/NextDumper_YYYYMMDDHHMMSS.log
+<output-dir>/NextDumper_YYYYMMDDHHMMSS.diagnosis.json
 ```
 
 The timestamp (year to second) is generated at session start in local time, so each run attempts to write its own log and compatibility diagnosis. Stage findings are retained even if the run fails before SDK artifact generation. If an artifact directory with the same name already exists, it is replaced: the old directory is removed first and the new one is committed from a temporary directory.
@@ -241,7 +241,7 @@ The `.diagnosis.json` file provides stable stage and finding codes. `session_sta
 | `diagnostics.json` | Reflection and generation diagnostics, counters, and shared evidence references. |
 | `runtime.json` | Runtime module, binding layout, schema offsets, and common object addresses. |
 
-The generated headers use the `AndUE` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
+The generated headers use the `NextDumper` namespace and describe target memory for developer inspection, game tooling, and analysis in IDA/Ghidra. Reflected sizes, offsets, masks, and references are authoritative; C++ declarations are descriptions of the target layout.
 
 The SDK is not a directly callable runtime library. Native C++ ABI compatibility is not asserted; use reflected metadata rather than `sizeof`/`offsetof`. Execution-entry RVAs are not guaranteed to identify original C++ business implementations.
 
@@ -249,7 +249,7 @@ Generation metadata separates semantic declarations from storage descriptions an
 
 ### IDA import
 
-Run `tools/ida/anduefker_import.py` from IDA and select an AndUEFker artifact directory. The importer writes `AndUEFker_IDA_types.h` beside the artifact, imports reflected byte-layout types into IDA's local type library, and annotates eligible in-module execution-entry RVAs with names and repeatable comments. It does not apply runtime heap addresses to the static image or create functions automatically. Enum declarations with values outside the 32-bit C enum range are left in `reflection.json` and omitted from the generated IDA header.
+Run `tools/ida/nextdumper_import.py` from IDA and select an NextDumper artifact directory. The importer writes `NextDumper_IDA_types.h` beside the artifact, imports reflected byte-layout types into IDA's local type library, and annotates eligible in-module execution-entry RVAs with names and repeatable comments. It does not apply runtime heap addresses to the static image or create functions automatically. Enum declarations with values outside the 32-bit C enum range are left in `reflection.json` and omitted from the generated IDA header.
 
 The artifact does not contain a hash of the target image. Confirm that the IDA input is the exact binary used for the capture before applying RVA annotations.
 
@@ -272,7 +272,7 @@ These are class-object addresses discovered in the Unreal object store. They are
 
 ## Validation and status
 
-AndUEFker records evidence during binding, schema resolution, reflection capture, and SDK generation, including:
+NextDumper records evidence during binding, schema resolution, reflection capture, and SDK generation, including:
 
 - object and name candidate counts;
 - selected container layouts and probe scores;
@@ -300,12 +300,12 @@ Capture stability is not an atomic snapshot, and `scan_complete` covers object-s
 
 ## Issues
 
-Please open an [issue](https://github.com/Ezeny1337/AndUEFker/issues) when you encounter a reproducible detection, binding, schema, reflection, or artifact-generation problem. Include:
+Please open an [issue](https://github.com/Ezeny1337/NextDumper/issues) when you encounter a reproducible detection, binding, schema, reflection, or artifact-generation problem. Include:
 
 1. The commit or release used.
 2. Android version, device ABI, and target Unreal Engine information if known.
 3. The command line with package names or sensitive values redacted where necessary.
-4. The relevant section of the timestamped `AndUEFker_*.log` session log.
+4. The relevant section of the timestamped `NextDumper_*.log` session log.
 5. `manifest.json`, `diagnostics.json`, and `runtime.json` when available.
 6. A concise reproduction description and the expected result.
 
@@ -313,7 +313,7 @@ Before uploading logs or artifacts, remove credentials, private binaries, propri
 
 ## Disclaimer
 
-AndUEFker is provided for authorized research, debugging, interoperability, and development purposes. You are responsible for obtaining permission to inspect the target process and for complying with applicable laws, licenses, platform rules, and software terms of service. Runtime layouts vary between engine versions, forks, build configurations, and shipping processes; successful binding does not guarantee that every generated field or function is complete or safe for production use. The project is provided without warranties, and the maintainers are not responsible for damage, data loss, service disruption, or misuse resulting from its use.
+NextDumper is provided for authorized research, debugging, interoperability, and development purposes. You are responsible for obtaining permission to inspect the target process and for complying with applicable laws, licenses, platform rules, and software terms of service. Runtime layouts vary between engine versions, forks, build configurations, and shipping processes; successful binding does not guarantee that every generated field or function is complete or safe for production use. The project is provided without warranties, and the maintainers are not responsible for damage, data loss, service disruption, or misuse resulting from its use.
 
 ## License
 

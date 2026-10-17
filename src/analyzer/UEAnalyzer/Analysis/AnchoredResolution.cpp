@@ -19,7 +19,7 @@
 #include "LiteralScanner.h"
 #include "StructureVerifier.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	namespace
 	{
@@ -1090,4 +1090,4 @@ namespace anduefker::analyzer
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

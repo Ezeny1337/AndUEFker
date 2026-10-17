@@ -1,8 +1,8 @@
-#include "anduefker/binding/CommonObjectCollector.hpp"
+#include "nextdumper/binding/CommonObjectCollector.hpp"
 
 #include <algorithm>
 
-namespace anduefker::binding
+namespace nextdumper::binding
 {
     CommonObjectCollector::CommonObjectCollector(const IMemorySource &memory,
                                                  const RuntimeBinding &binding,
@@ -45,4 +45,4 @@ namespace anduefker::binding
 
         return result;
     }
-} // namespace anduefker::binding
+} // namespace nextdumper::binding

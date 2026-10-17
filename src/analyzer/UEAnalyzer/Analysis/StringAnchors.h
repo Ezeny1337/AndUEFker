@@ -11,7 +11,7 @@
 
 #include "AnchorTable.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	class GlobalAccessHarvester;
@@ -137,4 +137,4 @@ namespace anduefker::analyzer
 		EncodingHits Hits_;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

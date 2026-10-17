@@ -1,17 +1,17 @@
-#include "anduefker/binding/GlobalLocator.hpp"
-#include "anduefker/analyzer/AnalyzerMemoryAdapter.hpp"
+#include "nextdumper/binding/GlobalLocator.hpp"
+#include "nextdumper/analyzer/AnalyzerMemoryAdapter.hpp"
 
 #include <algorithm>
 #include <chrono>
 #include <memory>
 
-#include "anduefker/memory/ReadDiagnostics.hpp"
-#include "anduefker/module/ElfSymbols.hpp"
+#include "nextdumper/memory/ReadDiagnostics.hpp"
+#include "nextdumper/module/ElfSymbols.hpp"
 
 #include "Architecture/IArchDecoder.h"
 #include "UEAnalyzer/UEAnalyzer.h"
 
-namespace anduefker::binding
+namespace nextdumper::binding
 {
     namespace
     {
@@ -171,4 +171,4 @@ namespace anduefker::binding
         phases.Finish("analyzer-cleanup");
         return result;
     }
-} // namespace anduefker::binding
+} // namespace nextdumper::binding

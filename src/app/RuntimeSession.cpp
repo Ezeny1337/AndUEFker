@@ -1,5 +1,5 @@
-#include "anduefker/app/RuntimeSession.hpp"
-#include "anduefker/BuildInfo.hpp"
+#include "nextdumper/app/RuntimeSession.hpp"
+#include "nextdumper/BuildInfo.hpp"
 
 #include <KittyMemoryEx.hpp>
 
@@ -12,40 +12,40 @@
 #include <vector>
 #include <ctime>
 
-#include "anduefker/binding/CommonObjectCollector.hpp"
-#include "anduefker/binding/BindingBuilder.hpp"
-#include "anduefker/binding/GlobalLocator.hpp"
-#include "anduefker/compat/GameProfile.hpp"
-#include "anduefker/memory/ReadDiagnostics.hpp"
-#include "anduefker/memory/RemoteMemorySource.hpp"
-#include "anduefker/module/ModuleCatalog.hpp"
-#include "anduefker/module/ElfSymbols.hpp"
-#include "anduefker/reflection/ReflectionReader.hpp"
-#include "anduefker/reflection/RuntimeInspector.hpp"
-#include "anduefker/ue/SchemaCatalog.hpp"
-#include "anduefker/ue/SchemaResolver.hpp"
+#include "nextdumper/binding/CommonObjectCollector.hpp"
+#include "nextdumper/binding/BindingBuilder.hpp"
+#include "nextdumper/binding/GlobalLocator.hpp"
+#include "nextdumper/compat/GameProfile.hpp"
+#include "nextdumper/memory/ReadDiagnostics.hpp"
+#include "nextdumper/memory/RemoteMemorySource.hpp"
+#include "nextdumper/module/ModuleCatalog.hpp"
+#include "nextdumper/module/ElfSymbols.hpp"
+#include "nextdumper/reflection/ReflectionReader.hpp"
+#include "nextdumper/reflection/RuntimeInspector.hpp"
+#include "nextdumper/ue/SchemaCatalog.hpp"
+#include "nextdumper/ue/SchemaResolver.hpp"
 
-namespace anduefker::app
+namespace nextdumper::app
 {
-    using ::anduefker::binding::AddressMeaning;
-    using ::anduefker::binding::BindingBuilder;
-    using ::anduefker::binding::BindingCandidates;
-    using ::anduefker::binding::GlobalLocator;
-    using ::anduefker::binding::LocatedAddress;
-    using ::anduefker::binding::RuntimeBinding;
-    using ::anduefker::generation::ArtifactWriter;
-    using ::anduefker::ir::ParseStatus;
-    using ::anduefker::memory::ReadStats;
-    using ::anduefker::module::ModuleCatalog;
-    using ::anduefker::reflection::ReflectionReader;
-    using ::anduefker::ue::EngineProfile;
-    using ::anduefker::ue::EngineSchema;
-    using ::anduefker::ue::SchemaCandidateSummary;
-    using ::anduefker::ue::SchemaCatalog;
-    using ::anduefker::ue::SchemaLayoutVariantName;
-    using ::anduefker::ue::SchemaResolutionReport;
-    using ::anduefker::ue::SchemaResolver;
-    using ::anduefker::ue::SchemaSelectionResult;
+    using ::nextdumper::binding::AddressMeaning;
+    using ::nextdumper::binding::BindingBuilder;
+    using ::nextdumper::binding::BindingCandidates;
+    using ::nextdumper::binding::GlobalLocator;
+    using ::nextdumper::binding::LocatedAddress;
+    using ::nextdumper::binding::RuntimeBinding;
+    using ::nextdumper::generation::ArtifactWriter;
+    using ::nextdumper::ir::ParseStatus;
+    using ::nextdumper::memory::ReadStats;
+    using ::nextdumper::module::ModuleCatalog;
+    using ::nextdumper::reflection::ReflectionReader;
+    using ::nextdumper::ue::EngineProfile;
+    using ::nextdumper::ue::EngineSchema;
+    using ::nextdumper::ue::SchemaCandidateSummary;
+    using ::nextdumper::ue::SchemaCatalog;
+    using ::nextdumper::ue::SchemaLayoutVariantName;
+    using ::nextdumper::ue::SchemaResolutionReport;
+    using ::nextdumper::ue::SchemaResolver;
+    using ::nextdumper::ue::SchemaSelectionResult;
 
     namespace
     {
@@ -141,7 +141,7 @@ namespace anduefker::app
                               return fallback; });
         }
 
-        void GuardProfileDecoders(::anduefker::binding::DecodePlan &decode,
+        void GuardProfileDecoders(::nextdumper::binding::DecodePlan &decode,
                                   const std::shared_ptr<ProfileExecutionState> &state)
         {
             decode.objectStorage = GuardProfileDecoder(std::move(decode.objectStorage), uintptr_t{0}, state);
@@ -196,7 +196,7 @@ namespace anduefker::app
         if (logPath_.empty())
         {
             const std::string suffix = RunTimestamp();
-            const std::string fileName = "AndUEFker" + (suffix.empty() ? std::string{} : "_" + suffix) + ".log";
+            const std::string fileName = "NextDumper" + (suffix.empty() ? std::string{} : "_" + suffix) + ".log";
             logPath_ = (std::filesystem::path(config_.outputRoot) / fileName).string();
         }
         return logPath_;
@@ -444,7 +444,7 @@ namespace anduefker::app
             const auto stats = memory_->Stats();
             Note("stage=" + std::string(stage) + " elapsed_ms=" +
                  std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(now - stageStart).count()) +
-                 ::anduefker::memory::DescribeReadStats(stats, stageStats));
+                 ::nextdumper::memory::DescribeReadStats(stats, stageStats));
             stageStart = now;
             stageStats = stats;
         };
@@ -512,7 +512,7 @@ namespace anduefker::app
                                              " private=" + std::to_string(segment.privateMapping) + " path=" + segment.path);
 
         finishStage("module-discovery");
-        profiles_ = ::anduefker::compat::CreateGameProfiles();
+        profiles_ = ::nextdumper::compat::CreateGameProfiles();
         std::vector<compat::IGameProfile *> matchingProfiles;
         bool profileMatcherFailed = false;
         diagnosis_.stage = "profile-selection";
@@ -577,8 +577,8 @@ namespace anduefker::app
             Note(RuntimeLogLevel::Info, "compatibility_profile selected=none source=identity-decoding");
         }
 
-        ::anduefker::binding::DecodePlan decode = ::anduefker::binding::DecodePlan::Identity();
-        ::anduefker::binding::BindingLayoutHints layoutHints;
+        ::nextdumper::binding::DecodePlan decode = ::nextdumper::binding::DecodePlan::Identity();
+        ::nextdumper::binding::BindingLayoutHints layoutHints;
         BindingCandidates profileCandidates;
         const auto profileExecutionState = std::make_shared<ProfileExecutionState>();
         bool profileHooksValid = selectedGameProfile != nullptr;
@@ -627,7 +627,7 @@ namespace anduefker::app
             if (!profileHooksValid)
             {
                 diagnosis_.status = CompatibilityStatus::Inconclusive;
-                decode = ::anduefker::binding::DecodePlan::Identity();
+                decode = ::nextdumper::binding::DecodePlan::Identity();
                 layoutHints = {};
                 if (diagnosis_.profileStatus == "selected")
                     diagnosis_.profileStatus = "configuration-failed";
@@ -660,7 +660,7 @@ namespace anduefker::app
                 return false;
             profileHooksValid = false;
             diagnosis_.profileStatus = "decoder-failed-identity-fallback";
-            decode = ::anduefker::binding::DecodePlan::Identity();
+            decode = ::nextdumper::binding::DecodePlan::Identity();
             layoutHints = {};
             RecordDiagnosis(DiagnosisDomain::Profile, "PROFILE_DECODER_EXCEPTION", profileExecutionState->stage,
                             "observed", std::string("A profile decoder threw an exception: ") + profileExecutionState->error,
@@ -742,7 +742,7 @@ namespace anduefker::app
             candidateSchemas.clear();
             candidateSchemas.reserve(profiles.size());
             schemaSelection.candidates.reserve(profiles.size());
-            const auto probeSession = ::anduefker::ue::CreateSchemaProbeSession(
+            const auto probeSession = ::nextdumper::ue::CreateSchemaProbeSession(
                 *memory_, context_.Binding(), {}, context_.Module().base, context_.Module().end);
             for (const EngineProfile &profile : profiles)
             {
@@ -760,7 +760,7 @@ namespace anduefker::app
                                                                     std::chrono::steady_clock::now() - profileStart)
                                                                     .count()) +
                                                  " probe_limited=" + std::to_string(candidateReport.probeLimited) +
-                                                 ::anduefker::memory::DescribeReadStats(profileStatsAfter, profileStatsBefore));
+                                                 ::nextdumper::memory::DescribeReadStats(profileStatsAfter, profileStatsBefore));
                 const std::string reason = candidateReport.failures.empty()
                                                ? (candidateReport.evidence.empty() ? "none" : candidateReport.evidence.front())
                                                : candidateReport.failures.front();
@@ -778,7 +778,7 @@ namespace anduefker::app
                 {
                     const auto &stage = *use.result;
                     const std::string prefix = "schema_stage profile=" + profile.id + " id=" +
-                                               ::anduefker::ue::SchemaProbeStageName(stage.stage);
+                                               ::nextdumper::ue::SchemaProbeStageName(stage.stage);
                     Note(use.reused ? RuntimeLogLevel::Debug : RuntimeLogLevel::Info, prefix + " source_profile=" + stage.sourceProfile +
                                                                                           " reused=" + std::to_string(use.reused) + " resolved=" + std::to_string(stage.resolved) +
                                                                                           " evidence_complete=" + std::to_string(stage.evidenceComplete) +
@@ -788,7 +788,7 @@ namespace anduefker::app
                                                                                           " rejected_candidates=" + std::to_string(stage.rejectedCandidates) +
                                                                                           " ambiguous=" + std::to_string(stage.ambiguous) + " search_complete=" + std::to_string(stage.searchComplete) +
                                                                                           " elapsed_ms=" + std::to_string(use.reused ? 0 : stage.elapsedMs) +
-                                                                                          (use.reused ? std::string{} : ::anduefker::memory::DescribeReadStats(stage.readsAfter, stage.readsBefore)) +
+                                                                                          (use.reused ? std::string{} : ::nextdumper::memory::DescribeReadStats(stage.readsAfter, stage.readsBefore)) +
                                                                                           (stage.selectedLayout.empty() ? std::string{} : " selected_layout={" + stage.selectedLayout + "}"));
                     if (!use.reused)
                         for (const auto &evidence : stage.evidence)
@@ -800,13 +800,13 @@ namespace anduefker::app
                 for (const auto &evidence : candidateReport.versionEvidence)
                     Note(RuntimeLogLevel::Debug, "schema_version_evidence id=" + profile.id +
                                                      " kind=" + evidence.kind + " observed=" + evidence.observed +
-                                                     " strength=" + ::anduefker::ue::VersionEvidenceStrengthName(evidence.strength) +
+                                                     " strength=" + ::nextdumper::ue::VersionEvidenceStrengthName(evidence.strength) +
                                                      " detail=" + evidence.detail);
                 schemaSelection.candidates.push_back(std::move(candidateReport));
                 candidateSchemas.push_back(std::move(candidateSchema));
             }
 
-            schemaSelection = ::anduefker::ue::SelectSchemaCandidates(std::move(schemaSelection.candidates), candidateSchemas);
+            schemaSelection = ::nextdumper::ue::SelectSchemaCandidates(std::move(schemaSelection.candidates), candidateSchemas);
         };
 
         bool schemaAddressSpaceRefreshFailed = false;
@@ -863,7 +863,7 @@ namespace anduefker::app
             schemaReport = schemaSelection.candidates[schemaSelection.selectedIndex];
             selectedProfile = profiles[schemaSelection.selectedIndex];
             schema.identity.layoutProfileId = schema.features.useFProperty
-                                                  ? (schema.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
+                                                  ? (schema.features.fFieldOwnerEncoding == ::nextdumper::ue::FFieldOwnerEncoding::TaggedPointer
                                                          ? "fproperty-tagged-owner"
                                                          : "fproperty-explicit-owner")
                                                   : "uproperty";
@@ -935,7 +935,7 @@ namespace anduefker::app
                 Note(RuntimeLogLevel::Error, schemaReport.failures[index]);
         }
         const ReadStats &memoryStats = memory_->Stats();
-        Note(RuntimeLogLevel::Debug, "memory stats" + ::anduefker::memory::DescribeReadStats(memoryStats));
+        Note(RuntimeLogLevel::Debug, "memory stats" + ::nextdumper::memory::DescribeReadStats(memoryStats));
         if (!schemaAccepted)
         {
             failures_.insert(failures_.end(), schemaReport.failures.begin(), schemaReport.failures.end());
@@ -1003,7 +1003,7 @@ namespace anduefker::app
         finishStage("reflection");
         const ReadStats afterReflection = memory_->Stats();
         Note(RuntimeLogLevel::Debug, "memory stats stage=reflection" +
-                                         ::anduefker::memory::DescribeReadStats(afterReflection, beforeReflection));
+                                         ::nextdumper::memory::DescribeReadStats(afterReflection, beforeReflection));
         Note(RuntimeLogLevel::Info, "Capture observations_stable=" + std::to_string(reflection_.capture.observationsStable) +
                                         " attempts=" + std::to_string(reflection_.capture.attempts) +
                                         " observed_ranges=" + std::to_string(reflection_.capture.observedRanges) +
@@ -1149,7 +1149,7 @@ namespace anduefker::app
                                          " observations_stable=" + std::to_string(runtime.sparse.capture.observationsStable) +
                                          " full_records=reflection.json/runtime_value_evidence/sparse");
         Note(RuntimeLogLevel::Debug, "memory stats stage=runtime-value-evidence" +
-                                         ::anduefker::memory::DescribeReadStats(memory_->Stats(), beforeValues));
+                                         ::nextdumper::memory::DescribeReadStats(memory_->Stats(), beforeValues));
         if (!config_.outputRoot.empty())
         {
             provenance_.addressSpaceGeneration = memory_->AddressSpaceGeneration();
@@ -1184,4 +1184,4 @@ namespace anduefker::app
             return RuntimeSessionStatus::ArtifactPartial;
         return RuntimeSessionStatus::ReflectionReady;
     }
-} // namespace anduefker::app
+} // namespace nextdumper::app

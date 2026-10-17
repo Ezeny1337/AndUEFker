@@ -4,7 +4,7 @@
 
 #include "IStrategy.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -42,4 +42,4 @@ namespace anduefker::analyzer
 		static bool IsPlausibleGlobalLocation(const AnalysisContext &Ctx, uint64_t Address);
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

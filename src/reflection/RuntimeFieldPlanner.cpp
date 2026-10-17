@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace anduefker::reflection::detail
+namespace nextdumper::reflection::detail
 {
     using Limits = ir::RuntimeEvidenceLimits;
 
@@ -154,4 +154,4 @@ namespace anduefker::reflection::detail
             Collect(*super, base, prefix, depth + 1, remaining, path, out);
         path.erase(type.address);
     }
-} // namespace anduefker::reflection::detail
+} // namespace nextdumper::reflection::detail

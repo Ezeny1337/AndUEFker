@@ -1,9 +1,9 @@
-#include "anduefker/ue/SchemaResolver.hpp"
+#include "nextdumper/ue/SchemaResolver.hpp"
 
 #include <algorithm>
 #include <limits>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     SchemaSelectionResult SelectSchemaCandidates(std::vector<SchemaCandidateSummary> candidates,
                                                  const std::vector<EngineSchema> &schemas)
@@ -84,4 +84,4 @@ namespace anduefker::ue
         result.ambiguous = result.compatibleIndices.size() > 1;
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

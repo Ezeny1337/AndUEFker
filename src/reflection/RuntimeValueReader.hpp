@@ -4,12 +4,12 @@
 #include <set>
 #include <vector>
 
-#include "anduefker/ir/ReflectionIR.hpp"
-#include "anduefker/memory/CaptureMemorySource.hpp"
-#include "anduefker/module/ModuleImage.hpp"
-#include "anduefker/ue/ObjectModelReader.hpp"
+#include "nextdumper/ir/ReflectionIR.hpp"
+#include "nextdumper/memory/CaptureMemorySource.hpp"
+#include "nextdumper/module/ModuleImage.hpp"
+#include "nextdumper/ue/ObjectModelReader.hpp"
 
-namespace anduefker::reflection::detail
+namespace nextdumper::reflection::detail
 {
     // 使用调用方的有界 capture view，不枚举对象，不决定采样配额
     class RuntimeValueReader
@@ -34,4 +34,4 @@ namespace anduefker::reflection::detail
         std::vector<ir::StorageLayoutIR> inlineLayouts_;
         std::set<int32_t> weakSizes_;
     };
-} // namespace anduefker::reflection::detail
+} // namespace nextdumper::reflection::detail

@@ -2,7 +2,7 @@
 
 #include <array>
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     bool SchemaProbeContext::ResolveFieldSchema(EngineSchema &schema, SchemaResolutionReport &report) const
     {
@@ -305,4 +305,4 @@ namespace anduefker::ue::schema_probe
         return false;
     }
 
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

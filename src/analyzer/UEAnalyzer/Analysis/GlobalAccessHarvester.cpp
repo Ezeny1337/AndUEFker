@@ -10,7 +10,7 @@
 #include "CallGraph.h"
 #include "CodeWindow.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	namespace
 	{
@@ -447,4 +447,4 @@ namespace anduefker::analyzer
 		}
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

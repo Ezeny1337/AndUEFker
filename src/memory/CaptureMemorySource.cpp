@@ -1,9 +1,9 @@
-#include "anduefker/memory/CaptureMemorySource.hpp"
+#include "nextdumper/memory/CaptureMemorySource.hpp"
 
 #include <algorithm>
 #include <cstring>
 
-namespace anduefker::memory
+namespace nextdumper::memory
 {
     void CaptureMemorySource::Reset() const
     {
@@ -171,4 +171,4 @@ namespace anduefker::memory
         result.generationChanged = result.generationChanged || generation_ != source_.AddressSpaceGeneration();
         return result;
     }
-} // namespace anduefker::memory
+} // namespace nextdumper::memory

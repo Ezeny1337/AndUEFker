@@ -9,7 +9,7 @@
 
 #include <iterator>
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	StructureEvidence VerifyObjectArrayShape(const StructureVerifier &Verifier, uint64_t Address)
 	{
@@ -273,4 +273,4 @@ namespace anduefker::analyzer
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

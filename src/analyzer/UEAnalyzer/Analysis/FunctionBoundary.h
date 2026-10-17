@@ -6,7 +6,7 @@
 
 class IArchDecoder;
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -74,4 +74,4 @@ namespace anduefker::analyzer
 		const IArchDecoder &Arch_;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

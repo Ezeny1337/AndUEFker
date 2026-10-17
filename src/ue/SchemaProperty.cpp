@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <unordered_set>
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     bool SchemaProbeContext::ResolvePropertySchema(EngineSchema &schema, SchemaResolutionReport &report) const
     {
@@ -239,4 +239,4 @@ namespace anduefker::ue::schema_probe
         return true;
     }
 
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

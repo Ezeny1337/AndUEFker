@@ -1,10 +1,10 @@
-#include "anduefker/ue/SchemaResolver.hpp"
+#include "nextdumper/ue/SchemaResolver.hpp"
 #include "ProbeContext.hpp"
 
 #include <algorithm>
 #include <chrono>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     namespace
     {
@@ -327,4 +327,4 @@ namespace anduefker::ue
         }
         return report;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

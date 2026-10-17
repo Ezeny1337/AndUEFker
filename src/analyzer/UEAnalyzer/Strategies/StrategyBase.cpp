@@ -4,7 +4,7 @@
 
 #include "../../Memory/IMemory.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	bool StrategyBase::IsPlausibleGlobalLocation(const AnalysisContext &Ctx, uint64_t Address)
@@ -37,4 +37,4 @@ namespace anduefker::analyzer
 		return true;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

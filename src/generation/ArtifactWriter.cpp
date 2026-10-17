@@ -1,4 +1,4 @@
-#include "anduefker/generation/ArtifactWriter.hpp"
+#include "nextdumper/generation/ArtifactWriter.hpp"
 #include "ArtifactMetadata.hpp"
 #include "SdkEmitter.hpp"
 
@@ -8,7 +8,7 @@
 #include <fstream>
 #include <utility>
 
-namespace anduefker::generation
+namespace nextdumper::generation
 {
     namespace
     {
@@ -188,4 +188,4 @@ namespace anduefker::generation
         result.status = status;
         return result;
     }
-} // namespace anduefker::generation
+} // namespace nextdumper::generation

@@ -5,7 +5,7 @@
 
 #include "../../Memory/IMemory.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	class GlobalAccessHarvester;
@@ -81,4 +81,4 @@ namespace anduefker::analyzer
 		mutable bool bSortedBuilt_ = false;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

@@ -1,7 +1,7 @@
-#include "anduefker/generation/JsonExport.hpp"
+#include "nextdumper/generation/JsonExport.hpp"
 #include "Formatting.hpp"
-#include "anduefker/ue/ContainerLayout.hpp"
-#include "anduefker/ir/ReflectionLayout.hpp"
+#include "nextdumper/ue/ContainerLayout.hpp"
+#include "nextdumper/ir/ReflectionLayout.hpp"
 
 #include <algorithm>
 #include <iomanip>
@@ -10,7 +10,7 @@
 #include <ostream>
 #include <sstream>
 
-namespace anduefker::generation
+namespace nextdumper::generation
 {
     using detail::Hex;
 
@@ -413,7 +413,7 @@ namespace anduefker::generation
         }
     } // namespace
 
-    void WriteSchemaIdentityJson(std::ostream &stream, const ::anduefker::ue::SchemaIdentity &identity)
+    void WriteSchemaIdentityJson(std::ostream &stream, const ::nextdumper::ue::SchemaIdentity &identity)
     {
         stream << "{\"layout_profile_id\":\"" << EscapeJson(identity.layoutProfileId)
                << "\",\"layout_profile_label\":\"" << EscapeJson(identity.layoutProfileLabel)
@@ -440,7 +440,7 @@ namespace anduefker::generation
             const auto &evidence = identity.evidence[index];
             stream << "{\"kind\":\"" << EscapeJson(evidence.kind)
                    << "\",\"observed\":\"" << EscapeJson(evidence.observed)
-                   << "\",\"strength\":\"" << ::anduefker::ue::VersionEvidenceStrengthName(evidence.strength)
+                   << "\",\"strength\":\"" << ::nextdumper::ue::VersionEvidenceStrengthName(evidence.strength)
                    << "\",\"detail\":\"" << EscapeJson(evidence.detail) << "\"}";
         }
         stream << "]}";
@@ -696,8 +696,8 @@ namespace anduefker::generation
         bool firstLayout = true;
         for (bool memoryImage : {false, true})
             for (auto kind : {ir::PropertyKind::Array, ir::PropertyKind::Set})
-                if (const auto layout = memoryImage ? ::anduefker::ue::DescribeMemoryImageContainer(kind, reflection.containerPointerWidth)
-                                                    : ::anduefker::ue::DescribeHeapContainer(kind, reflection.containerPointerWidth))
+                if (const auto layout = memoryImage ? ::nextdumper::ue::DescribeMemoryImageContainer(kind, reflection.containerPointerWidth)
+                                                    : ::nextdumper::ue::DescribeHeapContainer(kind, reflection.containerPointerWidth))
                 {
                     if (!firstLayout)
                         stream << ',';
@@ -1013,4 +1013,4 @@ namespace anduefker::generation
         WriteRuntimeEvidenceJson(stream, reflection.runtimeEvidence, true);
         stream << "\n}\n";
     }
-} // namespace anduefker::generation
+} // namespace nextdumper::generation

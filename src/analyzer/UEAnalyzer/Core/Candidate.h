@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -112,4 +112,4 @@ namespace anduefker::analyzer
 		std::string ToString() const;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

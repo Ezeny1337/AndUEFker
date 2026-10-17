@@ -1,6 +1,6 @@
-#include "anduefker/ue/SchemaCatalog.hpp"
+#include "nextdumper/ue/SchemaCatalog.hpp"
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     std::vector<EngineProfile> SchemaCatalog::Profiles()
     {
@@ -155,4 +155,4 @@ namespace anduefker::ue
         }
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

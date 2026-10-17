@@ -1,8 +1,8 @@
 #pragma once
 
-#include "anduefker/ue/SchemaResolver.hpp"
+#include "nextdumper/ue/SchemaResolver.hpp"
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     inline std::optional<uintptr_t> Add(uintptr_t base, int32_t offset)
     {
@@ -52,4 +52,4 @@ namespace anduefker::ue::schema_probe
         rawName = binding.decode.nameIndex(rawName, *address);
         return names.ReadName(rawName);
     }
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

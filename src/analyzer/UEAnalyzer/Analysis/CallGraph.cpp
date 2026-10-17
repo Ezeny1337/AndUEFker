@@ -8,7 +8,7 @@
 
 #include "CodeWindow.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	void CallGraph::Build(IMemory *Memory, const IArchDecoder &Arch)
@@ -195,4 +195,4 @@ namespace anduefker::analyzer
 		return true;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

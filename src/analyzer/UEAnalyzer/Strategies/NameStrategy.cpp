@@ -7,7 +7,7 @@
 #include "../Analysis/StructureVerifier.h"
 #include "../Core/UEConstants.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	namespace
 	{
@@ -436,4 +436,4 @@ namespace anduefker::analyzer
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

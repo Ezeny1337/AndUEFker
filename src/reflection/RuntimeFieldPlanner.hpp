@@ -9,9 +9,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "anduefker/ir/ReflectionIR.hpp"
+#include "nextdumper/ir/ReflectionIR.hpp"
 
-namespace anduefker::reflection::detail
+namespace nextdumper::reflection::detail
 {
     [[nodiscard]] const char *RuntimeValueKind(ir::PropertyKind kind);
     [[nodiscard]] std::string RuntimeSampleCategory(const ir::TypeReferenceIR &reference);
@@ -44,4 +44,4 @@ namespace anduefker::reflection::detail
         std::map<std::string, size_t> skipped_;
         size_t cachedFields_ = 0;
     };
-} // namespace anduefker::reflection::detail
+} // namespace nextdumper::reflection::detail

@@ -1,13 +1,13 @@
 #pragma once
 
-#include "anduefker/ue/SchemaResolver.hpp"
+#include "nextdumper/ue/SchemaResolver.hpp"
 
 #include <algorithm>
 #include <tuple>
 #include <unordered_map>
 #include <variant>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     // 单次顺序执行的选择尝试独占拥有 Bootstrap, Index 以及可复用的阶段结果
     // 任何条目都绝不可在地址空间代际变更后存活，也绝不可跨越进入反射捕获阶段
@@ -270,4 +270,4 @@ namespace anduefker::ue
     public:
         const std::shared_ptr<const SchemaProbeBootstrap> bootstrap;
     };
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

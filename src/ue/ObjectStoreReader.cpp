@@ -1,9 +1,9 @@
-#include "anduefker/ue/ObjectStoreReader.hpp"
+#include "nextdumper/ue/ObjectStoreReader.hpp"
 
 #include <limits>
 #include <optional>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     namespace
     {
@@ -198,7 +198,7 @@ namespace anduefker::ue
                                 : memory_.ReadBytes(*objectSlot, &rawObject, sizeof(rawObject));
         if (!read.Ok())
             return {ObjectReadStatus::UnreadableObject, 0, *objectSlot, read.error};
-        rawObject = ::anduefker::binding::UnpackObjectItemPointer(rawObject, layout_.packedPointers);
+        rawObject = ::nextdumper::binding::UnpackObjectItemPointer(rawObject, layout_.packedPointers);
         if (rawObject == 0)
             return {ObjectReadStatus::Empty, 0, *objectSlot};
 
@@ -236,4 +236,4 @@ namespace anduefker::ue
             return std::nullopt;
         return serial;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

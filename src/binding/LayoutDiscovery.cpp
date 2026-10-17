@@ -1,4 +1,4 @@
-#include "anduefker/binding/LayoutDiscovery.hpp"
+#include "nextdumper/binding/LayoutDiscovery.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,7 +9,7 @@
 #include <map>
 #include <tuple>
 
-namespace anduefker::binding
+namespace nextdumper::binding
 {
     namespace
     {
@@ -420,4 +420,4 @@ namespace anduefker::binding
         }
         return result;
     }
-} // namespace anduefker::binding
+} // namespace nextdumper::binding

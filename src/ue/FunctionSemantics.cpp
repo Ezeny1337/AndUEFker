@@ -1,8 +1,8 @@
-#include "anduefker/ue/FunctionSemantics.hpp"
+#include "nextdumper/ue/FunctionSemantics.hpp"
 
 #include <limits>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     FunctionParameterSummary AnalyzeFunctionParameters(const std::vector<PropertyMetadata> &properties,
                                                          uint32_t functionFlags,
@@ -65,4 +65,4 @@ namespace anduefker::ue
             result.chainTerminated = true;
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

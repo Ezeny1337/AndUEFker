@@ -10,7 +10,7 @@
 
 #include "../../Memory/IMemory.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	size_t LiteralScanner::AddLiteral(const char *Text, size_t MaxHitsPerEncoding)
 	{

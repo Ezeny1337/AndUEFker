@@ -11,7 +11,7 @@
 
 class IArchDecoder;
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	class CallGraph;
 
@@ -257,4 +257,4 @@ namespace anduefker::analyzer
 		const IArchDecoder *Arch_ = nullptr;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

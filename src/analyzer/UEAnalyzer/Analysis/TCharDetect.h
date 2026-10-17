@@ -5,7 +5,7 @@
 
 #include "../../Memory/IMemory.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	class LiteralScanBatch;
 
@@ -54,4 +54,4 @@ namespace anduefker::analyzer
 	/// Batched probes retain the original ordered-prefix decision and per-segment caps.
 	void QueueTCharDetection(LiteralScanBatch &Batch, ETCharKind &Kind, size_t &Utf16, size_t &Utf32);
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

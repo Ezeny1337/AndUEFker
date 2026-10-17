@@ -3,20 +3,20 @@
 
 #include <sstream>
 
-#include "anduefker/generation/JsonExport.hpp"
+#include "nextdumper/generation/JsonExport.hpp"
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
-    using ::anduefker::app::RuntimeContext;
-    using ::anduefker::binding::NameContainerKind;
-    using ::anduefker::binding::ObjectContainerKind;
-    using ::anduefker::binding::RuntimeBinding;
-    using ::anduefker::ir::ReflectionStats;
-    using ::anduefker::ir::TypeIR;
-    using ::anduefker::ue::EngineSchema;
-    using ::anduefker::ue::FNameDisplayLayout;
-    using ::anduefker::ue::FNameNumberLayout;
-    using ::anduefker::ue::SchemaLayoutVariantName;
+    using ::nextdumper::app::RuntimeContext;
+    using ::nextdumper::binding::NameContainerKind;
+    using ::nextdumper::binding::ObjectContainerKind;
+    using ::nextdumper::binding::RuntimeBinding;
+    using ::nextdumper::ir::ReflectionStats;
+    using ::nextdumper::ir::TypeIR;
+    using ::nextdumper::ue::EngineSchema;
+    using ::nextdumper::ue::FNameDisplayLayout;
+    using ::nextdumper::ue::FNameNumberLayout;
+    using ::nextdumper::ue::SchemaLayoutVariantName;
 
     std::string ManifestJson(const RuntimeContext &context, const ReflectionIR &reflection,
                              const std::string &packageName, const ArtifactProvenance &provenance,
@@ -299,11 +299,11 @@ namespace anduefker::generation::detail
                << ",\"profile_expected_large_world_coordinates\":"
                << (schema.profileFeatures.largeWorldCoordinates ? "true" : "false")
                << ",\"observed_owner_encoding\":\""
-               << (schema.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
+               << (schema.features.fFieldOwnerEncoding == ::nextdumper::ue::FFieldOwnerEncoding::TaggedPointer
                        ? "tagged-pointer"
                        : "explicit-discriminator")
                << "\",\"profile_expected_owner_encoding\":\""
-               << (schema.profileFeatures.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer
+               << (schema.profileFeatures.fFieldOwnerEncoding == ::nextdumper::ue::FFieldOwnerEncoding::TaggedPointer
                        ? "tagged-pointer"
                        : "explicit-discriminator")
                << "\",\"use_fproperty\":" << (schema.features.useFProperty ? "true" : "false")
@@ -385,7 +385,7 @@ namespace anduefker::generation::detail
                << ",\"owner\":" << schema.ffield.owner << ",\"next\":" << schema.ffield.next
                << ",\"name\":" << schema.ffield.name
                << ",\"editor_only_metadata\":" << schema.ffield.editorOnlyMetadata
-               << ",\"owner_encoding\":\"" << (schema.features.fFieldOwnerEncoding == ::anduefker::ue::FFieldOwnerEncoding::TaggedPointer ? "tagged-pointer" : "explicit-discriminator") << "\"},\n";
+               << ",\"owner_encoding\":\"" << (schema.features.fFieldOwnerEncoding == ::nextdumper::ue::FFieldOwnerEncoding::TaggedPointer ? "tagged-pointer" : "explicit-discriminator") << "\"},\n";
         stream << "    \"ffield_class\": {\"name\":" << schema.ffieldClass.name
                << ",\"id\":" << schema.ffieldClass.id
                << ",\"cast_flags\":" << schema.ffieldClass.castFlags
@@ -408,8 +408,8 @@ namespace anduefker::generation::detail
                << ",\"offset_internal\":" << schema.property.offsetInternal
                << ",\"base_size\":" << schema.property.baseSize << "},\n";
         stream << "    \"property_tail\": {\"layout\":\""
-               << (schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::UProperty ? "uproperty" : schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::RepNotifyBeforeLinks ? "repnotify-before-links"
-                                                                                                                    : schema.features.propertyTailLayout == ::anduefker::ue::PropertyTailLayout::LinksBeforeRepNotify   ? "links-before-repnotify"
+               << (schema.features.propertyTailLayout == ::nextdumper::ue::PropertyTailLayout::UProperty ? "uproperty" : schema.features.propertyTailLayout == ::nextdumper::ue::PropertyTailLayout::RepNotifyBeforeLinks ? "repnotify-before-links"
+                                                                                                                    : schema.features.propertyTailLayout == ::nextdumper::ue::PropertyTailLayout::LinksBeforeRepNotify   ? "links-before-repnotify"
                                                                                                                                                                                                                         : "unknown")
                << "\",\"rep_notify\":" << schema.property.repNotify
                << ",\"property_links\":" << schema.property.propertyLinks
@@ -475,4 +475,4 @@ namespace anduefker::generation::detail
         WriteReflectionJson(stream, reflection, {context.Schema().identity.canonicalVersionRange.empty() ? validation.familyEvidence : context.Schema().identity.canonicalVersionRange, validation.profileId, validation.profileLabel, validation.profileVersionRange, &context.Schema().identity}, &report.fields, &symbols);
     }
 
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

@@ -9,7 +9,7 @@
 #include "../Core/Scoring.h"
 #include "ObjObjectsStrategy.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	StructureEvidence GUObjectArrayStrategy::Verify(const StructureVerifier &Verifier, uint64_t Address) const
 	{
@@ -204,4 +204,4 @@ namespace anduefker::analyzer
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

@@ -1,5 +1,5 @@
-#include "anduefker/generation/CppTypeResolver.hpp"
-#include "anduefker/ir/ReflectionLayout.hpp"
+#include "nextdumper/generation/CppTypeResolver.hpp"
+#include "nextdumper/ir/ReflectionLayout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -7,7 +7,7 @@
 #include <tuple>
 #include <unordered_set>
 
-namespace anduefker::generation
+namespace nextdumper::generation
 {
     using ir::EnumUnderlyingType;
     using ir::PropertyKind;
@@ -593,4 +593,4 @@ namespace anduefker::generation
             result.type = ResolvePropertyType(property.type, symbols, pointerWidth, nameSize);
         return result;
     }
-} // namespace anduefker::generation
+} // namespace nextdumper::generation

@@ -5,7 +5,7 @@
 
 #include "Candidate.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/// How many scored candidates a strategy keeps before trimming.
@@ -113,4 +113,4 @@ namespace anduefker::analyzer
 		}
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

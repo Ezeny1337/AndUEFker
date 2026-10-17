@@ -4,9 +4,9 @@
 #include <optional>
 #include <vector>
 
-#include "anduefker/ue/EngineSchema.hpp"
+#include "nextdumper/ue/EngineSchema.hpp"
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     struct PropertyTailCandidate
     {
@@ -81,4 +81,4 @@ namespace anduefker::ue::schema_probe
         }
         return result;
     }
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

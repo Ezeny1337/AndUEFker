@@ -1,9 +1,9 @@
-#include "anduefker/reflection/ReflectionReader.hpp"
+#include "nextdumper/reflection/ReflectionReader.hpp"
 #include "ReflectionEvidenceLog.hpp"
-#include "anduefker/ir/ReflectionLayout.hpp"
-#include "anduefker/ue/BoolLayout.hpp"
-#include "anduefker/ue/ContainerLayout.hpp"
-#include "anduefker/ue/StorageLayout.hpp"
+#include "nextdumper/ir/ReflectionLayout.hpp"
+#include "nextdumper/ue/BoolLayout.hpp"
+#include "nextdumper/ue/ContainerLayout.hpp"
+#include "nextdumper/ue/StorageLayout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace anduefker::reflection
+namespace nextdumper::reflection
 {
     namespace
     {
@@ -117,7 +117,7 @@ namespace anduefker::reflection
     void ReflectionReader::RecordPropertyDetail(const PropertyMetadata &metadata, PropertyIR &property,
                                                 const std::string &reason, bool headerAvailable) const
     {
-        ::anduefker::ir::PropertyDetailDiagnostic diagnostic;
+        ::nextdumper::ir::PropertyDetailDiagnostic diagnostic;
         diagnostic.headerAvailable = headerAvailable;
         diagnostic.address = metadata.address;
         diagnostic.classAddress = metadata.classAddress;
@@ -128,7 +128,7 @@ namespace anduefker::reflection
         diagnostic.reflectedClass = metadata.className;
         diagnostic.normalizedClass = metadata.normalizedClassName;
         diagnostic.reason = reason;
-        diagnostic.detailsStatus = ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus);
+        diagnostic.detailsStatus = ::nextdumper::ue::PropertyDetailsStatusName(metadata.detailsStatus);
         diagnostic.offset = metadata.offset;
         diagnostic.elementSize = metadata.elementSize;
         diagnostic.arrayDim = metadata.arrayDim;
@@ -141,7 +141,7 @@ namespace anduefker::reflection
             const auto &read = metadata.detailReads[index];
             diagnostic.reads.push_back({read.member, read.offset, read.address, read.rawValue,
                                         static_cast<int32_t>(read.read.error), read.read.requested, read.read.transferred,
-                                        ::anduefker::ue::PropertyDetailsStatusName(read.status)});
+                                        ::nextdumper::ue::PropertyDetailsStatusName(read.status)});
         }
         diagnostic.referencedClass = "not-observed";
         diagnostic.secondaryClass = "not-observed";
@@ -183,13 +183,13 @@ namespace anduefker::reflection
         result.arrayDim = metadata.arrayDim;
         result.kind = PropertyKindFromName(metadata.className);
         if (result.kind == PropertyKind::Delegate)
-            result.delegateStorage = ::anduefker::ir::DelegateStorageKind::Unicast;
+            result.delegateStorage = ::nextdumper::ir::DelegateStorageKind::Unicast;
         else if (result.kind == PropertyKind::MulticastDelegate)
             result.delegateStorage = metadata.normalizedClassName == "MulticastSparseDelegateProperty"
-                                         ? ::anduefker::ir::DelegateStorageKind::SparseMulticast
+                                         ? ::nextdumper::ir::DelegateStorageKind::SparseMulticast
                                      : metadata.normalizedClassName == "MulticastInlineDelegateProperty"
-                                         ? ::anduefker::ir::DelegateStorageKind::InlineMulticast
-                                         : ::anduefker::ir::DelegateStorageKind::UnknownMulticast;
+                                         ? ::nextdumper::ir::DelegateStorageKind::InlineMulticast
+                                         : ::nextdumper::ir::DelegateStorageKind::UnknownMulticast;
         result.reflectedClass = metadata.className;
         result.elementSize = metadata.elementSize;
         result.referencedObject = metadata.referencedAddress;
@@ -206,7 +206,7 @@ namespace anduefker::reflection
             ++containerCandidates_[metadata.normalizedClassName];
             ContainerCandidate candidate{metadata, result};
             auto evidence = ReadContainerStorage(candidate);
-            auto storage = std::make_shared<::anduefker::ir::ContainerStorageIR>(evidence.storage);
+            auto storage = std::make_shared<::nextdumper::ir::ContainerStorageIR>(evidence.storage);
             result.containerStorage = storage;
             containerStorage_.emplace(metadata.address, std::move(storage));
             // 原始证据 budget 限制的是诊断信息，绝不限制元数据读取
@@ -240,7 +240,7 @@ namespace anduefker::reflection
                 ++stats.unknownProperties;
             const std::string detailReason = metadata.objectPropertyClassNull
                                                  ? "object-property-class-metadata-null"
-                                                 : ::anduefker::ue::PropertyDetailsStatusName(metadata.detailsStatus);
+                                                 : ::nextdumper::ue::PropertyDetailsStatusName(metadata.detailsStatus);
             RecordPropertyDetail(metadata, property, detailReason);
             containerStorage();
             path.erase(metadata.address);
@@ -275,7 +275,7 @@ namespace anduefker::reflection
             }
             return std::make_shared<TypeReferenceIR>(ReadTypeReference(*child, property, stats, path, depth + 1, remaining));
         };
-        const auto objectMatches = [&](uintptr_t address, ::anduefker::ue::DefinitionKind expected)
+        const auto objectMatches = [&](uintptr_t address, ::nextdumper::ue::DefinitionKind expected)
         {
             if (address == 0)
                 return false;
@@ -294,13 +294,13 @@ namespace anduefker::reflection
         case PropertyKind::WeakObject:
         case PropertyKind::LazyObject:
         case PropertyKind::Interface:
-            semanticMatch = objectMatches(result.referencedObject, ::anduefker::ue::DefinitionKind::Class);
+            semanticMatch = objectMatches(result.referencedObject, ::nextdumper::ue::DefinitionKind::Class);
             break;
         case PropertyKind::Struct:
-            semanticMatch = objectMatches(result.referencedObject, ::anduefker::ue::DefinitionKind::Struct);
+            semanticMatch = objectMatches(result.referencedObject, ::nextdumper::ue::DefinitionKind::Struct);
             break;
         case PropertyKind::Byte:
-            semanticMatch = result.referencedObject == 0 || objectMatches(result.referencedObject, ::anduefker::ue::DefinitionKind::Enum);
+            semanticMatch = result.referencedObject == 0 || objectMatches(result.referencedObject, ::nextdumper::ue::DefinitionKind::Enum);
             break;
         case PropertyKind::Array:
         case PropertyKind::Set:
@@ -318,13 +318,13 @@ namespace anduefker::reflection
         case PropertyKind::Enum:
             result.inner = nested(result.referencedObject);
             semanticMatch = result.inner && result.inner->detailsResolved && result.inner->elementSize == result.elementSize &&
-                            objectMatches(result.secondaryObject, ::anduefker::ue::DefinitionKind::Enum);
+                            objectMatches(result.secondaryObject, ::nextdumper::ue::DefinitionKind::Enum);
             break;
         case PropertyKind::Delegate:
         case PropertyKind::MulticastDelegate:
         {
             const auto cls = objects_.ClassName(result.referencedObject);
-            semanticMatch = cls && IsFunctionFieldKind(::anduefker::ue::FieldKindFromRuntimeName(*cls, false));
+            semanticMatch = cls && IsFunctionFieldKind(::nextdumper::ue::FieldKindFromRuntimeName(*cls, false));
             if (semanticMatch && !delegateSignatures_.contains(result.referencedObject))
             {
                 if (pendingSignatures_.size() >= kMaxFunctionDefinitions)
@@ -335,7 +335,7 @@ namespace anduefker::reflection
                                                    std::to_string(result.referencedObject));
                     break;
                 }
-                ::anduefker::ir::DelegateSignatureObservation observation;
+                ::nextdumper::ir::DelegateSignatureObservation observation;
                 observation.address = result.referencedObject;
                 observation.reflectedClass = *cls;
                 observation.fullName = objects_.FullName(observation.address).value_or("<unreadable>");
@@ -350,7 +350,7 @@ namespace anduefker::reflection
             break;
         }
         case PropertyKind::Bool:
-            semanticMatch = ::anduefker::ue::IsValidBoolLayout(metadata.boolLayout, metadata.elementSize);
+            semanticMatch = ::nextdumper::ue::IsValidBoolLayout(metadata.boolLayout, metadata.elementSize);
             break;
         case PropertyKind::FieldPath:
             semanticMatch = metadata.detailsStatus == PropertyMetadata::DetailsStatus::Complete &&
@@ -380,10 +380,10 @@ namespace anduefker::reflection
         }
         if (result.nodeDetailsResolved)
         {
-            for (const auto &layout : ::anduefker::ue::ValueStorageCandidates(result, sizeof(uintptr_t), schema_.fname.size))
+            for (const auto &layout : ::nextdumper::ue::ValueStorageCandidates(result, sizeof(uintptr_t), schema_.fname.size))
                 result.valueStorageCandidates.push_back(layout.id);
-            if (const auto layout = ::anduefker::ue::CommonValueStorage(result, sizeof(uintptr_t), schema_.fname.size))
-                result.valueStorage = std::make_shared<const ::anduefker::ir::StorageLayoutIR>(*layout);
+            if (const auto layout = ::nextdumper::ue::CommonValueStorage(result, sizeof(uintptr_t), schema_.fname.size))
+                result.valueStorage = std::make_shared<const ::nextdumper::ir::StorageLayoutIR>(*layout);
         }
         containerStorage();
         path.erase(metadata.address);
@@ -505,11 +505,11 @@ namespace anduefker::reflection
         const size_t scannedPropertyCount = std::min(summary.scannedPropertyCount, parsedProperties.size());
         for (size_t index = 0; index < scannedPropertyCount; ++index)
         {
-            if ((parsedProperties[index].flags & ::anduefker::ue::kCPFParm) != 0)
+            if ((parsedProperties[index].flags & ::nextdumper::ue::kCPFParm) != 0)
                 function.parameters.push_back(parsedProperties[index]);
         }
         for (const PropertyIR &property : parsedProperties)
-            if ((property.flags & ::anduefker::ue::kCPFParm) == 0)
+            if ((property.flags & ::nextdumper::ue::kCPFParm) == 0)
                 function.locals.push_back(property);
         function.derivedNumParams = summary.count;
         function.derivedParamSize = summary.paramEnd;
@@ -595,7 +595,7 @@ namespace anduefker::reflection
             function.outerClass = objects_.ClassName(*outerAddress).value_or("<unreadable>");
             function.outerFullName = objects_.FullName(*outerAddress).value_or("<unreadable>");
         }
-        if ((*objectFlags & (::anduefker::ue::kRFUnavailableDefinition | ::anduefker::ue::kRFClassDefaultObject)) != 0)
+        if ((*objectFlags & (::nextdumper::ue::kRFUnavailableDefinition | ::nextdumper::ue::kRFClassDefaultObject)) != 0)
             return fail("function definition unavailable: object_flags=" + std::to_string(*objectFlags));
         const auto slot = objects_.Objects().ReadObject(*internalIndex, true);
         const auto internalFlags = slot.IsValid() ? objects_.Objects().ReadInternalFlags(slot) : std::nullopt;
@@ -624,7 +624,7 @@ namespace anduefker::reflection
         function.headerReadable = true;
         function.numParams = function.headerNumParams;
         function.paramSize = function.headerParamSize;
-        function.nativeFlag = (function.flags & ::anduefker::ue::kFUNCNative) != 0;
+        function.nativeFlag = (function.flags & ::nextdumper::ue::kFUNCNative) != 0;
         function.entryReadable = readMember(schema_.ufunction.nativeFunction, function.execEntry);
         function.entryInModule = function.entryReadable && function.execEntry >= moduleBase_ && function.execEntry < moduleEnd_;
         function.entryExecutable = function.entryReadable && function.execEntry != 0 &&
@@ -728,13 +728,13 @@ namespace anduefker::reflection
                 (reference.kind != PropertyKind::Map && reference.kind != PropertyKind::Set))
                 return;
             const auto &key = reference.kind == PropertyKind::Map ? reference.key : reference.inner;
-            const auto keyAlignment = key ? ::anduefker::ue::PropertyStorageAlignment(
+            const auto keyAlignment = key ? ::nextdumper::ue::PropertyStorageAlignment(
                                                 *key, types, static_cast<int32_t>(sizeof(uintptr_t)), schema_.fname.size)
                                           : std::nullopt;
-            const auto valueAlignment = reference.value ? ::anduefker::ue::PropertyStorageAlignment(
+            const auto valueAlignment = reference.value ? ::nextdumper::ue::PropertyStorageAlignment(
                                                               *reference.value, types, static_cast<int32_t>(sizeof(uintptr_t)), schema_.fname.size)
                                                         : std::nullopt;
-            ::anduefker::ue::ValidateSparseLayout(*found->second, reference.kind, extent(key), extent(reference.value),
+            ::nextdumper::ue::ValidateSparseLayout(*found->second, reference.kind, extent(key), extent(reference.value),
                                                   keyAlignment.value_or(0), valueAlignment.value_or(0));
         };
         const auto validateProperties = [&](const auto &properties)
@@ -756,20 +756,20 @@ namespace anduefker::reflection
         for (const auto &[address, storage] : containerStorage_)
         {
             (void)address;
-            ++reflection.containerAllocatorCounts[::anduefker::ir::ContainerAllocatorKindName(storage->allocator)];
+            ++reflection.containerAllocatorCounts[::nextdumper::ir::ContainerAllocatorKindName(storage->allocator)];
             ++reflection.containerHeaderCounts[storage->headerStatus];
             ++reflection.containerElementLayoutCounts[storage->layoutStatus];
         }
-        const auto declarations = ::anduefker::ir::PlanTypeDeclarations(reflection);
+        const auto declarations = ::nextdumper::ir::PlanTypeDeclarations(reflection);
         for (auto &candidate : pendingContainers_)
         {
             const auto &storage = *candidate.reference.containerStorage;
             candidate.priority = !candidate.reference.detailsResolved ||
-                                         storage.allocator == ::anduefker::ir::ContainerAllocatorKind::Unknown ||
+                                         storage.allocator == ::nextdumper::ir::ContainerAllocatorKind::Unknown ||
                                          (storage.headerStatus != "source-model-and-size-match" &&
                                           storage.headerStatus != "source-model-fits-reflected-extent")
                                      ? 0
-                                 : ::anduefker::ir::HasStorageRepresentationGap(candidate.reference, declarations) ? 1
+                                 : ::nextdumper::ir::HasStorageRepresentationGap(candidate.reference, declarations) ? 1
                                                                                                                    : 2;
         }
         std::stable_sort(pendingContainers_.begin(), pendingContainers_.end(), [](const auto &left, const auto &right)
@@ -828,7 +828,7 @@ namespace anduefker::reflection
                 return;
             --remaining;
             if (reference.nodeDetailsResolved)
-                for (const auto &layout : ::anduefker::ue::ValueStorageCandidates(reference, sizeof(uintptr_t), schema_.fname.size))
+                for (const auto &layout : ::nextdumper::ue::ValueStorageCandidates(reference, sizeof(uintptr_t), schema_.fname.size))
                     reflection.valueStorageLayouts.try_emplace(layout.id, layout);
             if (reference.valueStorage)
                 reflection.valueStorageLayouts.try_emplace(reference.valueStorage->id, *reference.valueStorage);
@@ -856,13 +856,13 @@ namespace anduefker::reflection
         containerEvidence_.clear();
     }
 
-    ::anduefker::ir::ContainerStorageObservation ReflectionReader::ReadContainerStorage(const ContainerCandidate &candidate) const
+    ::nextdumper::ir::ContainerStorageObservation ReflectionReader::ReadContainerStorage(const ContainerCandidate &candidate) const
     {
         const auto &metadata = candidate.metadata;
         const auto &reference = candidate.reference;
         const auto *element = reference.kind == PropertyKind::Map ? reference.key.get() : reference.inner.get();
         const auto *value = reference.value.get();
-        ::anduefker::ir::ContainerStorageObservation observation;
+        ::nextdumper::ir::ContainerStorageObservation observation;
         observation.propertyAddress = metadata.address;
         observation.ownerAddress = metadata.ownerAddress;
         observation.ownerIsUObject = metadata.ownerIsUObject;
@@ -975,7 +975,7 @@ namespace anduefker::reflection
             storage.allocatorStatus = "unvalidated-property-references";
         else if (!schema_.features.useFProperty || reference.kind == PropertyKind::Set)
         {
-            storage.allocator = ::anduefker::ir::ContainerAllocatorKind::Heap;
+            storage.allocator = ::nextdumper::ir::ContainerAllocatorKind::Heap;
             storage.allocatorStatus = "source-defined-heap-only";
         }
         else if (!observation.readable)
@@ -990,17 +990,17 @@ namespace anduefker::reflection
                                                { return flag.knownValue && flag.raw == raw; });
             storage.allocatorStatus = consensus ? "source-candidate-value-consensus" : "unknown-flags-or-candidate-disagreement";
             if (consensus)
-                storage.allocator = raw == 0 ? ::anduefker::ir::ContainerAllocatorKind::Heap
-                                             : ::anduefker::ir::ContainerAllocatorKind::MemoryImage;
+                storage.allocator = raw == 0 ? ::nextdumper::ir::ContainerAllocatorKind::Heap
+                                             : ::nextdumper::ir::ContainerAllocatorKind::MemoryImage;
         }
         if (reference.kind != PropertyKind::Array)
-            ::anduefker::ue::DecodeSparseLayout(observation, reference.kind);
+            ::nextdumper::ue::DecodeSparseLayout(observation, reference.kind);
         else
             storage.layoutStatus = "no-element-layout-record";
-        const bool memoryImage = storage.allocator == ::anduefker::ir::ContainerAllocatorKind::MemoryImage;
-        const auto header = memoryImage ? ::anduefker::ue::DescribeMemoryImageContainer(reference.kind, pointer)
-                                        : ::anduefker::ue::DescribeHeapContainer(reference.kind, pointer);
-        if (storage.allocator == ::anduefker::ir::ContainerAllocatorKind::Unknown)
+        const bool memoryImage = storage.allocator == ::nextdumper::ir::ContainerAllocatorKind::MemoryImage;
+        const auto header = memoryImage ? ::nextdumper::ue::DescribeMemoryImageContainer(reference.kind, pointer)
+                                        : ::nextdumper::ue::DescribeHeapContainer(reference.kind, pointer);
+        if (storage.allocator == ::nextdumper::ir::ContainerAllocatorKind::Unknown)
             storage.headerStatus = "allocator-unresolved";
         else if (memoryImage && pointer == 4)
             storage.headerStatus = "android32-memory-image-reflection-unsupported";
@@ -1157,7 +1157,7 @@ namespace anduefker::reflection
     ReflectionIR ReflectionReader::Read()
     {
         ReflectionIR result;
-        std::vector<::anduefker::ir::CaptureInfo::Attempt> history;
+        std::vector<::nextdumper::ir::CaptureInfo::Attempt> history;
         for (uint32_t attempt = 1; attempt <= 2; ++attempt)
         {
             const auto started = std::chrono::steady_clock::now();
@@ -1171,8 +1171,8 @@ namespace anduefker::reflection
                 break;
             }
             memory_.Reset();
-            ::anduefker::memory::CaptureValidation validation;
-            ::anduefker::ir::CaptureInfo::Attempt details;
+            ::nextdumper::memory::CaptureValidation validation;
+            ::nextdumper::ir::CaptureInfo::Attempt details;
             result = ReadAttempt(validation, details);
             std::unordered_set<uintptr_t> exportedTypes;
             for (const auto &type : result.types)
@@ -1271,8 +1271,8 @@ namespace anduefker::reflection
         return result;
     }
 
-    ReflectionIR ReflectionReader::ReadAttempt(::anduefker::memory::CaptureValidation &validation,
-                                               ::anduefker::ir::CaptureInfo::Attempt &details)
+    ReflectionIR ReflectionReader::ReadAttempt(::nextdumper::memory::CaptureValidation &validation,
+                                               ::nextdumper::ir::CaptureInfo::Attempt &details)
     {
         ReflectionIR result;
         result.containerPointerWidth = static_cast<int32_t>(sizeof(uintptr_t));
@@ -1286,7 +1286,7 @@ namespace anduefker::reflection
         containerCandidates_.clear();
         containerNotObserved_.clear();
         containerObservations_.clear();
-        ::anduefker::memory::CaptureObservationScope observe(memory_);
+        ::nextdumper::memory::CaptureObservationScope observe(memory_);
         if (!objects_.Initialize())
         {
             result.status = ParseStatus::Failed;
@@ -1328,7 +1328,7 @@ namespace anduefker::reflection
         };
 
         std::unordered_set<uintptr_t> seenTypes;
-        std::unordered_map<uintptr_t, std::optional<::anduefker::ue::DefinitionKind>> classKinds;
+        std::unordered_map<uintptr_t, std::optional<::nextdumper::ue::DefinitionKind>> classKinds;
         std::unordered_map<std::string, size_t> failureReasons;
         auto lastProgress = std::chrono::steady_clock::now();
         const auto recordFailure = [&](const std::string &reason, int32_t index, uintptr_t address)
@@ -1415,7 +1415,7 @@ namespace anduefker::reflection
                     ++result.stats.failures;
                     recordObjectDiagnostic(result.stats.objectReadFailures, [&]
                                            { return "object slot could not be read: index=" + std::to_string(index) +
-                                                    " reason=" + ::anduefker::ue::ObjectReadStatusName(objectResult.status) +
+                                                    " reason=" + ::nextdumper::ue::ObjectReadStatusName(objectResult.status) +
                                                     " read_address=" + std::to_string(objectResult.readAddress) +
                                                     " pointer=" + std::to_string(objectResult.address) +
                                                     " read_error=" + std::to_string(static_cast<int>(objectResult.readError)); });
@@ -1444,7 +1444,7 @@ namespace anduefker::reflection
             auto classification = classKinds.find(*classAddress);
             if (classification == classKinds.end())
             {
-                ::anduefker::memory::CaptureObservationScope observe(memory_);
+                ::nextdumper::memory::CaptureObservationScope observe(memory_);
                 classification = classKinds.emplace(*classAddress, objects_.DefinitionKindForClass(*classAddress)).first;
             }
             if (!classification->second)
@@ -1462,7 +1462,7 @@ namespace anduefker::reflection
                 const auto internalFlags = objects_.Objects().ReadInternalFlags(objectResult);
                 if (!tailIndex || *tailIndex != index || !tailFlags ||
                     !internalFlags || (*internalFlags & 0x80000000u) != 0 || // PendingConstruction in supported layouts.
-                    (*tailFlags & ::anduefker::ue::kRFUnavailableDefinition) != 0 ||
+                    (*tailFlags & ::nextdumper::ue::kRFUnavailableDefinition) != 0 ||
                     objects_.InternalIndex(object, true) != tailIndex || objects_.Class(object, true) != classAddress ||
                     objects_.Objects().ReadObject(index, true).address != object)
                 {
@@ -1473,9 +1473,9 @@ namespace anduefker::reflection
                     continue;
                 }
             }
-            if (kind == ::anduefker::ue::DefinitionKind::Other)
+            if (kind == ::nextdumper::ue::DefinitionKind::Other)
                 continue;
-            ::anduefker::memory::CaptureObservationScope observe(memory_);
+            ::nextdumper::memory::CaptureObservationScope observe(memory_);
             const auto verifiedObject = objects_.Objects().ReadObject(index, true);
             const auto observedIndex = objects_.InternalIndex(object);
             const auto internalIndex = objects_.InternalIndex(object, true);
@@ -1499,7 +1499,7 @@ namespace anduefker::reflection
                 recordFailure("object-flags-unreadable", index, object);
                 continue;
             }
-            if ((*objectFlags & ::anduefker::ue::kRFClassDefaultObject) != 0)
+            if ((*objectFlags & ::nextdumper::ue::kRFClassDefaultObject) != 0)
             {
                 ++result.stats.skippedClassDefaultObjects;
                 ++result.stats.skippedObjects;
@@ -1508,7 +1508,7 @@ namespace anduefker::reflection
                                                 objectIdentity(index, object, *className, *objectFlags); });
                 continue;
             }
-            if ((*objectFlags & ::anduefker::ue::kRFUnavailableDefinition) != 0)
+            if ((*objectFlags & ::nextdumper::ue::kRFUnavailableDefinition) != 0)
             {
                 ++result.stats.skippedIncompleteObjects;
                 ++result.stats.skippedObjects;
@@ -1518,7 +1518,7 @@ namespace anduefker::reflection
                                                 objectIdentity(index, object, *className, *objectFlags); });
                 continue;
             }
-            if (kind == ::anduefker::ue::DefinitionKind::Enum)
+            if (kind == ::nextdumper::ue::DefinitionKind::Enum)
             {
                 result.enums.push_back(ReadEnum(object, result.stats));
                 ++result.stats.parsedEnums;
@@ -1529,7 +1529,7 @@ namespace anduefker::reflection
             if (!seenTypes.insert(object).second)
                 continue;
 
-            const auto type = ReadType(object, kind == ::anduefker::ue::DefinitionKind::Class ? TypeKind::Class : TypeKind::Struct, result);
+            const auto type = ReadType(object, kind == ::nextdumper::ue::DefinitionKind::Class ? TypeKind::Class : TypeKind::Struct, result);
             if (!type)
             {
                 ++result.stats.failures;
@@ -1660,7 +1660,7 @@ namespace anduefker::reflection
             result.diagnostics.push_back("property detail summary: reason_and_class=" + reason + " total=" + std::to_string(count) +
                                          " samples_omitted=" + std::to_string(count > 8 ? count - 8 : 0));
 
-        ::anduefker::ir::AnalyzeReflectionLayouts(result);
+        ::nextdumper::ir::AnalyzeReflectionLayouts(result);
         CollectContainerStorage(result);
         if (result.stats.parsedTypes == 0)
             result.status = ParseStatus::Failed;
@@ -1671,4 +1671,4 @@ namespace anduefker::reflection
             result.status = ParseStatus::Complete;
         return result;
     }
-} // namespace anduefker::reflection
+} // namespace nextdumper::reflection

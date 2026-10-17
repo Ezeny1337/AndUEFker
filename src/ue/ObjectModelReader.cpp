@@ -1,10 +1,10 @@
-#include "anduefker/ue/ObjectModelReader.hpp"
+#include "nextdumper/ue/ObjectModelReader.hpp"
 
 #include <unordered_set>
 #include <algorithm>
 #include <limits>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     namespace
     {
@@ -403,7 +403,7 @@ namespace anduefker::ue
             PropertyMetadata::DetailRead detail;
             detail.member = member;
             detail.offset = offset;
-            detail.read = {::anduefker::memory::ReadError::InvalidArgument, 0, sizeof(uintptr_t), 0};
+            detail.read = {::nextdumper::memory::ReadError::InvalidArgument, 0, sizeof(uintptr_t), 0};
             if (offset < 0)
             {
                 detail.status = PropertyMetadata::DetailsStatus::UnsupportedLayout;
@@ -456,7 +456,7 @@ namespace anduefker::ue
             PropertyMetadata::DetailRead detail;
             detail.member = "bool_layout";
             detail.offset = schema_.propertySubtypes.boolBase;
-            detail.read = {::anduefker::memory::ReadError::InvalidArgument, 0, result.boolLayout.size(), 0};
+            detail.read = {::nextdumper::memory::ReadError::InvalidArgument, 0, result.boolLayout.size(), 0};
             if (schema_.propertySubtypes.boolBase < 0)
                 detail.status = PropertyMetadata::DetailsStatus::UnsupportedLayout;
             else
@@ -710,4 +710,4 @@ namespace anduefker::ue
         result.status = readCount == static_cast<size_t>(count) ? EnumReadStatus::Complete : EnumReadStatus::LimitExceeded;
         return result;
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

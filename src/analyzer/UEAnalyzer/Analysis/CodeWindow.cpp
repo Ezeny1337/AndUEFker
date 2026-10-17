@@ -4,7 +4,7 @@
 
 #include "../../Memory/IMemory.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	CodeWindow::CodeWindow(const IMemory *Memory, size_t ChunkSize)
@@ -86,4 +86,4 @@ namespace anduefker::analyzer
 		}
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

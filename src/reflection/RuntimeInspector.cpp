@@ -1,9 +1,9 @@
-#include "anduefker/reflection/RuntimeInspector.hpp"
+#include "nextdumper/reflection/RuntimeInspector.hpp"
 #include "RuntimeFieldPlanner.hpp"
 #include "RuntimeReadSupport.hpp"
 #include "RuntimeValueReader.hpp"
 
-namespace anduefker::reflection
+namespace nextdumper::reflection
 {
     namespace
     {
@@ -142,4 +142,4 @@ namespace anduefker::reflection
     {
         return Inspector(memory, binding, schema, module, reflection).Run(std::move(sparseRoot));
     }
-} // namespace anduefker::reflection
+} // namespace nextdumper::reflection

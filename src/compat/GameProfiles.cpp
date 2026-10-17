@@ -1,9 +1,9 @@
-#include "anduefker/compat/GameProfile.hpp"
+#include "nextdumper/compat/GameProfile.hpp"
 
-namespace anduefker::compat
+namespace nextdumper::compat
 {
     std::vector<std::unique_ptr<IGameProfile>> CreateGameProfiles()
     {
         return {};
     }
-} // namespace anduefker::compat
+} // namespace nextdumper::compat

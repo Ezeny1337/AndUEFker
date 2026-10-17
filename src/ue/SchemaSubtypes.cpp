@@ -1,6 +1,6 @@
 #include "ProbeContext.hpp"
 #include "PropertyLayout.hpp"
-#include "anduefker/ue/BoolLayout.hpp"
+#include "nextdumper/ue/BoolLayout.hpp"
 
 #include <algorithm>
 #include <array>
@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     namespace
     {
@@ -39,17 +39,17 @@ namespace anduefker::ue::schema_probe
             [[nodiscard]] bool RefreshAddressSpace() override { return false; }
             [[nodiscard]] bool IsReadable(uintptr_t address, size_t size) const override { return source_.IsReadable(address, size); }
             [[nodiscard]] bool IsExecutable(uintptr_t address, size_t size) const override { return source_.IsExecutable(address, size); }
-            [[nodiscard]] const ::anduefker::memory::ReadStats &Stats() const override { return source_.Stats(); }
-            [[nodiscard]] ::anduefker::memory::ReadResult ReadBytes(uintptr_t address, void *buffer, size_t size) const override
+            [[nodiscard]] const ::nextdumper::memory::ReadStats &Stats() const override { return source_.Stats(); }
+            [[nodiscard]] ::nextdumper::memory::ReadResult ReadBytes(uintptr_t address, void *buffer, size_t size) const override
             {
                 if (!Consume())
-                    return {::anduefker::memory::ReadError::ProbeLimit, address, size, 0};
+                    return {::nextdumper::memory::ReadError::ProbeLimit, address, size, 0};
                 return source_.ReadBytes(address, buffer, size);
             }
-            [[nodiscard]] ::anduefker::memory::ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const override
+            [[nodiscard]] ::nextdumper::memory::ReadResult ReadFreshBytes(uintptr_t address, void *buffer, size_t size) const override
             {
                 if (!Consume())
-                    return {::anduefker::memory::ReadError::ProbeLimit, address, size, 0};
+                    return {::nextdumper::memory::ReadError::ProbeLimit, address, size, 0};
                 return source_.ReadFreshBytes(address, buffer, size);
             }
 
@@ -1087,4 +1087,4 @@ namespace anduefker::ue::schema_probe
                                   "; scopes=types-functions-recursive-children");
         return true;
     }
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

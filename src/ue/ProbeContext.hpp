@@ -3,7 +3,7 @@
 #include "ProbeSupport.hpp"
 #include "ProbeSession.hpp"
 
-namespace anduefker::ue::schema_probe
+namespace nextdumper::ue::schema_probe
 {
     // 各个 Stages 共享借用同一个选择会话
     // 所有的 Readers 其生命周期绝不可超越该会话
@@ -46,4 +46,4 @@ namespace anduefker::ue::schema_probe
         // Enum 依赖 FName/UObject/UField，写入 UEnum 和 enum features
         [[nodiscard]] bool ResolveEnumSchema(EngineSchema &schema, SchemaResolutionReport &report) const;
     };
-} // namespace anduefker::ue::schema_probe
+} // namespace nextdumper::ue::schema_probe

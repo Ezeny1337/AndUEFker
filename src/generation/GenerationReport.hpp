@@ -8,9 +8,9 @@
 #include <utility>
 #include <vector>
 
-#include "anduefker/generation/CppTypeResolver.hpp"
+#include "nextdumper/generation/CppTypeResolver.hpp"
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
     using ir::ParseStatus;
     using ir::PropertyIR;
@@ -46,7 +46,7 @@ namespace anduefker::generation::detail
         const PropertyIR *property = nullptr;
         std::string reason;
         std::string failurePath;
-        const ::anduefker::ir::TypeReferenceIR *failureNode = nullptr;
+        const ::nextdumper::ir::TypeReferenceIR *failureNode = nullptr;
     };
     struct GenerationReport
     {
@@ -109,4 +109,4 @@ namespace anduefker::generation::detail
         void LogOmitted() const;
         [[nodiscard]] std::vector<std::string> Summaries() const;
     };
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

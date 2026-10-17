@@ -2,7 +2,7 @@
 
 #include <cstdio>
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	const char *EFindMethodToString(EFindMethod M)
@@ -66,4 +66,4 @@ namespace anduefker::analyzer
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

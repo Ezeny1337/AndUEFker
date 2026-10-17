@@ -1,40 +1,40 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(AndUEFker VERSION 0.1.0 LANGUAGES CXX)
+project(NextDumper VERSION 0.1.0 LANGUAGES CXX)
 
 if(NOT ANDROID)
-    message(FATAL_ERROR "AndUEFker currently supports Android only")
+    message(FATAL_ERROR "NextDumper currently supports Android only")
 endif()
 
 if(NOT CMAKE_ANDROID_ARCH_ABI MATCHES "^(arm64-v8a|armeabi-v7a)$")
-    message(FATAL_ERROR "AndUEFker currently supports arm64-v8a and armeabi-v7a only")
+    message(FATAL_ERROR "NextDumper currently supports arm64-v8a and armeabi-v7a only")
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(ANDUEFKER_PRODUCER_COMMIT "unknown")
-set(ANDUEFKER_PRODUCER_WORKTREE "unknown")
+set(NEXTDUMPER_PRODUCER_COMMIT "unknown")
+set(NEXTDUMPER_PRODUCER_WORKTREE "unknown")
 find_package(Git QUIET)
 if(Git_FOUND)
     execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse --verify HEAD
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        RESULT_VARIABLE ANDUEFKER_GIT_RESULT
-        OUTPUT_VARIABLE ANDUEFKER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE NEXTDUMPER_GIT_RESULT
+        OUTPUT_VARIABLE NEXTDUMPER_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET)
-    if(ANDUEFKER_GIT_RESULT STREQUAL "0" AND ANDUEFKER_GIT_COMMIT MATCHES "^[0-9a-fA-F]+$")
-        set(ANDUEFKER_PRODUCER_COMMIT "${ANDUEFKER_GIT_COMMIT}")
+    if(NEXTDUMPER_GIT_RESULT STREQUAL "0" AND NEXTDUMPER_GIT_COMMIT MATCHES "^[0-9a-fA-F]+$")
+        set(NEXTDUMPER_PRODUCER_COMMIT "${NEXTDUMPER_GIT_COMMIT}")
         execute_process(COMMAND "${GIT_EXECUTABLE}" status --porcelain --untracked-files=normal
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            RESULT_VARIABLE ANDUEFKER_GIT_STATUS_RESULT
-            OUTPUT_VARIABLE ANDUEFKER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE NEXTDUMPER_GIT_STATUS_RESULT
+            OUTPUT_VARIABLE NEXTDUMPER_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
             ERROR_QUIET)
-        if(ANDUEFKER_GIT_STATUS_RESULT STREQUAL "0")
-            if(ANDUEFKER_GIT_STATUS STREQUAL "")
-                set(ANDUEFKER_PRODUCER_WORKTREE "clean")
+        if(NEXTDUMPER_GIT_STATUS_RESULT STREQUAL "0")
+            if(NEXTDUMPER_GIT_STATUS STREQUAL "")
+                set(NEXTDUMPER_PRODUCER_WORKTREE "clean")
             else()
-                set(ANDUEFKER_PRODUCER_WORKTREE "dirty")
+                set(NEXTDUMPER_PRODUCER_WORKTREE "dirty")
             endif()
         else()
             message(WARNING "Git worktree status is unavailable; producer worktree remains unknown")
@@ -45,16 +45,16 @@ if(Git_FOUND)
 else()
     message(WARNING "Git is unavailable; producer identity remains unknown")
 endif()
-file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/anduefker")
-configure_file(cmake/BuildInfo.hpp.in generated/anduefker/BuildInfo.hpp @ONLY)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated/nextdumper")
+configure_file(cmake/BuildInfo.hpp.in generated/nextdumper/BuildInfo.hpp @ONLY)
 
-option(ANDUEFKER_ENABLE_THINLTO "Enable ThinLTO for native targets" ON)
-option(ANDUEFKER_OPTIMIZE_FOR_SIZE "Use Clang size optimization for native targets" OFF)
-option(ANDUEFKER_FORCE_NDEBUG "Define NDEBUG for all native targets" OFF)
-option(ANDUEFKER_DISABLE_NDEBUG "Undefine NDEBUG for all native targets" OFF)
+option(NEXTDUMPER_ENABLE_THINLTO "Enable ThinLTO for native targets" ON)
+option(NEXTDUMPER_OPTIMIZE_FOR_SIZE "Use Clang size optimization for native targets" OFF)
+option(NEXTDUMPER_FORCE_NDEBUG "Define NDEBUG for all native targets" OFF)
+option(NEXTDUMPER_DISABLE_NDEBUG "Undefine NDEBUG for all native targets" OFF)
 
-if(ANDUEFKER_FORCE_NDEBUG AND ANDUEFKER_DISABLE_NDEBUG)
-    message(FATAL_ERROR "ANDUEFKER_FORCE_NDEBUG and ANDUEFKER_DISABLE_NDEBUG are mutually exclusive")
+if(NEXTDUMPER_FORCE_NDEBUG AND NEXTDUMPER_DISABLE_NDEBUG)
+    message(FATAL_ERROR "NEXTDUMPER_FORCE_NDEBUG and NEXTDUMPER_DISABLE_NDEBUG are mutually exclusive")
 endif()
 
 set(KITTY_MEMORY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/KittyMemoryEx")
@@ -81,7 +81,7 @@ target_compile_features(ue_analyzer PUBLIC cxx_std_20)
 target_compile_options(ue_analyzer PRIVATE -Wall -Wextra -Wno-unused-parameter -fexceptions)
 target_link_libraries(ue_analyzer PUBLIC kitty_memory_ex)
 
-add_library(anduefker_core STATIC
+add_library(nextdumper_core STATIC
     src/app/CompatibilityDiagnosis.cpp
     src/app/RuntimeSession.cpp
     src/analyzer/AnalyzerMemoryAdapter.cpp
@@ -131,52 +131,52 @@ add_library(anduefker_core STATIC
     src/ue/SchemaSelection.cpp
 )
 
-target_include_directories(anduefker_core
+target_include_directories(nextdumper_core
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE
         "${CMAKE_CURRENT_BINARY_DIR}/generated"
 )
-target_include_directories(anduefker_core SYSTEM PRIVATE
+target_include_directories(nextdumper_core SYSTEM PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/analyzer"
 )
 
-target_compile_options(anduefker_core PRIVATE
+target_compile_options(nextdumper_core PRIVATE
     -Wall
     -Wextra
     -Wpedantic
     -Werror
     -fexceptions
 )
-target_link_libraries(anduefker_core PUBLIC kitty_memory_ex ue_analyzer)
+target_link_libraries(nextdumper_core PUBLIC kitty_memory_ex ue_analyzer)
 
-add_executable(AndUEFker src/app/main.cpp)
-target_link_libraries(AndUEFker PRIVATE anduefker_core)
-target_compile_options(AndUEFker PRIVATE -Wall -Wextra -Wpedantic -Werror)
+add_executable(NextDumper src/app/main.cpp)
+target_link_libraries(NextDumper PRIVATE nextdumper_core)
+target_compile_options(NextDumper PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
-set(ANDUEFKER_NATIVE_TARGETS kitty_memory_ex ue_analyzer anduefker_core AndUEFker)
-foreach(target IN LISTS ANDUEFKER_NATIVE_TARGETS)
+set(NEXTDUMPER_NATIVE_TARGETS kitty_memory_ex ue_analyzer nextdumper_core NextDumper)
+foreach(target IN LISTS NEXTDUMPER_NATIVE_TARGETS)
     target_compile_options(${target} PRIVATE
         -ffunction-sections
         -fdata-sections
     )
-    if(ANDUEFKER_ENABLE_THINLTO)
+    if(NEXTDUMPER_ENABLE_THINLTO)
         target_compile_options(${target} PRIVATE -flto=thin)
     endif()
-    if(ANDUEFKER_OPTIMIZE_FOR_SIZE)
+    if(NEXTDUMPER_OPTIMIZE_FOR_SIZE)
         target_compile_options(${target} PRIVATE -Oz)
     endif()
-    if(ANDUEFKER_FORCE_NDEBUG)
+    if(NEXTDUMPER_FORCE_NDEBUG)
         target_compile_options(${target} PRIVATE -DNDEBUG)
-    elseif(ANDUEFKER_DISABLE_NDEBUG)
+    elseif(NEXTDUMPER_DISABLE_NDEBUG)
         target_compile_options(${target} PRIVATE -UNDEBUG)
     endif()
 endforeach()
 
-if(ANDUEFKER_ENABLE_THINLTO)
-    target_link_options(AndUEFker PRIVATE -flto=thin)
+if(NEXTDUMPER_ENABLE_THINLTO)
+    target_link_options(NextDumper PRIVATE -flto=thin)
 endif()
 
 # Android's lld removes unused function/data sections from the final executable.
-target_link_options(AndUEFker PRIVATE -Wl,--gc-sections)
+target_link_options(NextDumper PRIVATE -Wl,--gc-sections)

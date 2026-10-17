@@ -7,7 +7,7 @@
 
 #include "../Core/Candidate.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/**
@@ -131,4 +131,4 @@ namespace anduefker::analyzer
 		float Weight;	  ///< Measured trust, in [0,1].
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

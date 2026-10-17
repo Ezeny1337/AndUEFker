@@ -9,7 +9,7 @@ class IMemory;
 class MemRegionInfo;
 class ModuleInfo;
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 	/**
 	 * @brief Finds many string literals in a single pass over memory.
@@ -141,4 +141,4 @@ namespace anduefker::analyzer
 		Statistics Stats_;
 	};
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

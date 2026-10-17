@@ -5,7 +5,7 @@
 
 #include "CodeWindow.h"
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	FunctionBounds FunctionBoundary::Find(uint64_t Address, uint32_t MaxScan) const
@@ -88,4 +88,4 @@ namespace anduefker::analyzer
 		return Out;
 	}
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer

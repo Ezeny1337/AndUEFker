@@ -1,6 +1,6 @@
-#include "anduefker/binding/RuntimeBinding.hpp"
+#include "nextdumper/binding/RuntimeBinding.hpp"
 
-namespace anduefker::binding
+namespace nextdumper::binding
 {
     bool ObjectContainerLayout::IsValid() const
     {
@@ -107,4 +107,4 @@ namespace anduefker::binding
                decode.IsValid() && report.objectContainerValidated && report.nameContainerValidated &&
                report.semanticValidationPassed;
     }
-} // namespace anduefker::binding
+} // namespace nextdumper::binding

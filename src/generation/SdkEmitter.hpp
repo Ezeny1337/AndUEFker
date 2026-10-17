@@ -2,11 +2,11 @@
 
 #include <iosfwd>
 
-#include "anduefker/module/ModuleImage.hpp"
-#include "anduefker/ue/EngineSchema.hpp"
+#include "nextdumper/module/ModuleImage.hpp"
+#include "nextdumper/ue/EngineSchema.hpp"
 #include "GenerationReport.hpp"
 
-namespace anduefker::generation::detail
+namespace nextdumper::generation::detail
 {
     using ir::FunctionIR;
     using ir::LayoutRepresentation;
@@ -51,4 +51,4 @@ namespace anduefker::generation::detail
         const ue::EngineSchema &schema_;
         const ReflectionIR &reflection_;
     };
-} // namespace anduefker::generation::detail
+} // namespace nextdumper::generation::detail

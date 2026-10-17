@@ -1,10 +1,10 @@
-#include "anduefker/ue/NameStoreReader.hpp"
+#include "nextdumper/ue/NameStoreReader.hpp"
 
 #include <limits>
 #include <span>
 #include <vector>
 
-namespace anduefker::ue
+namespace nextdumper::ue
 {
     namespace
     {
@@ -326,4 +326,4 @@ namespace anduefker::ue
         const int32_t index = decode_.nameIndex(rawIndex, *indexAddress);
         return ReadName(index);
     }
-} // namespace anduefker::ue
+} // namespace nextdumper::ue

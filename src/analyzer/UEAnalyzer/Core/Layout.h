@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace anduefker::analyzer
+namespace nextdumper::analyzer
 {
 
 	/// A reading of the Unreal structure an address is shaped like, together
@@ -54,4 +54,4 @@ namespace anduefker::analyzer
 	/// One-line wording of a verdict, for reporting.
 	const char *EVerdictToString(EVerdict Verdict);
 
-} // namespace anduefker::analyzer
+} // namespace nextdumper::analyzer
